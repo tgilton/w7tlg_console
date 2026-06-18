@@ -8,13 +8,32 @@ Usage:
 """
 
 import argparse
+import asyncio
 import logging
+import signal
+import sys
+
 import uvicorn
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(name)s: %(message)s'
 )
+
+logger = logging.getLogger(__name__)
+
+
+def handle_shutdown(sig, frame):
+    """
+    Clean shutdown handler.
+    Called on SIGINT (Ctrl+C) or SIGTERM (kill).
+    Allows uvicorn's lifespan to run cleanup (closes serial port cleanly).
+    """
+    logger.info(f"Received signal {sig} — shutting down cleanly...")
+    # uvicorn handles the actual shutdown via its own signal handling
+    # We just need to ensure we don't abruptly kill the process
+    sys.exit(0)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='W7TLG Station Console')
@@ -25,6 +44,10 @@ if __name__ == '__main__':
     parser.add_argument('--reload', action='store_true',
                         help='Auto-reload on code changes (development)')
     args = parser.parse_args()
+
+    # Register clean shutdown handlers
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    # SIGINT (Ctrl+C) is handled by uvicorn natively
 
     print(f"\n{'='*50}")
     print(f"  W7TLG Station Console")
