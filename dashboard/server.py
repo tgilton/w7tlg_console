@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 RIGCTLD_HOST  = "127.0.0.1"
 RIGCTLD_PORT  = 4532
-ACOM_PORT = "/dev/cu.usbserial-A9V19CH7"
+ACOM_PORT     = "/dev/cu.usbserial-A9V19CH7"
 ACOM_BAUD     = 9600
 THERMAL_STATE = Path("config/thermal_state.json")
 
@@ -203,13 +203,35 @@ async def handle_ws_command(text: str, ws: WebSocket):
         msg = json.loads(text)
         cmd = msg.get("cmd")
 
-        if cmd == "set_mode":
+        if cmd == "set_mode_op":
             mode = OperatingMode(msg["mode"])
             ok, reply = await bridge.set_operating_mode(
                 mode, confirmed=msg.get("confirmed", False))
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd,
                 "ok": ok, "message": reply}))
+
+        elif cmd == "set_frequency":
+            ok = await bridge.rig.set_frequency(int(msg["freq_hz"]))
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_mode":
+            ok = await bridge.rig.set_mode(
+                msg["mode"], int(msg.get("passband", 0)))
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_rf_power":
+            ok = await bridge.rig.set_rf_power(int(msg["pct"]))
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_preamp":
+            level = int(msg["level"])
+            ok = await bridge.rig.set_preamp(level)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
         elif cmd == "select_antenna":
             ok, reply = await bridge.select_antenna(int(msg["antenna"]))

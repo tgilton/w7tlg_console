@@ -1,29 +1,33 @@
 """
 Rigctld Client — FT-991A State Polling and Control
 
-Connects to a running rigctld daemon via TCP (default localhost:4532).
-Polls rig state at configurable interval, fires callbacks on any change.
-Also supports sending commands (set frequency, set mode, PTT).
+All controls and meters use standard Hamlib 'l' (get_level) and
+'L' (set_level) commands — no raw CAT passthrough needed.
 
-Designed for UI integration: all state is held in RigState and broadcast
-to subscribers whenever anything changes.
-
-rigctld protocol notes:
-  GET commands (lowercase: f, m, t, s): return value line(s), NO RPRT terminator
-  SET commands (uppercase: F, M, T, S): return "RPRT 0" on success
-  These must be handled differently.
+Verified working levels on FT-991A via Hamlib 4.7.1:
+  STRENGTH  S-meter (dB above S9, negative = below S9)
+  RFPOWER   TX power 0.0-1.0
+  ALC       ALC 0.0-1.0
+  SWR       SWR 1.0+
+  PREAMP    0=IPO, 1=AMP1, 2=AMP2
+  COMP      Compression 0.0-1.0
+  MICGAIN   Mic gain 0.0-1.0
+  IF        IF shift Hz
+  NB        Noise blanker level
+  NR        Noise reduction 0.0-1.0
+  ATT       Attenuator (0=off)
 """
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Band definitions
+# Band / frequency definitions
 # ---------------------------------------------------------------------------
 
 class Band(Enum):
@@ -56,7 +60,6 @@ BAND_EDGES = [
     (144_000_000, 148_000_000, Band.B2M),
 ]
 
-# Standard FT8 frequencies by band
 DIGITAL_FREQS = {
     Band.B160M: 1_840_000,
     Band.B80M:  3_573_000,
@@ -71,6 +74,20 @@ DIGITAL_FREQS = {
     Band.B6M:   50_313_000,
 }
 
+BAND_DEFAULT_FREQ = {
+    Band.B160M: 1_840_000,
+    Band.B80M:  3_573_000,
+    Band.B60M:  5_357_000,
+    Band.B40M:  7_074_000,
+    Band.B30M:  10_136_000,
+    Band.B20M:  14_074_000,
+    Band.B17M:  18_100_000,
+    Band.B15M:  21_074_000,
+    Band.B12M:  24_915_000,
+    Band.B10M:  28_074_000,
+    Band.B6M:   50_313_000,
+    Band.B2M:   144_200_000,
+}
 
 def freq_to_band(freq_hz: int) -> Band:
     for lo, hi, band in BAND_EDGES:
@@ -78,93 +95,130 @@ def freq_to_band(freq_hz: int) -> Band:
             return band
     return Band.UNKNOWN
 
-
 def freq_display(freq_hz: int) -> str:
-    """Format frequency for UI. e.g. 14.074.000"""
     mhz = freq_hz // 1_000_000
     khz = (freq_hz % 1_000_000) // 1_000
     hz  = freq_hz % 1_000
     return f"{mhz:3d}.{khz:03d}.{hz:03d}"
 
+def smeter_label(strength_db: float) -> str:
+    """Convert Hamlib STRENGTH (dB re S9) to label like S7, S9+20."""
+    # STRENGTH is dB above S9. S9 = 0, S8 = -6, S7 = -12, etc.
+    # Above S9: +10 = 10dB, +20 = 20dB, etc.
+    if strength_db >= 0:
+        over = round(strength_db / 10) * 10
+        return f"S9+{over}" if over > 0 else "S9"
+    else:
+        s = max(0, min(9, 9 + int(strength_db / 6)))
+        return f"S{s}"
 
 # ---------------------------------------------------------------------------
-# Rig state — single source of truth for UI
+# Rig state
 # ---------------------------------------------------------------------------
 
 @dataclass
 class RigState:
-    """
-    Complete state of the FT-991A as known to the system.
-    Serializes to dict for WebSocket broadcast.
-    """
-    connected: bool       = False
-    freq_hz: int          = 0
-    freq_display: str     = "  0.000.000"
-    band: str             = "??"
-    mode: str             = ""
-    passband_hz: int      = 0
-    ptt: bool             = False
-    split: bool           = False
-    tx_freq_hz: int       = 0
-    rf_power_pct: int     = 0
-    alc: int              = 0
-    swr: float            = 0.0
-    is_digital: bool      = False
+    # Connection
+    connected: bool     = False
+
+    # VFO
+    freq_hz: int        = 0
+    freq_display: str   = "  0.000.000"
+    band: str           = "??"
+    mode: str           = ""
+    passband_hz: int    = 0
+
+    # TX state
+    ptt: bool           = False
+    split: bool         = False
+    tx_freq_hz: int     = 0
+
+    # Meters — RX
+    strength_db: float  = -54.0   # dB re S9 (negative = below S9)
+    smeter_label: str   = "S0"
+
+    # Meters — TX
+    alc: float          = 0.0     # 0.0-1.0
+    rf_power_out: float = 0.0     # 0.0-1.0 (radio's own PO meter)
+    swr_radio: float    = 1.0
+
+    # Controls
+    rf_power_pct: int   = 50      # 0-100 (derived from RFPOWER 0.0-1.0)
+    preamp: int         = 0       # 0=IPO, 1=AMP1, 2=AMP2
+    preamp_name: str    = "IPO"
+    att_db: int         = 0       # 0=off
+    if_shift_hz: int    = 0
+    nb_level: float     = 0.0
+    nr_level: float     = 0.0
+    comp_level: float   = 0.0
+    mic_gain: float     = 0.0
+
+    # Derived
+    is_digital: bool        = False
     near_digital_freq: bool = False
 
     def to_dict(self) -> dict:
         return {
-            "connected":         self.connected,
-            "freq_hz":           self.freq_hz,
-            "freq_display":      self.freq_display,
-            "band":              self.band,
-            "mode":              self.mode,
-            "passband_hz":       self.passband_hz,
-            "ptt":               self.ptt,
-            "split":             self.split,
-            "tx_freq_hz":        self.tx_freq_hz,
-            "rf_power_pct":      self.rf_power_pct,
-            "alc":               self.alc,
-            "swr":               self.swr,
-            "is_digital":        self.is_digital,
+            "connected":        self.connected,
+            "freq_hz":          self.freq_hz,
+            "freq_display":     self.freq_display,
+            "band":             self.band,
+            "mode":             self.mode,
+            "passband_hz":      self.passband_hz,
+            "ptt":              self.ptt,
+            "split":            self.split,
+            "tx_freq_hz":       self.tx_freq_hz,
+            "strength_db":      self.strength_db,
+            "smeter_label":     self.smeter_label,
+            "alc":              self.alc,
+            "rf_power_out":     self.rf_power_out,
+            "swr_radio":        self.swr_radio,
+            "rf_power_pct":     self.rf_power_pct,
+            "preamp":           self.preamp,
+            "preamp_name":      self.preamp_name,
+            "att_db":           self.att_db,
+            "if_shift_hz":      self.if_shift_hz,
+            "nb_level":         self.nb_level,
+            "nr_level":         self.nr_level,
+            "comp_level":       self.comp_level,
+            "mic_gain":         self.mic_gain,
+            "is_digital":       self.is_digital,
             "near_digital_freq": self.near_digital_freq,
         }
 
     def update_derived(self):
-        """Recompute derived fields after freq/mode update."""
         band_enum = freq_to_band(self.freq_hz)
         self.band = band_enum.value
         self.freq_display = freq_display(self.freq_hz)
+        self.smeter_label = smeter_label(self.strength_db)
+        self.preamp_name = {0: "IPO", 1: "AMP1", 2: "AMP2"}.get(
+            self.preamp, "IPO")
 
         digital_modes = {"DATA-U", "DATA-L", "PKT-U", "PKT-L",
                          "PKTUSB", "PKTLSB", "USB", "LSB"}
         self.is_digital = self.mode in digital_modes
 
         std_freq = DIGITAL_FREQS.get(band_enum)
-        if std_freq and self.freq_hz > 0:
-            self.near_digital_freq = abs(self.freq_hz - std_freq) < 1000
-        else:
-            self.near_digital_freq = False
+        self.near_digital_freq = bool(
+            std_freq and self.freq_hz > 0
+            and abs(self.freq_hz - std_freq) < 2000)
 
 
 # ---------------------------------------------------------------------------
-# Rigctld TCP client
+# Rigctld client
 # ---------------------------------------------------------------------------
 
 StateCallback = Callable[[RigState], Coroutine]
 
+# How often to poll each group (in poll cycles, each cycle = poll_interval)
+FREQ_EVERY   = 1   # Every cycle
+MODE_EVERY   = 2   # Every 2 cycles
+PTT_EVERY    = 1   # Every cycle
+METER_EVERY  = 1   # Every cycle
+CONTROL_EVERY = 10  # Every 10 cycles (~5s)
+
 
 class RigctldClient:
-    """
-    Async client for rigctld daemon.
-
-    Connects via TCP, polls state at poll_interval seconds,
-    fires on_state_change callbacks whenever anything changes.
-
-    rigctld protocol:
-      GET commands (f, m, t, s ...): return value line(s), no RPRT
-      SET commands (F, M, T, S ...): return "RPRT 0" on success
-    """
 
     def __init__(
         self,
@@ -184,58 +238,82 @@ class RigctldClient:
         self._state_callbacks: list[StateCallback] = []
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
+        self._cycle = 0
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def on_state_change(self, cb: StateCallback):
-        """Register async callback fired whenever rig state changes."""
         self._state_callbacks.append(cb)
 
     async def start(self):
-        """Start polling loop in background."""
         self._running = True
         asyncio.create_task(self._run())
         logger.info(f"RigctldClient started → {self.host}:{self.port}")
 
     async def stop(self):
-        """Stop polling and close connection."""
         self._running = False
         await self._disconnect()
-        logger.info("RigctldClient stopped")
 
+    # Standard VFO controls
     async def set_frequency(self, freq_hz: int) -> bool:
-        """Set VFO frequency in Hz. Returns True on success."""
         return await self._send_set(f"F {freq_hz}\n")
 
     async def set_mode(self, mode: str, passband: int = 0) -> bool:
-        """Set mode and passband. mode e.g. 'USB', 'LSB', 'CW', 'DATA-U'"""
         return await self._send_set(f"M {mode} {passband}\n")
 
     async def set_ptt(self, active: bool) -> bool:
-        """Key/unkey transmitter via CAT."""
         return await self._send_set(f"T {1 if active else 0}\n")
 
-    async def get_frequency(self) -> Optional[int]:
-        """One-shot frequency query. Returns Hz or None."""
-        lines = await self._send_get("f\n", 1)
-        if lines:
-            try:
-                return int(lines[0])
-            except ValueError:
-                pass
-        return None
+    # Level controls (Hamlib 'L' command)
+    async def set_rf_power(self, pct: int) -> bool:
+        """Set TX power 0-100%."""
+        val = max(0.0, min(1.0, pct / 100.0))
+        ok = await self._send_set(f"L RFPOWER {val:.3f}\n")
+        if ok:
+            self.state.rf_power_pct = pct
+            await self._fire_callbacks()
+        return ok
 
-    async def get_mode(self) -> Optional[tuple[str, int]]:
-        """One-shot mode query. Returns (mode, passband) or None."""
-        lines = await self._send_get("m\n", 2)
-        if lines and len(lines) >= 2:
-            try:
-                return lines[0].strip(), int(lines[1].strip())
-            except ValueError:
-                pass
-        return None
+    async def set_preamp(self, level: int) -> bool:
+        """Set preamp: 0=IPO, 1=AMP1, 2=AMP2."""
+        db = {0: 0, 1: 10, 2: 20}.get(level, 0)
+        ok = await self._send_set(f"L PREAMP {db}\n")
+        if ok:
+            self.state.preamp = level
+            self.state.update_derived()
+            await self._fire_callbacks()
+        return ok
+
+    async def set_att(self, db: int) -> bool:
+        """Set attenuator: 0=off, 6=6dB, 12=12dB, 18=18dB."""
+        ok = await self._send_set(f"L ATT {db}\n")
+        if ok:
+            self.state.att_db = db
+            await self._fire_callbacks()
+        return ok
+
+    async def set_if_shift(self, hz: int) -> bool:
+        ok = await self._send_set(f"L IF {hz}\n")
+        if ok:
+            self.state.if_shift_hz = hz
+            await self._fire_callbacks()
+        return ok
+
+    async def set_nb(self, level: float) -> bool:
+        ok = await self._send_set(f"L NB {level:.2f}\n")
+        if ok:
+            self.state.nb_level = level
+            await self._fire_callbacks()
+        return ok
+
+    async def set_nr(self, level: float) -> bool:
+        ok = await self._send_set(f"L NR {level:.3f}\n")
+        if ok:
+            self.state.nr_level = level
+            await self._fire_callbacks()
+        return ok
 
     # ------------------------------------------------------------------
     # Internal: run / connect / disconnect
@@ -257,9 +335,9 @@ class RigctldClient:
         try:
             self._reader, self._writer = await asyncio.wait_for(
                 asyncio.open_connection(self.host, self.port),
-                timeout=3.0
-            )
+                timeout=3.0)
             self.state.connected = True
+            self._cycle = 0
             logger.info(f"Connected to rigctld at {self.host}:{self.port}")
             await self._fire_callbacks()
             return True
@@ -278,7 +356,7 @@ class RigctldClient:
         self._writer = None
 
     # ------------------------------------------------------------------
-    # Internal: poll loop
+    # Internal: polling
     # ------------------------------------------------------------------
 
     async def _poll_loop(self):
@@ -295,74 +373,148 @@ class RigctldClient:
                 return
 
     async def _poll_state(self) -> bool:
-        """Query all rig parameters. Returns True if anything changed."""
+        self._cycle += 1
         changed = False
 
-        # Frequency (1 line)
-        lines = await self._send_get("f\n", 1)
-        if lines:
-            try:
-                freq = int(lines[0])
-                if freq != self.state.freq_hz:
-                    self.state.freq_hz = freq
-                    changed = True
-            except ValueError:
-                pass
+        # Frequency — every cycle
+        val = await self._get_float("f\n", n_lines=1)
+        if val is not None:
+            freq = int(val)
+            if freq != self.state.freq_hz:
+                self.state.freq_hz = freq
+                changed = True
 
-        # Mode + passband (2 lines)
-        lines = await self._send_get("m\n", 2)
-        if lines and len(lines) >= 2:
-            try:
-                mode = lines[0].strip()
-                pb = int(lines[1].strip())
-                if mode != self.state.mode or pb != self.state.passband_hz:
-                    self.state.mode = mode
-                    self.state.passband_hz = pb
-                    changed = True
-            except (ValueError, IndexError):
-                pass
-
-        # PTT (1 line)
-        lines = await self._send_get("t\n", 1)
-        if lines:
-            try:
-                ptt = bool(int(lines[0]))
-                if ptt != self.state.ptt:
-                    self.state.ptt = ptt
-                    changed = True
-            except ValueError:
-                pass
-
-        # Split (2 lines: split_state, tx_vfo)
-        lines = await self._send_get("s\n", 2)
-        if lines:
-            try:
-                split = bool(int(lines[0].strip()))
-                if split != self.state.split:
-                    self.state.split = split
-                    changed = True
-                if split and len(lines) >= 2:
-                    tx_freq = int(lines[1].strip())
-                    if tx_freq != self.state.tx_freq_hz:
-                        self.state.tx_freq_hz = tx_freq
+        # Mode — every other cycle
+        if self._cycle % MODE_EVERY == 0:
+            lines = await self._send_get("m\n", 2)
+            if lines and len(lines) >= 2:
+                try:
+                    mode = lines[0].strip()
+                    pb = int(lines[1].strip())
+                    if mode != self.state.mode or pb != self.state.passband_hz:
+                        self.state.mode = mode
+                        self.state.passband_hz = pb
                         changed = True
-            except (ValueError, IndexError):
-                pass
+                except (ValueError, IndexError):
+                    pass
+
+        # PTT — every cycle
+        val = await self._get_float("t\n", n_lines=1)
+        if val is not None:
+            ptt = bool(int(val))
+            if ptt != self.state.ptt:
+                self.state.ptt = ptt
+                changed = True
+
+        # Meters — every cycle
+        # S-meter during RX, ALC/SWR during TX
+        if not self.state.ptt:
+            val = await self._get_level("STRENGTH")
+            if val is not None and abs(val - self.state.strength_db) > 1.0:
+                self.state.strength_db = val
+                changed = True
+        else:
+            val = await self._get_level("ALC")
+            if val is not None and abs(val - self.state.alc) > 0.01:
+                self.state.alc = val
+                changed = True
+
+            val = await self._get_level("RFPOWER")
+            if val is not None and abs(val - self.state.rf_power_out) > 0.01:
+                self.state.rf_power_out = val
+                changed = True
+
+            val = await self._get_level("SWR")
+            if val is not None and abs(val - self.state.swr_radio) > 0.05:
+                self.state.swr_radio = round(val, 2)
+                changed = True
+
+        # Controls — slow poll every ~5s
+        if self._cycle % CONTROL_EVERY == 0:
+            ctrl_changed = await self._poll_controls()
+            changed = changed or ctrl_changed
 
         if changed:
             self.state.update_derived()
 
         return changed
 
+    async def _poll_controls(self) -> bool:
+        changed = False
+
+        # RF power setting
+        val = await self._get_level("RFPOWER")
+        if val is not None:
+            pct = round(val * 100)
+            if pct != self.state.rf_power_pct:
+                self.state.rf_power_pct = pct
+                changed = True
+
+        # Preamp — Hamlib returns dB: 0=IPO, 10=AMP1, 20=AMP2
+        val = await self._get_level("PREAMP")
+        if val is not None:
+            db = int(val)
+            # Map dB to index: 0→0, 10→1, 20→2
+            preamp = {0: 0, 10: 1, 20: 2}.get(db, 0)
+            if preamp != self.state.preamp:
+                self.state.preamp = preamp
+                changed = True
+
+        # ATT
+        val = await self._get_level("ATT")
+        if val is not None:
+            att = int(val)
+            if att != self.state.att_db:
+                self.state.att_db = att
+                changed = True
+
+        # IF shift
+        val = await self._get_level("IF")
+        if val is not None:
+            if_hz = int(val)
+            if if_hz != self.state.if_shift_hz:
+                self.state.if_shift_hz = if_hz
+                changed = True
+
+        # NB, NR, COMP, MICGAIN
+        for attr, level_name in [
+            ('nb_level', 'NB'),
+            ('nr_level', 'NR'),
+            ('comp_level', 'COMP'),
+            ('mic_gain', 'MICGAIN'),
+        ]:
+            val = await self._get_level(level_name)
+            if val is not None and abs(val - getattr(self.state, attr)) > 0.01:
+                setattr(self.state, attr, val)
+                changed = True
+
+        return changed
+
     # ------------------------------------------------------------------
-    # Internal: rigctld I/O — GET vs SET handled separately
+    # Internal: I/O helpers
     # ------------------------------------------------------------------
 
+    async def _get_level(self, level_name: str) -> Optional[float]:
+        """Get a Hamlib level value. Returns float or None."""
+        lines = await self._send_get(f"l {level_name}\n", 1)
+        if lines:
+            try:
+                return float(lines[0])
+            except ValueError:
+                pass
+        return None
+
+    async def _get_float(self, cmd: str, n_lines: int) -> Optional[float]:
+        lines = await self._send_get(cmd, n_lines)
+        if lines:
+            try:
+                return float(lines[0])
+            except ValueError:
+                pass
+        return None
+
     async def _send_get(self, cmd: str, n_lines: int) -> Optional[list[str]]:
-        """
-        Send a GET command (lowercase: f, m, t, s).
-        Reads exactly n_lines — rigctld returns values only, no RPRT.
-        """
+        """Send GET command. Read exactly n_lines (no RPRT terminator)."""
         async with self._lock:
             if not self._writer or self._writer.is_closing():
                 return None
@@ -374,7 +526,7 @@ class RigctldClient:
                     line = await asyncio.wait_for(
                         self._reader.readline(), timeout=2.0)
                     decoded = line.decode(errors='replace').strip()
-                    if not decoded:
+                    if not decoded or decoded.startswith('RPRT'):
                         break
                     lines.append(decoded)
                 return lines if lines else None
@@ -384,10 +536,7 @@ class RigctldClient:
                 return None
 
     async def _send_set(self, cmd: str) -> bool:
-        """
-        Send a SET command (uppercase: F, M, T, S).
-        Reads until RPRT line. Returns True if RPRT 0.
-        """
+        """Send SET command. Read until RPRT."""
         async with self._lock:
             if not self._writer or self._writer.is_closing():
                 return False
@@ -407,10 +556,6 @@ class RigctldClient:
                 self.state.connected = False
                 return False
 
-    # ------------------------------------------------------------------
-    # Internal: callbacks
-    # ------------------------------------------------------------------
-
     async def _fire_callbacks(self):
         for cb in self._state_callbacks:
             try:
@@ -423,40 +568,37 @@ class RigctldClient:
 # Test
 # ---------------------------------------------------------------------------
 
-async def _test(host: str = '127.0.0.1', port: int = 4532):
-    print(f"Testing rigctld connection → {host}:{port}")
+async def _test(host='127.0.0.1', port=4532):
+    print(f"Testing rigctld → {host}:{port}")
     print("=" * 50)
+    n = 0
 
-    update_count = 0
+    async def on_state(s: RigState):
+        nonlocal n
+        n += 1
+        print(f"\nUpdate #{n}:")
+        print(f"  Freq:    {s.freq_display}  {s.band}  {s.mode}")
+        print(f"  S-meter: {s.smeter_label} ({s.strength_db:.1f} dB)")
+        print(f"  Preamp:  {s.preamp_name}  ATT: {s.att_db}dB")
+        print(f"  RF Pwr:  {s.rf_power_pct}%")
+        print(f"  PTT:     {'TX' if s.ptt else 'RX'}")
+        if s.ptt:
+            print(f"  ALC:     {s.alc:.2f}  PO: {s.rf_power_out:.2f}  SWR: {s.swr_radio:.2f}")
 
-    async def on_state(state: RigState):
-        nonlocal update_count
-        update_count += 1
-        print(f"\nRig State Update #{update_count}:")
-        print(f"  Connected:    {state.connected}")
-        print(f"  Frequency:    {state.freq_display}")
-        print(f"  Band:         {state.band}")
-        print(f"  Mode:         {state.mode} ({state.passband_hz} Hz pb)")
-        print(f"  PTT:          {'TX' if state.ptt else 'RX'}")
-        print(f"  Split:        {state.split}")
-        print(f"  FT8 freq:     {state.near_digital_freq}")
-
-    client = RigctldClient(host=host, port=port, poll_interval=0.5)
+    client = RigctldClient(host=host, port=port)
     client.on_state_change(on_state)
     await client.start()
-
-    print("Polling for 15 seconds — tune the VFO to see updates...")
+    print("Polling 15s — tune VFO, observe S-meter...")
     await asyncio.sleep(15)
     await client.stop()
-    print(f"\nTotal state updates: {update_count}")
+    print(f"\nTotal updates: {n}")
 
 
 if __name__ == '__main__':
     import sys
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s %(levelname)s %(name)s: %(message)s'
-    )
-    host = sys.argv[1] if len(sys.argv) > 1 else '127.0.0.1'
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 4532
-    asyncio.run(_test(host, port))
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    asyncio.run(_test(
+        sys.argv[1] if len(sys.argv) > 1 else '127.0.0.1',
+        int(sys.argv[2]) if len(sys.argv) > 2 else 4532
+    ))

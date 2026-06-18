@@ -175,17 +175,25 @@ class AcomSerial:
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=0,        # Non-blocking reads
+                timeout=0,
                 write_timeout=1.0,
+                dsrdtr=False,   # Disable DSR/DTR — prevents amp disturbance
+                rtscts=False,   # Disable RTS/CTS hardware flow control
             )
-            self._reader = FrameReader()  # Reset frame state
+            # Explicitly deassert DTR and RTS
+            self._serial.setDTR(False)
+            self._serial.setRTS(False)
+
+            self._reader = FrameReader()
             self._connected = True
             logger.info(f"Connected to ACOM on {self.port}")
             await self._fire_connection_callbacks(True)
 
-            # Ask amp to start streaming telemetry
-            await asyncio.sleep(2.0)
+            # Wait 5s for amp to stabilize before sending anything
+            logger.info("Waiting for ACOM to stabilize...")
+            await asyncio.sleep(5.0)
             await self.send(cmd_enable_telemetry())
+            logger.info("Telemetry enabled")
             return True
 
         except serial.SerialException as e:

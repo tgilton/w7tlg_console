@@ -4,488 +4,1174 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>W7TLG Station Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: #0a0e1a;
-    color: #e0e8ff;
-    font-family: 'Courier New', monospace;
-    padding: 16px;
-  }
-  h1 {
-    font-size: 1.1rem;
-    color: #4af;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    margin-bottom: 16px;
-    border-bottom: 1px solid #223;
-    padding-bottom: 8px;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 12px;
-  }
-  .panel {
-    background: #111827;
-    border: 1px solid #1e3050;
-    border-radius: 6px;
-    padding: 14px;
-  }
-  .panel-title {
-    font-size: 0.7rem;
-    color: #6af;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-    border-bottom: 1px solid #1e3050;
-    padding-bottom: 6px;
-  }
-  .vfo {
-    font-size: 2.4rem;
-    color: #4f8;
-    letter-spacing: 0.05em;
-    font-weight: bold;
-    text-align: center;
-    padding: 8px 0;
-    transition: color 0.2s;
-  }
-  .vfo.tx { color: #f84; }
-  .band-mode {
-    text-align: center;
-    color: #89a;
-    font-size: 0.85rem;
-    margin-top: 4px;
-  }
-  .meter-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin: 5px 0;
-    font-size: 0.85rem;
-  }
-  .meter-label { color: #678; }
-  .meter-value { color: #cde; font-weight: bold; }
-  .meter-value.warn  { color: #fa4; }
-  .meter-value.alert { color: #f44; }
-  .status-ok    { color: #4f8; }
-  .status-warn  { color: #fa4; }
-  .status-fault { color: #f44; }
-  .fault-list {
-    font-size: 0.75rem;
-    margin-top: 6px;
-    max-height: 120px;
-    overflow-y: auto;
-  }
-  .fault-item { padding: 3px 0; border-bottom: 1px solid #1e3050; }
-  .btn {
-    padding: 6px 14px;
-    border: 1px solid #2a4;
-    background: #142;
-    color: #4f8;
-    border-radius: 4px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 0.8rem;
-    margin: 3px;
-    transition: all 0.15s;
-  }
-  .btn:hover  { background: #1a4a2a; }
-  .btn.active { background: #1a5a30; border-color: #4f8; box-shadow: 0 0 6px #4f840; }
-  .btn.danger { border-color: #a24; background: #420; color: #f88; }
-  .btn.danger:hover { background: #621; }
-  .btn.warn   { border-color: #a82; background: #321; color: #fa4; }
-  .btn.warn:hover { background: #432; }
-  .btn.disabled { opacity: 0.35; cursor: not-allowed; }
-  .mode-buttons, .ant-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-  .inhibit-banner {
-    background: #3a0000;
-    border: 2px solid #aa0000;
-    border-radius: 4px;
-    padding: 10px 14px;
-    color: #ff8888;
-    font-size: 0.85rem;
-    margin-bottom: 12px;
-    display: none;
-    animation: pulse-border 1.5s infinite;
-  }
-  .inhibit-banner.visible { display: block; }
-  @keyframes pulse-border {
-    0%, 100% { border-color: #aa0000; }
-    50%       { border-color: #ff4444; }
-  }
-  .dummy-timer {
-    font-size: 2rem;
-    color: #fa4;
-    text-align: center;
-    font-weight: bold;
-    margin-top: 8px;
-  }
-  .dummy-timer.critical { color: #f44; animation: blink 0.5s infinite; }
-  @keyframes blink { 50% { opacity: 0.4; } }
-  .thermal-item {
-    font-size: 0.75rem;
-    padding: 6px 8px;
-    background: #200;
-    border: 1px solid #600;
-    border-radius: 3px;
-    margin: 4px 0;
-    color: #f88;
-  }
-  #conn-dot {
-    display: inline-block;
-    width: 9px; height: 9px;
-    border-radius: 50%;
-    background: #f44;
-    margin-right: 8px;
-    transition: background 0.3s;
-  }
-  #conn-dot.ok { background: #4f8; }
-  .amp-disconnected { opacity: 0.4; font-style: italic; }
+/* ── Reset & tokens ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --surface:   #161b22;
+  --border:    #21262d;
+  --border2:   #30363d;
+  --cyan:      #00d4ff;
+  --cyan-dim:  #005f73;
+  --amber:     #ff8c00;
+  --amber-dim: #5a3200;
+  --green:     #00e676;
+  --green-dim: #003d1f;
+  --red:       #ff3333;
+  --red-dim:   #4a0000;
+  --yellow:    #ffd60a;
+  --muted:     #58677a;
+  --label:     #8b949e;
+  --text:      #c9d1d9;
+  --mono:      'JetBrains Mono', monospace;
+  --sans:      'Inter', system-ui, sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* ── Layout ─────────────────────────────────────────────── */
+.console {
+  display: grid;
+  grid-template-columns: 480px 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "header header"
+    "rig    amp"
+    "safety safety";
+  min-height: 100vh;
+  gap: 1px;
+  background: var(--border);
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.header {
+  grid-area: header;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border2);
+}
+
+.callsign {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.conn-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  display: inline-block;
+  margin-right: 6px;
+  transition: background 0.3s;
+}
+.conn-dot.ok { background: var(--green); }
+
+/* ── Panels ─────────────────────────────────────────────── */
+.rig-panel {
+  grid-area: rig;
+  background: var(--surface);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.amp-panel {
+  grid-area: amp;
+  background: var(--surface);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.safety-panel {
+  grid-area: safety;
+  background: #0d1117;
+  border-top: 1px solid var(--border2);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ── Section label ───────────────────────────────────────── */
+.section-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+/* ── VFO display ─────────────────────────────────────────── */
+.vfo-section { }
+
+.vfo-display {
+  font-family: var(--mono);
+  font-size: 3rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-shadow: 0 0 20px rgba(0, 212, 255, 0.35);
+  transition: color 0.15s, text-shadow 0.15s;
+  padding: 8px 0 4px;
+}
+
+.vfo-display.tx {
+  color: var(--amber);
+  text-shadow: 0 0 20px rgba(255, 140, 0, 0.45);
+}
+
+.vfo-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.badge {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+}
+
+.badge-band   { background: var(--cyan-dim); color: var(--cyan); }
+.badge-mode   { background: #1e2a38; color: #7db8d8; }
+.badge-ptt-rx { background: var(--green-dim); color: var(--green); }
+.badge-ptt-tx { background: var(--amber-dim); color: var(--amber); animation: pulse-tx 0.8s infinite; }
+.badge-digital { background: #1a2a1a; color: #4f8; font-size: 0.6rem; }
+
+@keyframes pulse-tx {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+/* ── S-meter ─────────────────────────────────────────────── */
+.smeter-section { }
+
+.smeter-bar-wrap {
+  position: relative;
+  height: 22px;
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.smeter-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg,
+    #00a86b 0%,       /* S1-S5 green */
+    #00d4ff 40%,      /* S6-S9 cyan */
+    #ffd60a 70%,      /* S9+10-20 yellow */
+    #ff3333 100%);    /* S9+40+ red */
+  transition: width 0.15s ease-out;
+  border-radius: 2px;
+}
+
+.smeter-ticks {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 2px 1px;
+  pointer-events: none;
+}
+
+.smeter-labels {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 2px 0;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--muted);
+}
+
+.smeter-readout {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 3px;
+}
+
+.smeter-label-value {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--cyan);
+}
+
+.smeter-db-value {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* ── TX meters (ALC, PO, SWR) ───────────────────────────── */
+.tx-meters {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.tx-meter { }
+
+.tx-meter-label {
+  font-size: 0.65rem;
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.tx-meter-bar-wrap {
+  height: 16px;
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.tx-meter-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  transition: width 0.12s ease-out;
+}
+
+.tx-meter-bar.alc { background: linear-gradient(90deg, #00e676, #ffd60a, #ff3333); }
+.tx-meter-bar.po  { background: linear-gradient(90deg, #00a86b, #00d4ff); }
+.tx-meter-bar.swr { background: linear-gradient(90deg, #00e676, #ffd60a 50%, #ff3333); }
+
+.tx-meter-value {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 2px;
+  text-align: right;
+}
+
+/* ── Band buttons ────────────────────────────────────────── */
+.band-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+/* ── Mode buttons ────────────────────────────────────────── */
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+
+/* ── Generic button ──────────────────────────────────────── */
+.btn {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 6px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: #161b22;
+  color: var(--label);
+  cursor: pointer;
+  transition: all 0.1s;
+  text-align: center;
+  user-select: none;
+}
+.btn:hover { border-color: var(--cyan-dim); color: var(--text); background: #1c2330; }
+.btn.active {
+  background: #0d2538;
+  border-color: var(--cyan);
+  color: var(--cyan);
+  box-shadow: inset 0 0 8px rgba(0,212,255,0.12);
+}
+.btn.active-amber {
+  background: var(--amber-dim);
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.btn.active-green {
+  background: var(--green-dim);
+  border-color: var(--green);
+  color: var(--green);
+}
+.btn.danger {
+  border-color: #6b2020;
+  color: #ff6b6b;
+  background: #2a0d0d;
+}
+.btn.danger:hover { border-color: var(--red); color: var(--red); }
+.btn.disabled { opacity: 0.3; cursor: not-allowed; pointer-events: none; }
+
+/* ── Control row ─────────────────────────────────────────── */
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.control-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  min-width: 56px;
+  flex-shrink: 0;
+}
+
+/* ── RF Power slider ─────────────────────────────────────── */
+.power-slider-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+input[type=range] {
+  flex: 1;
+  -webkit-appearance: none;
+  height: 4px;
+  background: var(--border2);
+  border-radius: 2px;
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--cyan);
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(0,212,255,0.5);
+}
+input[type=range]::-webkit-slider-thumb:active {
+  transform: scale(1.2);
+}
+
+.power-value {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--cyan);
+  min-width: 36px;
+  text-align: right;
+}
+
+/* ── Preamp toggle ───────────────────────────────────────── */
+.preamp-btns {
+  display: flex;
+  gap: 4px;
+}
+
+/* ── Amp meters ──────────────────────────────────────────── */
+.amp-meters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.amp-meter-card {
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.amp-meter-title {
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.amp-meter-value {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+}
+
+.amp-meter-value.warn  { color: var(--yellow); }
+.amp-meter-value.alert { color: var(--red); }
+.amp-meter-value.good  { color: var(--green); }
+
+.amp-meter-unit {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-left: 3px;
+}
+
+.amp-meter-bar-wrap {
+  height: 5px;
+  background: #0a0d11;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.amp-meter-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.2s ease-out;
+}
+
+/* ── Amp state row ───────────────────────────────────────── */
+.amp-state-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.amp-state-badge {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: #0a0d11;
+  color: var(--muted);
+}
+.amp-state-badge.standby  { border-color: #2a3a4a; color: #4a7a9b; }
+.amp-state-badge.opr-rx   { border-color: var(--green-dim); color: var(--green); }
+.amp-state-badge.opr-tx   { border-color: var(--amber-dim); color: var(--amber); animation: pulse-tx 0.8s infinite; }
+.amp-state-badge.disconn  { border-color: #4a2020; color: #884444; }
+
+/* ── Operating mode ──────────────────────────────────────── */
+.opmode-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+/* ── Antenna grid ────────────────────────────────────────── */
+.ant-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+/* ── Fault display ───────────────────────────────────────── */
+.fault-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.fault-severity {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.fault-severity.ok      { background: var(--green-dim); color: var(--green); }
+.fault-severity.warning { background: #3a2a00; color: var(--yellow); }
+.fault-severity.fault   { background: var(--red-dim); color: var(--red); animation: pulse-tx 1s infinite; }
+
+.fault-messages {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text);
+  flex: 1;
+}
+
+.fault-item { color: var(--red); }
+.fault-item.soft { color: var(--yellow); }
+.fault-item.warn { color: var(--muted); }
+
+/* ── TX inhibit banner ───────────────────────────────────── */
+.inhibit-banner {
+  display: none;
+  background: #2a0505;
+  border: 1px solid var(--red);
+  border-radius: 4px;
+  padding: 8px 14px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--red);
+  flex: 1;
+  animation: pulse-border 1.5s infinite;
+}
+.inhibit-banner.visible { display: block; }
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--red); }
+  50%       { border-color: #ff8888; }
+}
+
+/* ── Dummy load timer ────────────────────────────────────── */
+.dummy-timer-wrap {
+  display: none;
+  align-items: center;
+  gap: 6px;
+}
+.dummy-timer-wrap.visible { display: flex; }
+
+.dummy-timer {
+  font-family: var(--mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--yellow);
+}
+.dummy-timer.critical { color: var(--red); animation: pulse-tx 0.4s infinite; }
+
+/* ── Thermal inhibit ─────────────────────────────────────── */
+.thermal-item {
+  background: #1a0505;
+  border: 1px solid #5a1a1a;
+  border-radius: 3px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: #ff8888;
+  margin-top: 4px;
+}
+
+/* ── Divider ─────────────────────────────────────────────── */
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0;
+}
+
+/* ── Misc util ───────────────────────────────────────────── */
+.row { display: flex; align-items: center; gap: 8px; }
+.flex1 { flex: 1; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); }
 </style>
 </head>
 <body>
-<h1><span id="conn-dot"></span>W7TLG Station Console</h1>
+<div class="console">
 
-<div id="inhibit-banner" class="inhibit-banner">
-  ⛔ TX INHIBITED &mdash; <span id="inhibit-reason">—</span>
-</div>
+  <!-- ── Header ─────────────────────────────────────────── -->
+  <header class="header">
+    <span class="callsign">
+      <span class="conn-dot" id="conn-dot"></span>W7TLG STATION CONSOLE
+    </span>
+    <div class="header-status">
+      <span id="hdr-band">—</span>
+      <span id="hdr-time">—</span>
+    </div>
+  </header>
 
-<div class="grid">
+  <!-- ── Rig panel ──────────────────────────────────────── -->
+  <section class="rig-panel">
 
-  <!-- VFO Panel -->
-  <div class="panel">
-    <div class="panel-title">Transceiver — FT-991A</div>
-    <div class="vfo" id="vfo">  0.000.000</div>
-    <div class="band-mode" id="band-mode">— / —</div>
-    <div class="meter-row" style="margin-top:12px">
-      <span class="meter-label">PTT</span>
-      <span class="meter-value" id="ptt-state">RX</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">Split</span>
-      <span class="meter-value" id="split-state">OFF</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">FT8 Freq</span>
-      <span class="meter-value" id="ft8-freq">—</span>
-    </div>
-  </div>
-
-  <!-- Amplifier Panel -->
-  <div class="panel" id="amp-panel">
-    <div class="panel-title">ACOM 1200S <span id="amp-conn-badge"
-      style="color:#f44; font-size:0.65rem">[disconnected]</span></div>
-    <div class="meter-row">
-      <span class="meter-label">State</span>
-      <span class="meter-value" id="amp-mode">—</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">Fwd Power</span>
-      <span class="meter-value" id="amp-fwd">—</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">Refl Power</span>
-      <span class="meter-value" id="amp-refl">—</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">SWR</span>
-      <span class="meter-value" id="amp-swr">—</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">Drive In</span>
-      <span class="meter-value" id="amp-drive">—</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">PAM1 Temp</span>
-      <span class="meter-value" id="amp-temp">—</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">HV Rail</span>
-      <span class="meter-value" id="amp-hv">—</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">Drain Current</span>
-      <span class="meter-value" id="amp-current">—</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">ATU Tuned</span>
-      <span class="meter-value" id="amp-atu">—</span>
-    </div>
-  </div>
-
-  <!-- Fault Status Panel -->
-  <div class="panel">
-    <div class="panel-title">Fault Status</div>
-    <div class="meter-row">
-      <span class="meter-label">Severity</span>
-      <span class="meter-value status-ok" id="fault-severity">OK</span>
-    </div>
-    <div class="fault-list" id="fault-list">
-      <div class="fault-item" style="color:#456">No active faults</div>
-    </div>
-  </div>
-
-  <!-- Operating Mode Panel -->
-  <div class="panel">
-    <div class="panel-title">Operating Mode</div>
-    <div class="mode-buttons">
-      <button class="btn" id="mode-QRP"
-        onclick="setMode('QRP')">QRP (&le;5W)</button>
-      <button class="btn" id="mode-BAREFOOT"
-        onclick="setMode('BAREFOOT')">Barefoot (&le;100W)</button>
-      <button class="btn" id="mode-NORMAL"
-        onclick="setMode('NORMAL')">Normal (&le;40W drive)</button>
-      <button class="btn warn" id="mode-HIGH_POWER"
-        onclick="confirmHighPower()">⚠ High Power</button>
-    </div>
-    <div class="meter-row" style="margin-top:12px">
-      <span class="meter-label">Active Mode</span>
-      <span class="meter-value" id="active-mode">BAREFOOT</span>
-    </div>
-    <div class="meter-row">
-      <span class="meter-label">Drive Limit</span>
-      <span class="meter-value" id="drive-limit">100W</span>
-    </div>
-  </div>
-
-  <!-- Antenna Selection Panel -->
-  <div class="panel">
-    <div class="panel-title">Antenna</div>
-    <div class="ant-buttons">
-      <button class="btn" id="ant-1"
-        onclick="selectAnt(1)">A1F: SS-25 / DXF</button>
-      <button class="btn disabled" id="ant-2"
-        disabled title="Not connected">A2F: Unconnected</button>
-      <button class="btn" id="ant-3"
-        onclick="selectAnt(3)">A3R: EFHW 40m+</button>
-      <button class="btn" id="ant-4"
-        onclick="selectAnt(4)">A4R: Dummy Load</button>
+    <!-- VFO -->
+    <div class="vfo-section">
+      <div class="vfo-display" id="vfo">  0.000.000</div>
+      <div class="vfo-meta">
+        <span class="badge badge-band" id="badge-band">??</span>
+        <span class="badge badge-mode" id="badge-mode">—</span>
+        <span class="badge badge-ptt-rx" id="badge-ptt">RX</span>
+        <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
+      </div>
     </div>
 
-    <!-- Dummy load countdown -->
-    <div id="dummy-timer-panel" style="display:none; margin-top:12px">
-      <div class="panel-title">Dummy Load Timer</div>
-      <div class="dummy-timer" id="dummy-timer">10.0s</div>
+    <div class="divider"></div>
+
+    <!-- S-meter -->
+    <div class="smeter-section">
+      <div class="section-label">Signal</div>
+      <div class="smeter-bar-wrap">
+        <div class="smeter-bar" id="smeter-bar"></div>
+      </div>
+      <div class="smeter-labels">
+        <span>S1</span><span>S3</span><span>S5</span>
+        <span>S7</span><span>S9</span><span>+20</span>
+        <span>+40</span><span>+60</span>
+      </div>
+      <div class="smeter-readout">
+        <span class="smeter-label-value" id="smeter-label">S0</span>
+        <span class="smeter-db-value" id="smeter-db">— dBm</span>
+      </div>
     </div>
 
-    <!-- Thermal inhibits -->
-    <div id="thermal-panel"></div>
-  </div>
-
-  <!-- TX Safety Panel -->
-  <div class="panel">
-    <div class="panel-title">TX Safety</div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px">
-      <button class="btn danger" onclick="inhibitTx()">⛔ Inhibit TX</button>
-      <button class="btn" onclick="allowTx()">✓ Allow TX</button>
+    <!-- TX meters (shown during TX) -->
+    <div class="tx-meters" id="tx-meters" style="display:none">
+      <div class="tx-meter">
+        <div class="tx-meter-label">ALC</div>
+        <div class="tx-meter-bar-wrap">
+          <div class="tx-meter-bar alc" id="alc-bar"></div>
+        </div>
+        <div class="tx-meter-value" id="alc-val">—</div>
+      </div>
+      <div class="tx-meter">
+        <div class="tx-meter-label">Radio PO</div>
+        <div class="tx-meter-bar-wrap">
+          <div class="tx-meter-bar po" id="po-bar"></div>
+        </div>
+        <div class="tx-meter-value" id="po-val">—</div>
+      </div>
+      <div class="tx-meter">
+        <div class="tx-meter-label">SWR (Rig)</div>
+        <div class="tx-meter-bar-wrap">
+          <div class="tx-meter-bar swr" id="swr-bar"></div>
+        </div>
+        <div class="tx-meter-value" id="swr-val">—</div>
+      </div>
     </div>
-    <div class="meter-row" style="margin-top:12px">
-      <span class="meter-label">TX State</span>
-      <span class="meter-value" id="tx-state">ALLOWED</span>
-    </div>
-  </div>
 
-</div>
+    <div class="divider"></div>
+
+    <!-- Band buttons -->
+    <div>
+      <div class="section-label">Band</div>
+      <div class="band-grid">
+        <button class="btn" data-band="160m" data-freq="1840000"   onclick="setBand(this)">160m</button>
+        <button class="btn" data-band="80m"  data-freq="3573000"   onclick="setBand(this)">80m</button>
+        <button class="btn" data-band="60m"  data-freq="5357000"   onclick="setBand(this)">60m</button>
+        <button class="btn" data-band="40m"  data-freq="7074000"   onclick="setBand(this)">40m</button>
+        <button class="btn" data-band="30m"  data-freq="10136000"  onclick="setBand(this)">30m</button>
+        <button class="btn" data-band="20m"  data-freq="14074000"  onclick="setBand(this)">20m</button>
+        <button class="btn" data-band="17m"  data-freq="18100000"  onclick="setBand(this)">17m</button>
+        <button class="btn" data-band="15m"  data-freq="21074000"  onclick="setBand(this)">15m</button>
+        <button class="btn" data-band="12m"  data-freq="24915000"  onclick="setBand(this)">12m</button>
+        <button class="btn" data-band="10m"  data-freq="28074000"  onclick="setBand(this)">10m</button>
+        <button class="btn" data-band="6m"   data-freq="50313000"  onclick="setBand(this)">6m</button>
+        <button class="btn" data-band="2m"   data-freq="144200000" onclick="setBand(this)">2m</button>
+      </div>
+    </div>
+
+    <!-- Mode buttons -->
+    <div>
+      <div class="section-label">Mode</div>
+      <div class="mode-grid">
+        <button class="btn" data-mode="USB"    onclick="setMode(this)">USB</button>
+        <button class="btn" data-mode="LSB"    onclick="setMode(this)">LSB</button>
+        <button class="btn" data-mode="CW"     onclick="setMode(this)">CW</button>
+        <button class="btn" data-mode="PKTUSB" onclick="setMode(this)">DATA-U</button>
+        <button class="btn" data-mode="FM"     onclick="setMode(this)">FM</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- RF Power -->
+    <div>
+      <div class="section-label">TX Power</div>
+      <div class="control-row">
+        <span class="control-label">RF PWR</span>
+        <div class="power-slider-wrap">
+          <input type="range" min="5" max="100" value="50" id="rf-power-slider"
+            oninput="onPowerSlider(this.value)"
+            onchange="setPower(this.value)">
+          <span class="power-value" id="rf-power-val">50%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Preamp / IPO -->
+    <div>
+      <div class="section-label">Front End</div>
+      <div class="control-row">
+        <span class="control-label">PREAMP</span>
+        <div class="preamp-btns">
+          <button class="btn" id="preamp-ipo"  onclick="setPreamp(0)">IPO</button>
+          <button class="btn" id="preamp-amp1" onclick="setPreamp(1)">AMP1</button>
+          <button class="btn" id="preamp-amp2" onclick="setPreamp(2)">AMP2</button>
+        </div>
+        <span class="control-label" style="margin-left:8px">ATT</span>
+        <span class="mono muted" id="att-val" style="font-size:0.75rem">OFF</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── Amp panel ───────────────────────────────────────── -->
+  <section class="amp-panel">
+
+    <!-- Amp state -->
+    <div>
+      <div class="section-label">ACOM 1200S</div>
+      <div class="amp-state-row">
+        <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
+        <span class="amp-state-badge" id="amp-atu-badge" style="display:none">ATU ✓</span>
+      </div>
+    </div>
+
+    <!-- Big meters: Fwd Power, SWR -->
+    <div class="amp-meters">
+      <div class="amp-meter-card">
+        <div class="amp-meter-title">Forward Power</div>
+        <div>
+          <span class="amp-meter-value good" id="amp-fwd-val">0</span>
+          <span class="amp-meter-unit">W</span>
+        </div>
+        <div class="amp-meter-bar-wrap">
+          <div class="amp-meter-bar" id="amp-fwd-bar"
+            style="width:0%; background: linear-gradient(90deg, #00a86b, #00d4ff, #ffd60a, #ff3333)"></div>
+        </div>
+      </div>
+      <div class="amp-meter-card">
+        <div class="amp-meter-title">SWR</div>
+        <div>
+          <span class="amp-meter-value good" id="amp-swr-val">—</span>
+        </div>
+        <div class="amp-meter-bar-wrap">
+          <div class="amp-meter-bar" id="amp-swr-bar"
+            style="width:0%; background: linear-gradient(90deg, #00e676, #ffd60a 50%, #ff3333)"></div>
+        </div>
+      </div>
+      <div class="amp-meter-card">
+        <div class="amp-meter-title">PAM1 Temp</div>
+        <div>
+          <span class="amp-meter-value" id="amp-temp-val">—</span>
+          <span class="amp-meter-unit">°C</span>
+        </div>
+        <div class="amp-meter-bar-wrap">
+          <div class="amp-meter-bar" id="amp-temp-bar"
+            style="width:0%; background: linear-gradient(90deg, #00a86b, #ffd60a 60%, #ff3333)"></div>
+        </div>
+      </div>
+      <div class="amp-meter-card">
+        <div class="amp-meter-title">Drive In</div>
+        <div>
+          <span class="amp-meter-value" id="amp-drive-val">—</span>
+          <span class="amp-meter-unit">W</span>
+        </div>
+        <div class="amp-meter-bar-wrap">
+          <div class="amp-meter-bar" id="amp-drive-bar"
+            style="width:0%; background: linear-gradient(90deg, #00a86b, #ffd60a 70%, #ff3333)"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HV and current (smaller) -->
+    <div class="row" style="gap:16px; font-family:var(--mono); font-size:0.8rem;">
+      <span class="muted">HV</span>
+      <span id="amp-hv-val">—</span>
+      <span class="muted">V</span>
+      <span class="muted" style="margin-left:12px">Drain</span>
+      <span id="amp-current-val">—</span>
+      <span class="muted">mA</span>
+      <span class="muted" style="margin-left:12px">Refl</span>
+      <span id="amp-refl-val">—</span>
+      <span class="muted">W</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Fault status -->
+    <div>
+      <div class="section-label">Fault Status</div>
+      <div class="fault-row">
+        <span class="fault-severity ok" id="fault-severity">OK</span>
+        <div class="fault-messages" id="fault-messages">
+          <span class="muted" style="font-size:0.7rem; font-family:var(--mono)">No active faults</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Operating mode -->
+    <div>
+      <div class="section-label">Operating Mode</div>
+      <div class="opmode-grid">
+        <button class="btn" id="mode-QRP"
+          onclick="setOpMode('QRP')">QRP<br><span style="font-size:0.6rem;opacity:0.7">≤5W</span></button>
+        <button class="btn active" id="mode-BAREFOOT"
+          onclick="setOpMode('BAREFOOT')">BAREFOOT<br><span style="font-size:0.6rem;opacity:0.7">≤100W</span></button>
+        <button class="btn" id="mode-NORMAL"
+          onclick="setOpMode('NORMAL')">NORMAL<br><span style="font-size:0.6rem;opacity:0.7">≤40W drive</span></button>
+        <button class="btn" id="mode-HIGH_POWER"
+          style="border-color:#5a3200; color:var(--amber)"
+          onclick="confirmHighPower()">HIGH PWR<br><span style="font-size:0.6rem;opacity:0.7">⚠ Confirm</span></button>
+      </div>
+      <div class="row" style="margin-top:8px; font-family:var(--mono); font-size:0.75rem;">
+        <span class="muted">Drive limit:</span>
+        <span id="drive-limit-val">100W max</span>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Antenna -->
+    <div>
+      <div class="section-label">Antenna</div>
+      <div class="ant-grid">
+        <button class="btn" id="ant-1" onclick="selectAnt(1)">A1F<br><span style="font-size:0.6rem;opacity:0.7">SS-25/DXF</span></button>
+        <button class="btn disabled" id="ant-2">A2F<br><span style="font-size:0.6rem;opacity:0.7">—</span></button>
+        <button class="btn" id="ant-3" onclick="selectAnt(3)">A3R<br><span style="font-size:0.6rem;opacity:0.7">EFHW</span></button>
+        <button class="btn" id="ant-4" onclick="selectAnt(4)">A4R<br><span style="font-size:0.6rem;opacity:0.7">Dummy</span></button>
+      </div>
+      <!-- Dummy load timer -->
+      <div class="dummy-timer-wrap" id="dummy-timer-wrap" style="margin-top:8px">
+        <span class="muted mono" style="font-size:0.7rem">DUMMY LOAD:</span>
+        <span class="dummy-timer" id="dummy-timer">10.0s</span>
+      </div>
+      <!-- Thermal inhibits -->
+      <div id="thermal-panel"></div>
+    </div>
+
+  </section>
+
+  <!-- ── Safety panel ────────────────────────────────────── -->
+  <footer class="safety-panel">
+    <div class="inhibit-banner" id="inhibit-banner">
+      ⛔ TX INHIBITED — <span id="inhibit-reason">—</span>
+    </div>
+    <button class="btn danger" onclick="inhibitTx()" style="white-space:nowrap">⛔ Inhibit TX</button>
+    <button class="btn active-green" onclick="allowTx()" style="white-space:nowrap">✓ Allow TX</button>
+    <span class="mono" style="font-size:0.75rem; margin-left:8px">
+      TX: <span id="tx-state" style="color:var(--green)">ALLOWED</span>
+    </span>
+  </footer>
+
+</div><!-- .console -->
 
 <script>
+'use strict';
+
+// ── WebSocket ─────────────────────────────────────────────
 const ws = new WebSocket(`ws://${location.host}/ws`);
+let state = {};
 
 ws.onopen = () => {
-  document.getElementById('conn-dot').className = 'ok';
+  document.getElementById('conn-dot').className = 'conn-dot ok';
 };
 ws.onclose = () => {
-  document.getElementById('conn-dot').className = '';
+  document.getElementById('conn-dot').className = 'conn-dot';
 };
-ws.onerror = (e) => console.error('WS error', e);
-
-ws.onmessage = (evt) => {
+ws.onmessage = evt => {
   const msg = JSON.parse(evt.data);
-  if (msg.type === 'state') updateUI(msg.data);
+  if (msg.type === 'state') { state = msg.data; updateUI(state); }
   else if (msg.type === 'cmd_response' && !msg.ok) alert('Error: ' + msg.message);
 };
 
+function send(obj) { ws.send(JSON.stringify(obj)); }
+
+// ── Clock ─────────────────────────────────────────────────
+setInterval(() => {
+  const now = new Date();
+  document.getElementById('hdr-time').textContent =
+    now.toUTCString().slice(17, 25) + 'Z';
+}, 1000);
+
+// ── UI update ─────────────────────────────────────────────
 function updateUI(s) {
   const rig = s.rig || {};
 
   // VFO
   const vfoEl = document.getElementById('vfo');
   vfoEl.textContent = rig.freq_display || '  0.000.000';
-  vfoEl.className   = 'vfo' + (rig.ptt ? ' tx' : '');
+  vfoEl.className = 'vfo-display' + (rig.ptt ? ' tx' : '');
 
-  document.getElementById('band-mode').textContent =
-    `${rig.band || '??'} / ${rig.mode || '—'}` +
-    (rig.passband_hz ? ` (${rig.passband_hz} Hz)` : '');
+  // Badges
+  document.getElementById('badge-band').textContent = rig.band || '??';
+  document.getElementById('badge-mode').textContent = rig.mode || '—';
+  document.getElementById('hdr-band').textContent = rig.band || '—';
 
-  setVal('ptt-state', rig.ptt ? '🔴 TX' : 'RX');
-  setVal('split-state', rig.split ? 'ON' : 'OFF');
-  setVal('ft8-freq', rig.near_digital_freq ? '✓ On FT8' : '—');
+  const pttBadge = document.getElementById('badge-ptt');
+  pttBadge.textContent = rig.ptt ? 'TX' : 'RX';
+  pttBadge.className = rig.ptt ? 'badge badge-ptt-tx' : 'badge badge-ptt-rx';
 
-  // Amp connection badge
-  const badge = document.getElementById('amp-conn-badge');
-  badge.textContent  = s.amp_connected ? '' : '[disconnected]';
-  badge.style.color  = s.amp_connected ? '#4f8' : '#f44';
+  const digBadge = document.getElementById('badge-digital');
+  digBadge.style.display = rig.near_digital_freq ? 'inline-block' : 'none';
 
-  // Amp meters
-  setVal('amp-mode', s.amp_mode || '—');
-  setVal('amp-fwd',  fmt(s.amp_fwd_w,  'W', 0));
-  setVal('amp-hv',   fmt(s.amp_hv_v,   'V', 1));
-  setVal('amp-current', fmt(s.amp_current_ma, 'mA', 0));
-  setVal('amp-atu',  s.amp_atu_tuned ? '✓ Yes' : 'No');
+  // S-meter (RX) / TX meters
+  const isTx = rig.ptt;
+  document.getElementById('tx-meters').style.display = isTx ? 'grid' : 'none';
 
-  // Reflected power with coloring
-  const reflEl = document.getElementById('amp-refl');
-  reflEl.textContent  = fmt(s.amp_refl_w, 'W', 0);
-  const fwd = s.amp_fwd_w || 0;
-  const refl = s.amp_refl_w || 0;
-  reflEl.className = 'meter-value' +
-    (fwd > 10 && refl > fwd * 0.25 ? ' alert' :
-     fwd > 10 && refl > fwd * 0.1  ? ' warn' : '');
+  if (!isTx) {
+    // S-meter: STRENGTH is dB re S9. Range roughly -54 (S0) to +60
+    const db = rig.strength_db ?? -54;
+    // Map -54..+60 → 0..100%
+    const pct = Math.max(0, Math.min(100, ((db + 54) / 114) * 100));
+    document.getElementById('smeter-bar').style.width = pct + '%';
+    document.getElementById('smeter-label').textContent = rig.smeter_label || 'S0';
+    // Convert STRENGTH (dB re S9) to approximate dBm: S9 = -73dBm
+    const dbm = (db + (-73)).toFixed(1);
+    document.getElementById('smeter-db').textContent = dbm + ' dBm';
+  }
 
-  // SWR with coloring
-  const swrEl = document.getElementById('amp-swr');
-  const swr = s.amp_swr || 0;
-  swrEl.textContent = swr > 0 ? swr.toFixed(2) : '—';
-  swrEl.className = 'meter-value' +
-    (swr > 3.0 ? ' alert' : swr > 2.0 ? ' warn' : '');
+  // TX meters
+  if (isTx) {
+    const alc = rig.alc ?? 0;
+    setBar('alc-bar', alc * 100);
+    document.getElementById('alc-val').textContent = (alc * 100).toFixed(0) + '%';
 
-  // Drive power with limit awareness
-  const driveEl = document.getElementById('amp-drive');
-  const drive = s.amp_drive_w || 0;
-  const limit = s.drive_limit_w || 100;
-  driveEl.textContent = fmt(drive, 'W', 1);
-  driveEl.className = 'meter-value' +
-    (drive > limit * 0.9 ? ' alert' : drive > limit * 0.75 ? ' warn' : '');
+    const po = rig.rf_power_out ?? 0;
+    setBar('po-bar', po * 100);
+    document.getElementById('po-val').textContent = (po * 100).toFixed(0) + 'W';
 
-  // Temperature
-  const tempEl = document.getElementById('amp-temp');
-  const temp = s.amp_temp_c;
-  tempEl.textContent = temp != null ? temp.toFixed(1) + ' °C' : '—';
-  tempEl.className = 'meter-value' +
-    (temp > 65 ? ' alert' : temp > 55 ? ' warn' : '');
+    const swr = rig.swr_radio ?? 1;
+    const swrPct = Math.max(0, Math.min(100, ((swr - 1) / 4) * 100));
+    setBar('swr-bar', swrPct);
+    document.getElementById('swr-val').textContent = swr.toFixed(2);
+  }
 
-  // Faults
-  const sevEl = document.getElementById('fault-severity');
-  sevEl.textContent = s.fault_severity || 'OK';
-  sevEl.className = 'meter-value ' + ({
-    'OK':         'status-ok',
-    'WARNING':    'status-warn',
-    'SOFT_FAULT': 'status-fault',
-    'HARD_FAULT': 'status-fault',
-  }[s.fault_severity] || 'status-ok');
+  // RF power slider
+  const pct = rig.rf_power_pct ?? 50;
+  document.getElementById('rf-power-slider').value = pct;
+  document.getElementById('rf-power-val').textContent = pct + '%';
 
-  const allFaults = [
-    ...(s.fault_hard     || []).map(f => ({f, cls: 'status-fault'})),
-    ...(s.fault_soft     || []).map(f => ({f, cls: 'status-fault'})),
-    ...(s.fault_warnings || []).map(f => ({f, cls: 'status-warn'})),
-  ];
-  const faultList = document.getElementById('fault-list');
-  faultList.innerHTML = allFaults.length
-    ? allFaults.map(({f, cls}) =>
-        `<div class="fault-item ${cls}">${f}</div>`).join('')
-    : '<div class="fault-item" style="color:#456">No active faults</div>';
+  // Preamp
+  const preamp = rig.preamp ?? 0;
+  ['preamp-ipo', 'preamp-amp1', 'preamp-amp2'].forEach((id, i) => {
+    document.getElementById(id).className = 'btn' + (preamp === i ? ' active' : '');
+  });
+
+  // ATT
+  document.getElementById('att-val').textContent =
+    (rig.att_db && rig.att_db > 0) ? rig.att_db + 'dB' : 'OFF';
+
+  // Band buttons
+  document.querySelectorAll('[data-band]').forEach(btn => {
+    btn.className = 'btn' + (btn.dataset.band === (rig.band||'') ? ' active' : '');
+  });
 
   // Mode buttons
+  document.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.className = 'btn' + (btn.dataset.mode === (rig.mode||'') ? ' active' : '');
+  });
+
+  // Amp state
+  updateAmp(s);
+
+  // Operating mode buttons
   ['QRP','BAREFOOT','NORMAL','HIGH_POWER'].forEach(m => {
     const btn = document.getElementById('mode-' + m);
     if (!btn) return;
-    btn.classList.toggle('active', s.operating_mode === m);
+    const isActive = s.operating_mode === m;
+    btn.className = 'btn' + (isActive ? (m === 'HIGH_POWER' ? ' active-amber' : ' active') : '');
+    if (m === 'HIGH_POWER' && !isActive)
+      btn.style.borderColor = '#5a3200';
   });
-  setVal('active-mode', s.operating_mode || '—');
-  setVal('drive-limit', s.drive_limit_w != null ? s.drive_limit_w + 'W max' : '—');
+  document.getElementById('drive-limit-val').textContent =
+    (s.drive_limit_w ?? 100) + 'W max';
 
   // Antenna buttons
   [1,2,3,4].forEach(n => {
     const btn = document.getElementById('ant-' + n);
-    if (!btn) return;
-    btn.classList.toggle('active', s.selected_antenna === n);
+    if (!btn || btn.classList.contains('disabled')) return;
+    btn.className = btn.className.replace(' active','').replace(' active-amber','') +
+      (s.selected_antenna === n ? ' active' : '');
   });
 
   // Dummy load timer
-  const dtp = document.getElementById('dummy-timer-panel');
+  const dtp = document.getElementById('dummy-timer-wrap');
   if (s.dummy_load_active) {
-    dtp.style.display = 'block';
-    const remaining = s.dummy_load_remaining_s || 0;
+    dtp.className = 'dummy-timer-wrap visible';
+    const rem = s.dummy_load_remaining_s ?? 0;
     const timerEl = document.getElementById('dummy-timer');
-    timerEl.textContent = remaining.toFixed(1) + 's';
-    timerEl.className = 'dummy-timer' + (remaining <= 3 ? ' critical' : '');
+    timerEl.textContent = rem.toFixed(1) + 's';
+    timerEl.className = 'dummy-timer' + (rem <= 3 ? ' critical' : '');
   } else {
-    dtp.style.display = 'none';
+    dtp.className = 'dummy-timer-wrap';
   }
 
   // Thermal inhibits
   const tp = document.getElementById('thermal-panel');
   const inhibits = Object.values(s.thermal_inhibit || {}).filter(t => t.inhibited);
-  if (inhibits.length) {
-    tp.innerHTML = '<div class="panel-title" style="margin-top:10px">Thermal Inhibits</div>' +
-      inhibits.map(t => `
-        <div class="thermal-item">
-          <strong>Antenna ${t.antenna_number}</strong>: ${t.inhibited_reason}<br>
-          Since: ${t.inhibited_at ? new Date(t.inhibited_at).toLocaleString() : '?'}
-          ${t.ambient_temp_c != null ? ` &bull; Ambient at inhibit: ${t.ambient_temp_c.toFixed(1)}°C` : ''}
-          <br>
-          <button class="btn warn" style="margin-top:5px; font-size:0.7rem"
-            onclick="clearThermal(${t.antenna_number})">
-            ✓ Antenna cooled &mdash; re-enable
-          </button>
-        </div>`).join('');
-  } else {
-    tp.innerHTML = '';
-  }
+  tp.innerHTML = inhibits.map(t => `
+    <div class="thermal-item">
+      Ant ${t.antenna_number}: ${t.inhibited_reason || 'Thermal inhibit'}<br>
+      <span style="opacity:0.7">Since: ${t.inhibited_at ? new Date(t.inhibited_at).toLocaleString() : '?'}</span>
+      <button class="btn" style="margin-top:4px; font-size:0.65rem; padding:3px 8px"
+        onclick="clearThermal(${t.antenna_number})">
+        ✓ Cooled — re-enable
+      </button>
+    </div>`).join('');
 
-  // TX inhibit banner
+  // TX inhibit
   const banner = document.getElementById('inhibit-banner');
-  banner.classList.toggle('visible', s.tx_inhibited);
-  document.getElementById('inhibit-reason').textContent =
-    s.tx_inhibit_reason || '—';
-
-  // TX state
-  const txEl = document.getElementById('tx-state');
-  txEl.textContent  = s.tx_inhibited ? '⛔ INHIBITED' : '✓ ALLOWED';
-  txEl.className    = 'meter-value ' + (s.tx_inhibited ? 'status-fault' : 'status-ok');
+  banner.className = 'inhibit-banner' + (s.tx_inhibited ? ' visible' : '');
+  document.getElementById('inhibit-reason').textContent = s.tx_inhibit_reason || '—';
+  const txStateEl = document.getElementById('tx-state');
+  txStateEl.textContent = s.tx_inhibited ? 'INHIBITED' : 'ALLOWED';
+  txStateEl.style.color = s.tx_inhibited ? 'var(--red)' : 'var(--green)';
 }
 
-function fmt(val, unit, decimals) {
-  return val != null ? val.toFixed(decimals) + ' ' + unit : '—';
+function updateAmp(s) {
+  // State badge
+  const badge = document.getElementById('amp-state-badge');
+  const modeName = (s.amp_mode || '').toLowerCase();
+  let badgeClass = 'amp-state-badge ';
+  let badgeText = s.amp_mode || '—';
+
+  if (!s.amp_connected) {
+    badgeClass += 'disconn'; badgeText = 'DISCONNECTED';
+  } else if (modeName.includes('opr/tx') || modeName.includes('tx')) {
+    badgeClass += 'opr-tx';
+  } else if (modeName.includes('opr')) {
+    badgeClass += 'opr-rx';
+  } else if (modeName.includes('standby')) {
+    badgeClass += 'standby';
+  }
+  badge.className = badgeClass;
+  badge.textContent = badgeText;
+
+  // ATU
+  const atuBadge = document.getElementById('amp-atu-badge');
+  atuBadge.style.display = s.amp_atu_tuned ? 'inline-block' : 'none';
+
+  // Forward power
+  const fwd = s.amp_fwd_w ?? 0;
+  document.getElementById('amp-fwd-val').textContent = fwd.toFixed(0);
+  setBar('amp-fwd-bar', Math.min(100, (fwd / 1500) * 100));
+  colorValue('amp-fwd-val', fwd, 600, 1200, true);
+
+  // SWR
+  const swr = s.amp_swr ?? 0;
+  const swrEl = document.getElementById('amp-swr-val');
+  swrEl.textContent = swr > 0 ? swr.toFixed(2) : '—';
+  setBar('amp-swr-bar', Math.max(0, Math.min(100, ((swr - 1) / 4) * 100)));
+  swrEl.className = 'amp-meter-value ' + (swr > 3 ? 'alert' : swr > 2 ? 'warn' : 'good');
+
+  // Temperature
+  const temp = s.amp_temp_c ?? 0;
+  const tempEl = document.getElementById('amp-temp-val');
+  tempEl.textContent = temp > 0 ? temp.toFixed(1) : '—';
+  setBar('amp-temp-bar', Math.min(100, (temp / 80) * 100));
+  tempEl.className = 'amp-meter-value ' + (temp > 65 ? 'alert' : temp > 55 ? 'warn' : '');
+
+  // Drive
+  const drive = s.amp_drive_w ?? 0;
+  const limit = s.drive_limit_w ?? 100;
+  document.getElementById('amp-drive-val').textContent = drive > 0 ? drive.toFixed(1) : '—';
+  setBar('amp-drive-bar', Math.min(100, (drive / limit) * 100));
+  colorValue('amp-drive-val', drive, limit * 0.75, limit * 0.95, false);
+
+  // Misc
+  document.getElementById('amp-hv-val').textContent =
+    s.amp_hv_v > 0 ? s.amp_hv_v.toFixed(1) : '—';
+  document.getElementById('amp-current-val').textContent =
+    s.amp_current_ma > 0 ? s.amp_current_ma.toFixed(0) : '—';
+  document.getElementById('amp-refl-val').textContent =
+    s.amp_refl_w != null ? s.amp_refl_w.toFixed(0) : '—';
+
+  // Faults
+  const sevEl = document.getElementById('fault-severity');
+  const sev = s.fault_severity || 'OK';
+  sevEl.textContent = sev;
+  sevEl.className = 'fault-severity ' + (
+    sev === 'OK' ? 'ok' : sev === 'WARNING' ? 'warning' : 'fault');
+
+  const faultMsgs = document.getElementById('fault-messages');
+  const all = [
+    ...(s.fault_hard     || []).map(f => `<div class="fault-item">${f}</div>`),
+    ...(s.fault_soft     || []).map(f => `<div class="fault-item soft">${f}</div>`),
+    ...(s.fault_warnings || []).map(f => `<div class="fault-item warn">${f}</div>`),
+  ];
+  faultMsgs.innerHTML = all.length
+    ? all.join('')
+    : '<span class="muted" style="font-size:0.7rem;font-family:var(--mono)">No active faults</span>';
 }
-function setVal(id, text) {
+
+// ── Helpers ───────────────────────────────────────────────
+function setBar(id, pct) {
   const el = document.getElementById(id);
-  if (el) el.textContent = text;
+  if (el) el.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
 }
-function send(obj) { ws.send(JSON.stringify(obj)); }
 
-function setMode(mode) {
-  send({cmd: 'set_mode', mode: mode, confirmed: false});
+function colorValue(id, val, warnAt, alertAt, higher_is_better) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'amp-meter-value ' + (
+    val >= alertAt ? 'alert' :
+    val >= warnAt  ? 'warn'  :
+    higher_is_better && val > 0 ? 'good' : '');
+}
+
+// ── Controls ──────────────────────────────────────────────
+function setBand(btn) {
+  send({ cmd: 'set_frequency', freq_hz: parseInt(btn.dataset.freq) });
+}
+
+function setMode(btn) {
+  send({ cmd: 'set_mode', mode: btn.dataset.mode, passband: 0 });
+}
+
+function onPowerSlider(val) {
+  document.getElementById('rf-power-val').textContent = val + '%';
+}
+
+function setPower(val) {
+  send({ cmd: 'set_rf_power', pct: parseInt(val) });
+}
+
+function setPreamp(level) {
+  send({ cmd: 'set_preamp', level });
+}
+
+function setOpMode(mode) {
+  send({ cmd: 'set_mode_op', mode, confirmed: false });
 }
 
 function confirmHighPower() {
   if (confirm(
-    'HIGH POWER operation requires confirmation.\n\n' +
-    '✓ Antenna is connected and matched\n' +
-    '✓ ATU is tuned for current band\n' +
-    '✓ Band is clear\n' +
-    '✓ Drive power will be limited to 40W\n\n' +
-    'Proceed with HIGH POWER mode?'
-  )) {
-    send({cmd: 'set_mode', mode: 'HIGH_POWER', confirmed: true});
-  }
+    'HIGH POWER operation — confirm before proceeding:\n\n' +
+    '✓  Antenna is connected and matched\n' +
+    '✓  ATU is tuned for current band\n' +
+    '✓  Band is clear\n' +
+    '✓  Drive limited to 40W\n\n' +
+    'Proceed?'
+  )) send({ cmd: 'set_mode_op', mode: 'HIGH_POWER', confirmed: true });
 }
 
-function selectAnt(n) { send({cmd: 'select_antenna', antenna: n}); }
-function inhibitTx()  { send({cmd: 'inhibit_tx', reason: 'Manual operator inhibit'}); }
-function allowTx()    { send({cmd: 'allow_tx'}); }
+function selectAnt(n) { send({ cmd: 'select_antenna', antenna: n }); }
+function inhibitTx()  { send({ cmd: 'inhibit_tx', reason: 'Manual operator inhibit' }); }
+function allowTx()    { send({ cmd: 'allow_tx' }); }
 
 function clearThermal(n) {
   if (confirm(
-    `Confirm antenna ${n} has fully cooled.\n\n` +
-    `This requires your judgment based on:\n` +
-    `• Time since inhibit\n` +
-    `• Ambient temperature\n` +
-    `• How hard it was driven\n\n` +
-    `Re-enable antenna ${n}?`
-  )) {
-    send({cmd: 'clear_thermal', antenna: n});
-  }
+    `Confirm antenna ${n} has fully cooled.\n` +
+    `Consider: time since inhibit, ambient temperature,\n` +
+    `how hard it was driven.\n\nRe-enable antenna ${n}?`
+  )) send({ cmd: 'clear_thermal', antenna: n });
 }
 </script>
 </body>

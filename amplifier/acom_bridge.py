@@ -242,7 +242,7 @@ class StationState:
     fault_soft: list = field(default_factory=list)
     fault_warnings: list = field(default_factory=list)
     operating_mode: str = OperatingMode.BAREFOOT.value
-    selected_antenna: int = 1
+    selected_antenna: int = 3
     drive_limit_w: int = 100
     tx_inhibited: bool = False
     tx_inhibit_reason: str = ""
@@ -304,7 +304,7 @@ class AcomBridge:
         self.station = StationState()
 
         self._mode = OperatingMode.BAREFOOT
-        self._selected_antenna = 1
+        self._selected_antenna = 3
         self._high_power_confirmed = False
         self._tx_inhibited = False
         self._tx_inhibit_reason = ""
@@ -515,9 +515,8 @@ class AcomBridge:
         if not connected:
             await self.inhibit_tx("ACOM serial connection lost")
         else:
-            logger.info("ACOM connected — waiting for amp to stabilize")
-            await asyncio.sleep(3.0)
-            await self.set_operating_mode(self._mode, self._high_power_confirmed)
+            await self.set_operating_mode(
+                self._mode, self._high_power_confirmed)
         await self._publish()
 
     async def _publish(self):
