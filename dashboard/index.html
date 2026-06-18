@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG Station Console</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0e1a;
+    color: #e0e8ff;
+    font-family: 'Courier New', monospace;
+    padding: 16px;
+  }
+  h1 {
+    font-size: 1.1rem;
+    color: #4af;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    border-bottom: 1px solid #223;
+    padding-bottom: 8px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .panel {
+    background: #111827;
+    border: 1px solid #1e3050;
+    border-radius: 6px;
+    padding: 14px;
+  }
+  .panel-title {
+    font-size: 0.7rem;
+    color: #6af;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #1e3050;
+    padding-bottom: 6px;
+  }
+  .vfo {
+    font-size: 2.4rem;
+    color: #4f8;
+    letter-spacing: 0.05em;
+    font-weight: bold;
+    text-align: center;
+    padding: 8px 0;
+    transition: color 0.2s;
+  }
+  .vfo.tx { color: #f84; }
+  .band-mode {
+    text-align: center;
+    color: #89a;
+    font-size: 0.85rem;
+    margin-top: 4px;
+  }
+  .meter-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 5px 0;
+    font-size: 0.85rem;
+  }
+  .meter-label { color: #678; }
+  .meter-value { color: #cde; font-weight: bold; }
+  .meter-value.warn  { color: #fa4; }
+  .meter-value.alert { color: #f44; }
+  .status-ok    { color: #4f8; }
+  .status-warn  { color: #fa4; }
+  .status-fault { color: #f44; }
+  .fault-list {
+    font-size: 0.75rem;
+    margin-top: 6px;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .fault-item { padding: 3px 0; border-bottom: 1px solid #1e3050; }
+  .btn {
+    padding: 6px 14px;
+    border: 1px solid #2a4;
+    background: #142;
+    color: #4f8;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.8rem;
+    margin: 3px;
+    transition: all 0.15s;
+  }
+  .btn:hover  { background: #1a4a2a; }
+  .btn.active { background: #1a5a30; border-color: #4f8; box-shadow: 0 0 6px #4f840; }
+  .btn.danger { border-color: #a24; background: #420; color: #f88; }
+  .btn.danger:hover { background: #621; }
+  .btn.warn   { border-color: #a82; background: #321; color: #fa4; }
+  .btn.warn:hover { background: #432; }
+  .btn.disabled { opacity: 0.35; cursor: not-allowed; }
+  .mode-buttons, .ant-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .inhibit-banner {
+    background: #3a0000;
+    border: 2px solid #aa0000;
+    border-radius: 4px;
+    padding: 10px 14px;
+    color: #ff8888;
+    font-size: 0.85rem;
+    margin-bottom: 12px;
+    display: none;
+    animation: pulse-border 1.5s infinite;
+  }
+  .inhibit-banner.visible { display: block; }
+  @keyframes pulse-border {
+    0%, 100% { border-color: #aa0000; }
+    50%       { border-color: #ff4444; }
+  }
+  .dummy-timer {
+    font-size: 2rem;
+    color: #fa4;
+    text-align: center;
+    font-weight: bold;
+    margin-top: 8px;
+  }
+  .dummy-timer.critical { color: #f44; animation: blink 0.5s infinite; }
+  @keyframes blink { 50% { opacity: 0.4; } }
+  .thermal-item {
+    font-size: 0.75rem;
+    padding: 6px 8px;
+    background: #200;
+    border: 1px solid #600;
+    border-radius: 3px;
+    margin: 4px 0;
+    color: #f88;
+  }
+  #conn-dot {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: #f44;
+    margin-right: 8px;
+    transition: background 0.3s;
+  }
+  #conn-dot.ok { background: #4f8; }
+  .amp-disconnected { opacity: 0.4; font-style: italic; }
+</style>
+</head>
+<body>
+<h1><span id="conn-dot"></span>W7TLG Station Console</h1>
+
+<div id="inhibit-banner" class="inhibit-banner">
+  ⛔ TX INHIBITED &mdash; <span id="inhibit-reason">—</span>
+</div>
+
+<div class="grid">
+
+  <!-- VFO Panel -->
+  <div class="panel">
+    <div class="panel-title">Transceiver — FT-991A</div>
+    <div class="vfo" id="vfo">  0.000.000</div>
+    <div class="band-mode" id="band-mode">— / —</div>
+    <div class="meter-row" style="margin-top:12px">
+      <span class="meter-label">PTT</span>
+      <span class="meter-value" id="ptt-state">RX</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">Split</span>
+      <span class="meter-value" id="split-state">OFF</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">FT8 Freq</span>
+      <span class="meter-value" id="ft8-freq">—</span>
+    </div>
+  </div>
+
+  <!-- Amplifier Panel -->
+  <div class="panel" id="amp-panel">
+    <div class="panel-title">ACOM 1200S <span id="amp-conn-badge"
+      style="color:#f44; font-size:0.65rem">[disconnected]</span></div>
+    <div class="meter-row">
+      <span class="meter-label">State</span>
+      <span class="meter-value" id="amp-mode">—</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">Fwd Power</span>
+      <span class="meter-value" id="amp-fwd">—</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">Refl Power</span>
+      <span class="meter-value" id="amp-refl">—</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">SWR</span>
+      <span class="meter-value" id="amp-swr">—</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">Drive In</span>
+      <span class="meter-value" id="amp-drive">—</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">PAM1 Temp</span>
+      <span class="meter-value" id="amp-temp">—</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">HV Rail</span>
+      <span class="meter-value" id="amp-hv">—</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">Drain Current</span>
+      <span class="meter-value" id="amp-current">—</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">ATU Tuned</span>
+      <span class="meter-value" id="amp-atu">—</span>
+    </div>
+  </div>
+
+  <!-- Fault Status Panel -->
+  <div class="panel">
+    <div class="panel-title">Fault Status</div>
+    <div class="meter-row">
+      <span class="meter-label">Severity</span>
+      <span class="meter-value status-ok" id="fault-severity">OK</span>
+    </div>
+    <div class="fault-list" id="fault-list">
+      <div class="fault-item" style="color:#456">No active faults</div>
+    </div>
+  </div>
+
+  <!-- Operating Mode Panel -->
+  <div class="panel">
+    <div class="panel-title">Operating Mode</div>
+    <div class="mode-buttons">
+      <button class="btn" id="mode-QRP"
+        onclick="setMode('QRP')">QRP (&le;5W)</button>
+      <button class="btn" id="mode-BAREFOOT"
+        onclick="setMode('BAREFOOT')">Barefoot (&le;100W)</button>
+      <button class="btn" id="mode-NORMAL"
+        onclick="setMode('NORMAL')">Normal (&le;40W drive)</button>
+      <button class="btn warn" id="mode-HIGH_POWER"
+        onclick="confirmHighPower()">⚠ High Power</button>
+    </div>
+    <div class="meter-row" style="margin-top:12px">
+      <span class="meter-label">Active Mode</span>
+      <span class="meter-value" id="active-mode">BAREFOOT</span>
+    </div>
+    <div class="meter-row">
+      <span class="meter-label">Drive Limit</span>
+      <span class="meter-value" id="drive-limit">100W</span>
+    </div>
+  </div>
+
+  <!-- Antenna Selection Panel -->
+  <div class="panel">
+    <div class="panel-title">Antenna</div>
+    <div class="ant-buttons">
+      <button class="btn" id="ant-1"
+        onclick="selectAnt(1)">A1F: SS-25 / DXF</button>
+      <button class="btn disabled" id="ant-2"
+        disabled title="Not connected">A2F: Unconnected</button>
+      <button class="btn" id="ant-3"
+        onclick="selectAnt(3)">A3R: EFHW 40m+</button>
+      <button class="btn" id="ant-4"
+        onclick="selectAnt(4)">A4R: Dummy Load</button>
+    </div>
+
+    <!-- Dummy load countdown -->
+    <div id="dummy-timer-panel" style="display:none; margin-top:12px">
+      <div class="panel-title">Dummy Load Timer</div>
+      <div class="dummy-timer" id="dummy-timer">10.0s</div>
+    </div>
+
+    <!-- Thermal inhibits -->
+    <div id="thermal-panel"></div>
+  </div>
+
+  <!-- TX Safety Panel -->
+  <div class="panel">
+    <div class="panel-title">TX Safety</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px">
+      <button class="btn danger" onclick="inhibitTx()">⛔ Inhibit TX</button>
+      <button class="btn" onclick="allowTx()">✓ Allow TX</button>
+    </div>
+    <div class="meter-row" style="margin-top:12px">
+      <span class="meter-label">TX State</span>
+      <span class="meter-value" id="tx-state">ALLOWED</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const ws = new WebSocket(`ws://${location.host}/ws`);
+
+ws.onopen = () => {
+  document.getElementById('conn-dot').className = 'ok';
+};
+ws.onclose = () => {
+  document.getElementById('conn-dot').className = '';
+};
+ws.onerror = (e) => console.error('WS error', e);
+
+ws.onmessage = (evt) => {
+  const msg = JSON.parse(evt.data);
+  if (msg.type === 'state') updateUI(msg.data);
+  else if (msg.type === 'cmd_response' && !msg.ok) alert('Error: ' + msg.message);
+};
+
+function updateUI(s) {
+  const rig = s.rig || {};
+
+  // VFO
+  const vfoEl = document.getElementById('vfo');
+  vfoEl.textContent = rig.freq_display || '  0.000.000';
+  vfoEl.className   = 'vfo' + (rig.ptt ? ' tx' : '');
+
+  document.getElementById('band-mode').textContent =
+    `${rig.band || '??'} / ${rig.mode || '—'}` +
+    (rig.passband_hz ? ` (${rig.passband_hz} Hz)` : '');
+
+  setVal('ptt-state', rig.ptt ? '🔴 TX' : 'RX');
+  setVal('split-state', rig.split ? 'ON' : 'OFF');
+  setVal('ft8-freq', rig.near_digital_freq ? '✓ On FT8' : '—');
+
+  // Amp connection badge
+  const badge = document.getElementById('amp-conn-badge');
+  badge.textContent  = s.amp_connected ? '' : '[disconnected]';
+  badge.style.color  = s.amp_connected ? '#4f8' : '#f44';
+
+  // Amp meters
+  setVal('amp-mode', s.amp_mode || '—');
+  setVal('amp-fwd',  fmt(s.amp_fwd_w,  'W', 0));
+  setVal('amp-hv',   fmt(s.amp_hv_v,   'V', 1));
+  setVal('amp-current', fmt(s.amp_current_ma, 'mA', 0));
+  setVal('amp-atu',  s.amp_atu_tuned ? '✓ Yes' : 'No');
+
+  // Reflected power with coloring
+  const reflEl = document.getElementById('amp-refl');
+  reflEl.textContent  = fmt(s.amp_refl_w, 'W', 0);
+  const fwd = s.amp_fwd_w || 0;
+  const refl = s.amp_refl_w || 0;
+  reflEl.className = 'meter-value' +
+    (fwd > 10 && refl > fwd * 0.25 ? ' alert' :
+     fwd > 10 && refl > fwd * 0.1  ? ' warn' : '');
+
+  // SWR with coloring
+  const swrEl = document.getElementById('amp-swr');
+  const swr = s.amp_swr || 0;
+  swrEl.textContent = swr > 0 ? swr.toFixed(2) : '—';
+  swrEl.className = 'meter-value' +
+    (swr > 3.0 ? ' alert' : swr > 2.0 ? ' warn' : '');
+
+  // Drive power with limit awareness
+  const driveEl = document.getElementById('amp-drive');
+  const drive = s.amp_drive_w || 0;
+  const limit = s.drive_limit_w || 100;
+  driveEl.textContent = fmt(drive, 'W', 1);
+  driveEl.className = 'meter-value' +
+    (drive > limit * 0.9 ? ' alert' : drive > limit * 0.75 ? ' warn' : '');
+
+  // Temperature
+  const tempEl = document.getElementById('amp-temp');
+  const temp = s.amp_temp_c;
+  tempEl.textContent = temp != null ? temp.toFixed(1) + ' °C' : '—';
+  tempEl.className = 'meter-value' +
+    (temp > 65 ? ' alert' : temp > 55 ? ' warn' : '');
+
+  // Faults
+  const sevEl = document.getElementById('fault-severity');
+  sevEl.textContent = s.fault_severity || 'OK';
+  sevEl.className = 'meter-value ' + ({
+    'OK':         'status-ok',
+    'WARNING':    'status-warn',
+    'SOFT_FAULT': 'status-fault',
+    'HARD_FAULT': 'status-fault',
+  }[s.fault_severity] || 'status-ok');
+
+  const allFaults = [
+    ...(s.fault_hard     || []).map(f => ({f, cls: 'status-fault'})),
+    ...(s.fault_soft     || []).map(f => ({f, cls: 'status-fault'})),
+    ...(s.fault_warnings || []).map(f => ({f, cls: 'status-warn'})),
+  ];
+  const faultList = document.getElementById('fault-list');
+  faultList.innerHTML = allFaults.length
+    ? allFaults.map(({f, cls}) =>
+        `<div class="fault-item ${cls}">${f}</div>`).join('')
+    : '<div class="fault-item" style="color:#456">No active faults</div>';
+
+  // Mode buttons
+  ['QRP','BAREFOOT','NORMAL','HIGH_POWER'].forEach(m => {
+    const btn = document.getElementById('mode-' + m);
+    if (!btn) return;
+    btn.classList.toggle('active', s.operating_mode === m);
+  });
+  setVal('active-mode', s.operating_mode || '—');
+  setVal('drive-limit', s.drive_limit_w != null ? s.drive_limit_w + 'W max' : '—');
+
+  // Antenna buttons
+  [1,2,3,4].forEach(n => {
+    const btn = document.getElementById('ant-' + n);
+    if (!btn) return;
+    btn.classList.toggle('active', s.selected_antenna === n);
+  });
+
+  // Dummy load timer
+  const dtp = document.getElementById('dummy-timer-panel');
+  if (s.dummy_load_active) {
+    dtp.style.display = 'block';
+    const remaining = s.dummy_load_remaining_s || 0;
+    const timerEl = document.getElementById('dummy-timer');
+    timerEl.textContent = remaining.toFixed(1) + 's';
+    timerEl.className = 'dummy-timer' + (remaining <= 3 ? ' critical' : '');
+  } else {
+    dtp.style.display = 'none';
+  }
+
+  // Thermal inhibits
+  const tp = document.getElementById('thermal-panel');
+  const inhibits = Object.values(s.thermal_inhibit || {}).filter(t => t.inhibited);
+  if (inhibits.length) {
+    tp.innerHTML = '<div class="panel-title" style="margin-top:10px">Thermal Inhibits</div>' +
+      inhibits.map(t => `
+        <div class="thermal-item">
+          <strong>Antenna ${t.antenna_number}</strong>: ${t.inhibited_reason}<br>
+          Since: ${t.inhibited_at ? new Date(t.inhibited_at).toLocaleString() : '?'}
+          ${t.ambient_temp_c != null ? ` &bull; Ambient at inhibit: ${t.ambient_temp_c.toFixed(1)}°C` : ''}
+          <br>
+          <button class="btn warn" style="margin-top:5px; font-size:0.7rem"
+            onclick="clearThermal(${t.antenna_number})">
+            ✓ Antenna cooled &mdash; re-enable
+          </button>
+        </div>`).join('');
+  } else {
+    tp.innerHTML = '';
+  }
+
+  // TX inhibit banner
+  const banner = document.getElementById('inhibit-banner');
+  banner.classList.toggle('visible', s.tx_inhibited);
+  document.getElementById('inhibit-reason').textContent =
+    s.tx_inhibit_reason || '—';
+
+  // TX state
+  const txEl = document.getElementById('tx-state');
+  txEl.textContent  = s.tx_inhibited ? '⛔ INHIBITED' : '✓ ALLOWED';
+  txEl.className    = 'meter-value ' + (s.tx_inhibited ? 'status-fault' : 'status-ok');
+}
+
+function fmt(val, unit, decimals) {
+  return val != null ? val.toFixed(decimals) + ' ' + unit : '—';
+}
+function setVal(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+function send(obj) { ws.send(JSON.stringify(obj)); }
+
+function setMode(mode) {
+  send({cmd: 'set_mode', mode: mode, confirmed: false});
+}
+
+function confirmHighPower() {
+  if (confirm(
+    'HIGH POWER operation requires confirmation.\n\n' +
+    '✓ Antenna is connected and matched\n' +
+    '✓ ATU is tuned for current band\n' +
+    '✓ Band is clear\n' +
+    '✓ Drive power will be limited to 40W\n\n' +
+    'Proceed with HIGH POWER mode?'
+  )) {
+    send({cmd: 'set_mode', mode: 'HIGH_POWER', confirmed: true});
+  }
+}
+
+function selectAnt(n) { send({cmd: 'select_antenna', antenna: n}); }
+function inhibitTx()  { send({cmd: 'inhibit_tx', reason: 'Manual operator inhibit'}); }
+function allowTx()    { send({cmd: 'allow_tx'}); }
+
+function clearThermal(n) {
+  if (confirm(
+    `Confirm antenna ${n} has fully cooled.\n\n` +
+    `This requires your judgment based on:\n` +
+    `• Time since inhibit\n` +
+    `• Ambient temperature\n` +
+    `• How hard it was driven\n\n` +
+    `Re-enable antenna ${n}?`
+  )) {
+    send({cmd: 'clear_thermal', antenna: n});
+  }
+}
+</script>
+</body>
+</html>
