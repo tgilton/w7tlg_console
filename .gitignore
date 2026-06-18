@@ -8,3 +8,6 @@ config/thermal_state.json
 0
 0.06
 RPRT*
+# Test output junk
+RPRT*
+/tmp/
