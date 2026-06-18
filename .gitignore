@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+*.egg-info/
+config/thermal_state.json
