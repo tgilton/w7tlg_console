@@ -584,6 +584,103 @@ input[type=range]::-webkit-slider-thumb:active {
   margin: 0;
 }
 
+/* ── DSP / Filters panel ─────────────────────────────────── */
+.dsp-panel {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 10px 16px;
+}
+.dsp-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 0;
+}
+.dsp-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 16px;
+}
+.dsp-group-wide { flex: 1; min-width: 160px; }
+.dsp-divider {
+  width: 1px;
+  height: 44px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.dsp-toggle {
+  padding: 5px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border2);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.dsp-toggle.active {
+  background: var(--cyan-dim);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.dsp-btn-row { display: flex; gap: 4px; }
+.dsp-agc-btn {
+  padding: 5px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border2);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.dsp-agc-btn.active {
+  background: var(--amber-dim);
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.dsp-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dsp-func-label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--label);
+  letter-spacing: 0.06em;
+  margin-right: 6px;
+}
+.dsp-func-state {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.dsp-toggle.active .dsp-func-state { color: var(--cyan); }
+.dsp-slider-labeled {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dsp-slider-labeled .dsp-func-label { flex-shrink: 0; }
+.dsp-slider { flex: 1; accent-color: var(--cyan); cursor: pointer; }
+.dsp-val {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text);
+  min-width: 18px;
+  text-align: right;
+}
+
 /* ── Misc util ───────────────────────────────────────────── */
 .row { display: flex; align-items: center; gap: 8px; }
 .flex1 { flex: 1; }
@@ -858,6 +955,61 @@ input[type=range]::-webkit-slider-thumb:active {
 
   </section>
 
+  <!-- ── DSP / Filters panel ──────────────────────────────── -->
+  <section class="dsp-panel">
+    <div class="dsp-row">
+
+      <!-- NB -->
+      <div class="dsp-group">
+        <button class="dsp-toggle" id="nb-btn" onclick="toggleNB()">
+          <span class="dsp-func-label">NB</span><span class="dsp-func-state" id="nb-state">OFF</span>
+        </button>
+      </div>
+
+      <div class="dsp-divider"></div>
+
+      <!-- DNR -->
+      <div class="dsp-group dsp-group-wide">
+        <div class="dsp-slider-labeled">
+          <button class="dsp-toggle" id="nr-btn" onclick="toggleNR()" style="flex-shrink:0">
+            <span class="dsp-func-label">DNR</span><span class="dsp-func-state" id="nr-state">OFF</span>
+          </button>
+          <input type="range" min="1" max="15" step="1" value="8"
+                 id="nr-slider"
+                 style="flex:1; accent-color:var(--cyan); cursor:pointer; min-width:80px;"
+                 oninput="onNRChange(this.value)"
+                 onmousedown="_nrDragging=true"
+                 onmouseup="_nrDragging=false; setNR(this.value)"
+                 ontouchstart="_nrDragging=true"
+                 ontouchend="_nrDragging=false; setNR(this.value)">
+          <span class="dsp-val" id="nr-val" style="min-width:20px">8</span>
+        </div>
+      </div>
+
+      <div class="dsp-divider"></div>
+
+      <!-- DNF -->
+      <div class="dsp-group">
+        <button class="dsp-toggle" id="dnf-btn" onclick="toggleDNF()">
+          <span class="dsp-func-label">DNF</span><span class="dsp-func-state" id="dnf-state">OFF</span>
+        </button>
+      </div>
+
+      <div class="dsp-divider"></div>
+
+      <!-- AGC -->
+      <div class="dsp-group">
+        <div class="dsp-btn-row">
+          <span class="dsp-func-label" style="margin-right:4px">AGC</span>
+          <button class="dsp-agc-btn" id="agc-off" onclick="setAGC(0)">OFF</button>
+          <button class="dsp-agc-btn" id="agc-fast" onclick="setAGC(2)">FAST</button>
+          <button class="dsp-agc-btn" id="agc-slow" onclick="setAGC(3)">SLOW</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
   <!-- ── Safety panel ────────────────────────────────────── -->
   <footer class="safety-panel">
     <div class="inhibit-banner" id="inhibit-banner">
@@ -1033,6 +1185,9 @@ function updateUI(s) {
   const txStateEl = document.getElementById('tx-state');
   txStateEl.textContent = s.tx_inhibited ? 'INHIBITED' : 'ALLOWED';
   txStateEl.style.color = s.tx_inhibited ? 'var(--red)' : 'var(--green)';
+
+  // DSP panel
+  updateDSP(rig);
 }
 
 function updateAmp(s) {
@@ -1165,6 +1320,108 @@ function confirmHighPower() {
 function selectAnt(n) { send({ cmd: 'select_antenna', antenna: n }); }
 function inhibitTx()  { send({ cmd: 'inhibit_tx', reason: 'Manual operator inhibit' }); }
 function allowTx()    { send({ cmd: 'allow_tx' }); }
+
+// ── DSP controls ────────────────────────────────────────────
+// ── DSP state (mirrors rig) ─────────────────────────────────
+var _nbOn = false;
+var _nrOn = false;
+var _dnfOn = false;
+var _nrDragging = false;
+
+function toggleNB() {
+  _nbOn = !_nbOn;
+  send({ cmd: 'set_nb', on: _nbOn });
+  _applyNB(_nbOn);
+}
+
+function _applyNB(on) {
+  const btn = document.getElementById('nb-btn');
+  const st  = document.getElementById('nb-state');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+  if (st) st.textContent = on ? 'ON' : 'OFF';
+}
+
+function toggleNR() {
+  _nrOn = !_nrOn;
+  send({ cmd: 'set_nr_on', on: _nrOn });
+  _applyNR(_nrOn);
+}
+
+function _applyNR(on) {
+  const btn = document.getElementById('nr-btn');
+  const st  = document.getElementById('nr-state');
+  const slider = document.getElementById('nr-slider');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+  if (st) st.textContent = on ? 'ON' : 'OFF';
+  if (slider) slider.style.opacity = on ? '1' : '0.45';
+}
+
+function onNRChange(val) {
+  document.getElementById('nr-val').textContent = val;
+}
+
+function setNR(val) {
+  send({ cmd: 'set_nr', level: parseInt(val) });
+}
+
+function toggleDNF() {
+  _dnfOn = !_dnfOn;
+  send({ cmd: 'set_dnf', on: _dnfOn });
+  _applyDNF(_dnfOn);
+}
+
+function _applyDNF(on) {
+  const btn = document.getElementById('dnf-btn');
+  const st  = document.getElementById('dnf-state');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+  if (st) st.textContent = on ? 'ON' : 'OFF';
+}
+
+function setAGC(value) {
+  send({ cmd: 'set_agc', value: value });
+}
+
+function updateDSP(s) {
+  // NB
+  if (s.nb_on !== undefined && s.nb_on !== _nbOn) {
+    _nbOn = !!s.nb_on;
+    _applyNB(_nbOn);
+  }
+  // NR on/off
+  if (s.nr_on !== undefined && s.nr_on !== _nrOn) {
+    _nrOn = !!s.nr_on;
+    _applyNR(_nrOn);
+  }
+  // NR level — only update slider if user is not dragging
+  if (!_nrDragging) {
+    const nrSlider = document.getElementById('nr-slider');
+    const nrVal = document.getElementById('nr-val');
+    if (nrSlider && s.nr_level !== undefined) {
+      const lvl = Math.max(1, Math.round(s.nr_level * 15));
+      nrSlider.value = lvl;
+      if (nrVal) nrVal.textContent = lvl;
+    }
+  }
+  // DNF
+  if (s.dnf_on !== undefined && s.dnf_on !== _dnfOn) {
+    _dnfOn = !!s.dnf_on;
+    _applyDNF(_dnfOn);
+  }
+  // AGC buttons
+  const agcMap = { 0: 'agc-off', 2: 'agc-fast', 3: 'agc-slow' };
+  ['agc-off', 'agc-fast', 'agc-slow'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active');
+  });
+  const activeId = agcMap[s.agc];
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) el.classList.add('active');
+  }
+}
 
 function clearThermal(n) {
   if (confirm(

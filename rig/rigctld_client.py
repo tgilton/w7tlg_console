@@ -152,6 +152,10 @@ class RigState:
     nr_level: float     = 0.0
     comp_level: float   = 0.0
     mic_gain: float     = 0.0
+    agc: int            = 3       # 0=OFF, 2=FAST, 3=SLOW
+    nb_on: bool         = False   # NB func on/off
+    nr_on: bool         = False   # NR func on/off
+    dnf_on: bool        = False   # ANF (auto-notch) on/off
 
     # Derived
     is_digital: bool        = False
@@ -182,6 +186,10 @@ class RigState:
             "nr_level":         self.nr_level,
             "comp_level":       self.comp_level,
             "mic_gain":         self.mic_gain,
+            "agc":              self.agc,
+            "nb_on":            self.nb_on,
+            "nr_on":            self.nr_on,
+            "dnf_on":           self.dnf_on,
             "is_digital":       self.is_digital,
             "near_digital_freq": self.near_digital_freq,
         }
@@ -312,6 +320,38 @@ class RigctldClient:
         ok = await self._send_set(f"L NR {level:.3f}\n")
         if ok:
             self.state.nr_level = level
+            await self._fire_callbacks()
+        return ok
+
+    async def set_agc(self, value: int) -> bool:
+        """Set AGC: 0=OFF, 2=FAST, 3=SLOW."""
+        ok = await self._send_set(f"L AGC {value}\n")
+        if ok:
+            self.state.agc = value
+            await self._fire_callbacks()
+        return ok
+
+    async def set_nb_on(self, on: bool) -> bool:
+        """Toggle Noise Blanker on/off."""
+        ok = await self._send_set(f"U NB {1 if on else 0}\n")
+        if ok:
+            self.state.nb_on = on
+            await self._fire_callbacks()
+        return ok
+
+    async def set_nr_on(self, on: bool) -> bool:
+        """Toggle Noise Reduction on/off."""
+        ok = await self._send_set(f"U NR {1 if on else 0}\n")
+        if ok:
+            self.state.nr_on = on
+            await self._fire_callbacks()
+        return ok
+
+    async def set_dnf_on(self, on: bool) -> bool:
+        """Toggle Auto-Notch Filter on/off."""
+        ok = await self._send_set(f"U ANF {1 if on else 0}\n")
+        if ok:
+            self.state.dnf_on = on
             await self._fire_callbacks()
         return ok
 
@@ -488,6 +528,23 @@ class RigctldClient:
                 setattr(self.state, attr, val)
                 changed = True
 
+        # AGC level
+        val = await self._get_level("AGC")
+        if val is not None:
+            agc = int(val)
+            if agc != self.state.agc:
+                self.state.agc = agc
+                changed = True
+
+        # NB and ANF funcs
+        for attr, func_name in [('nb_on', 'NB'), ('nr_on', 'NR'), ('dnf_on', 'ANF')]:
+            val = await self._get_func(func_name)
+            if val is not None:
+                on = val > 0
+                if on != getattr(self.state, attr):
+                    setattr(self.state, attr, on)
+                    changed = True
+
         return changed
 
     # ------------------------------------------------------------------
@@ -500,6 +557,16 @@ class RigctldClient:
         if lines:
             try:
                 return float(lines[0])
+            except ValueError:
+                pass
+        return None
+
+    async def _get_func(self, func_name: str) -> Optional[int]:
+        """Get a Hamlib func value (0 or 1). Returns int or None."""
+        lines = await self._send_get(f"u {func_name}\n", 1)
+        if lines:
+            try:
+                return int(lines[0])
             except ValueError:
                 pass
         return None

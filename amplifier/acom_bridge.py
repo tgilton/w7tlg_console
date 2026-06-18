@@ -47,19 +47,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class OperatingMode(Enum):
-    QRP        = "QRP"
-    BAREFOOT   = "BAREFOOT"
-    NORMAL     = "NORMAL"
-    HIGH_POWER = "HIGH_POWER"
+    AMP_OFF = "AMP_OFF"   # Amp in standby, radio 0-100W
+    AMP_ON  = "AMP_ON"    # Amp in OPR, radio 0-40W (requires confirmation)
 
+# Radio drive limits per mode
 MODE_DRIVE_LIMITS = {
-    OperatingMode.QRP:        5,
-    OperatingMode.BAREFOOT:   100,
-    OperatingMode.NORMAL:     40,
-    OperatingMode.HIGH_POWER: 40,
+    OperatingMode.AMP_OFF: 100,
+    OperatingMode.AMP_ON:  40,
 }
 
-AMP_ACTIVE_MODES = {OperatingMode.NORMAL, OperatingMode.HIGH_POWER}
+AMP_ACTIVE_MODES = {OperatingMode.AMP_ON}
 
 # ---------------------------------------------------------------------------
 # Antenna definitions
@@ -241,8 +238,8 @@ class StationState:
     fault_hard: list = field(default_factory=list)
     fault_soft: list = field(default_factory=list)
     fault_warnings: list = field(default_factory=list)
-    operating_mode: str = OperatingMode.BAREFOOT.value
-    selected_antenna: int = 3
+    operating_mode: str = OperatingMode.AMP_OFF.value
+    selected_antenna: int = 1
     drive_limit_w: int = 100
     tx_inhibited: bool = False
     tx_inhibit_reason: str = ""
@@ -303,8 +300,8 @@ class AcomBridge:
         self.thermal = ThermalStateManager(state_file)
         self.station = StationState()
 
-        self._mode = OperatingMode.BAREFOOT
-        self._selected_antenna = 3
+        self._mode = OperatingMode.AMP_OFF
+        self._selected_antenna = 1
         self._high_power_confirmed = False
         self._tx_inhibited = False
         self._tx_inhibit_reason = ""
@@ -317,6 +314,7 @@ class AcomBridge:
         self.rig.on_state_change(self._on_rig_state)
         self.amp.on_telemetry(self._on_telemetry)
         self.amp.on_fault(self._on_fault)
+        self.amp.on_antenna_change(self._on_antenna_change)
         self.amp.on_connection_change(self._on_amp_connection)
 
     def on_state_change(self, cb: StationStateCallback):
@@ -334,16 +332,18 @@ class AcomBridge:
 
     async def set_operating_mode(self, mode: OperatingMode,
                                   confirmed: bool = False) -> tuple[bool, str]:
-        if mode == OperatingMode.HIGH_POWER and not confirmed:
-            return False, "HIGH_POWER requires explicit operator confirmation"
+        if mode == OperatingMode.AMP_ON and not confirmed:
+            return False, "AMP_ON requires explicit operator confirmation"
 
         self._mode = mode
         self._high_power_confirmed = confirmed
 
         if mode in AMP_ACTIVE_MODES:
             await self.amp.send(cmd_operate())
+            logger.info("Amp → OPERATE")
         else:
             await self.amp.send(cmd_standby())
+            logger.info("Amp → STANDBY")
 
         logger.info(f"Operating mode → {mode.value}")
         await self._publish()
@@ -366,9 +366,10 @@ class AcomBridge:
 
         self._selected_antenna = antenna_number
 
-        if self._current_acom_band:
-            cmd = cmd_select_antenna_band(antenna_number, self._current_acom_band)
-            await self.amp.send(cmd)
+        band = self._current_acom_band or AcomBand.B20M
+        cmd = cmd_select_antenna_band(antenna_number, band)
+        await self.amp.send(cmd)
+        logger.info(f"Sent antenna select: ANT{antenna_number} band {band.name}")
 
         logger.info(f"Antenna → {config.port} ({config.name})")
         await self._publish()
@@ -508,6 +509,12 @@ class AcomBridge:
             await self.inhibit_tx(
                 f"ACOM SOFT FAULT: {', '.join(faults.soft_faults)}")
 
+        await self._publish()
+
+    async def _on_antenna_change(self, ant_num: int, band_byte: int):
+        """Called when amp sends ANT_BAND_INFO (0x27) — sync console indicator."""
+        logger.debug(f"Amp antenna sync: A{ant_num}, band_byte=0x{band_byte:02X}")
+        self._selected_antenna = ant_num + 1  # amp reports 0-indexed
         await self._publish()
 
     async def _on_amp_connection(self, connected: bool):

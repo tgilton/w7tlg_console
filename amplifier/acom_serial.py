@@ -83,6 +83,8 @@ class AcomSerial:
         default_factory=list, init=False, repr=False)
     _connection_callbacks: list[ConnectionCallback] = field(
         default_factory=list, init=False, repr=False)
+    _ant_callbacks: list = field(
+        default_factory=list, init=False, repr=False)
 
     def __post_init__(self):
         self._send_lock = asyncio.Lock()
@@ -99,6 +101,12 @@ class AcomSerial:
     def on_fault(self, cb: FaultCallback):
         """Register async callback for fault code (0x21) messages."""
         self._fault_callbacks.append(cb)
+
+    def on_antenna_change(self, cb):
+        """Register async callback for ANT_BAND_INFO (0x27) messages.
+        cb(antenna: int, band_byte: int) -> None
+        """
+        self._ant_callbacks.append(cb)
 
     def on_raw_frame(self, cb: RawFrameCallback):
         """Register async callback for all frames (address, data)."""
@@ -293,6 +301,17 @@ class AcomSerial:
                     await cb(faults)
                 except Exception as e:
                     logger.error(f"Fault callback error: {e}")
+
+        elif address == AmpMsg.ANT_BAND_INFO:
+            # data[0]=antenna#, data[1]=band byte (per ACOM protocol)
+            if len(data) >= 2:
+                ant_num  = data[0]
+                band_byte = data[1]
+                for cb in self._ant_callbacks:
+                    try:
+                        await cb(ant_num, band_byte)
+                    except Exception as e:
+                        logger.error(f"Antenna callback error: {e}")
 
     # ------------------------------------------------------------------
     # Internal: connection callbacks

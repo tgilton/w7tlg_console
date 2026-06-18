@@ -233,6 +233,33 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
+        elif cmd == "set_nb":
+            ok = await bridge.rig.set_nb_on(bool(msg["on"]))
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_nr_on":
+            ok = await bridge.rig.set_nr_on(bool(msg["on"]))
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_nr":
+            # level 0-15 from UI, scale to 0.0-1.0
+            level = max(0, min(15, int(msg["level"])))
+            ok = await bridge.rig.set_nr(level / 15.0)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_dnf":
+            ok = await bridge.rig.set_dnf_on(bool(msg["on"]))
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_agc":
+            ok = await bridge.rig.set_agc(int(msg["value"]))
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
         elif cmd == "select_antenna":
             ok, reply = await bridge.select_antenna(int(msg["antenna"]))
             await ws.send_text(json.dumps({
