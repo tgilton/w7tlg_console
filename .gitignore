@@ -11,3 +11,4 @@ RPRT*
 # Test output junk
 RPRT*
 /tmp/
+*.patch
