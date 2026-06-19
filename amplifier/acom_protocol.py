@@ -305,11 +305,16 @@ class AmpTelemetry:
 
 def parse_full_telemetry(data: bytes) -> Optional[AmpTelemetry]:
     """
-    Parse message 0x2F data field (68 bytes for ACOM 1200S).
+    Parse message 0x2F data field — 68 bytes of payload for the ACOM 1200S.
     Offsets verified against live 1200S telemetry data.
 
-    Note: The 600S spec uses 72-byte frames (69 data bytes) but the 1200S
-    sends 68 data bytes. All offsets below are confirmed against live data.
+    Note on frame size: this 68-byte figure is the DATA payload only (after
+    stripping the 4 envelope bytes: start/address/length/checksum). The full
+    on-wire frame is therefore 68 + 4 = 72 bytes total — consistent with
+    third-party ACOM control software (e.g. bjornekelund/ACOM-Controller)
+    which reads a fixed 72-byte buffer including the envelope. The earlier
+    "600S uses 69 data bytes, 1200S uses 68" note refers to the data-only
+    count; total wire size is 72 bytes either way.
     """
     if len(data) < 68:
         return None
