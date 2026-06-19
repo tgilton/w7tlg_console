@@ -323,6 +323,22 @@ class RigctldClient:
             await self._fire_callbacks()
         return ok
 
+    async def set_mic_gain(self, level: float) -> bool:
+        """Set mic gain, 0.0-1.0."""
+        ok = await self._send_set(f"L MICGAIN {level:.3f}\n")
+        if ok:
+            self.state.mic_gain = level
+            await self._fire_callbacks()
+        return ok
+
+    async def set_comp(self, level: float) -> bool:
+        """Set speech compression level, 0.0-1.0."""
+        ok = await self._send_set(f"L COMP {level:.3f}\n")
+        if ok:
+            self.state.comp_level = level
+            await self._fire_callbacks()
+        return ok
+
     async def set_agc(self, value: int) -> bool:
         """Set AGC: 0=OFF, 2=FAST, 3=SLOW."""
         ok = await self._send_set(f"L AGC {value}\n")

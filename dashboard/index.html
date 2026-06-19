@@ -198,14 +198,11 @@ html, body {
 .smeter-bar {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg,
-    #00a86b 0%,       /* S1-S5 green */
-    #00d4ff 40%,      /* S6-S9 cyan */
-    #ffd60a 70%,      /* S9+10-20 yellow */
-    #ff3333 100%);    /* S9+40+ red */
-  transition: width 0.15s ease-out;
+  background: var(--green);   /* S0–S9: solid green; switches to red over S9 in JS */
+  transition: width 0.15s ease-out, background-color 0.15s ease-out;
   border-radius: 2px;
 }
+.smeter-bar.over-s9 { background: var(--red); }
 
 .smeter-ticks {
   position: absolute;
@@ -278,9 +275,15 @@ html, body {
   transition: width 0.12s ease-out;
 }
 
-.tx-meter-bar.alc { background: linear-gradient(90deg, #00e676, #ffd60a, #ff3333); }
-.tx-meter-bar.po  { background: linear-gradient(90deg, #00a86b, #00d4ff); }
-.tx-meter-bar.swr { background: linear-gradient(90deg, #00e676, #ffd60a 50%, #ff3333); }
+/* ALC and Radio PO are informational levels, not danger indicators — flat color.
+   SWR (rig and amp) and other safety-relevant meters use solid status colors,
+   set dynamically in JS via .meter-good / .meter-warn / .meter-alert. */
+.tx-meter-bar.alc { background: var(--cyan); }
+.tx-meter-bar.po  { background: var(--cyan); }
+
+.meter-good  { background: var(--green) !important; }
+.meter-warn  { background: var(--yellow) !important; }
+.meter-alert { background: var(--red) !important; }
 
 .tx-meter-value {
   font-family: var(--mono);
@@ -301,7 +304,7 @@ html, body {
 /* ── Mode buttons ────────────────────────────────────────── */
 .mode-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
 }
 
@@ -777,7 +780,6 @@ input[type=range]::-webkit-slider-thumb:active {
         <button class="btn" data-band="12m"  data-freq="24915000"  onclick="setBand(this)">12m</button>
         <button class="btn" data-band="10m"  data-freq="28074000"  onclick="setBand(this)">10m</button>
         <button class="btn" data-band="6m"   data-freq="50313000"  onclick="setBand(this)">6m</button>
-        <button class="btn" data-band="2m"   data-freq="144200000" onclick="setBand(this)">2m</button>
       </div>
     </div>
 
@@ -788,8 +790,32 @@ input[type=range]::-webkit-slider-thumb:active {
         <button class="btn" data-mode="USB"    onclick="setMode(this)">USB</button>
         <button class="btn" data-mode="LSB"    onclick="setMode(this)">LSB</button>
         <button class="btn" data-mode="CW"     onclick="setMode(this)">CW</button>
+        <button class="btn" data-mode="AM"     onclick="setMode(this)">AM</button>
         <button class="btn" data-mode="PKTUSB" onclick="setMode(this)">DATA-U</button>
         <button class="btn" data-mode="FM"     onclick="setMode(this)">FM</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Filter width -->
+    <div>
+      <div class="section-label">Filter</div>
+      <div class="control-row" style="margin-bottom:6px">
+        <span class="control-label">WIDTH</span>
+        <div class="preamp-btns">
+          <button class="btn active" id="filt-NAR" onclick="setFilterWidthMode('NAR')">NAR</button>
+          <button class="btn" id="filt-WID" onclick="setFilterWidthMode('WID')">WID</button>
+        </div>
+      </div>
+      <div class="control-row">
+        <span class="control-label">&nbsp;</span>
+        <div class="power-slider-wrap">
+          <input type="range" min="200" max="3000" step="50" value="1800" id="width-slider"
+            oninput="onWidthSlider(this.value)"
+            onchange="setWidth(this.value)">
+          <span class="power-value" id="width-val">1800Hz</span>
+        </div>
       </div>
     </div>
 
@@ -847,8 +873,7 @@ input[type=range]::-webkit-slider-thumb:active {
           <span class="amp-meter-unit">W</span>
         </div>
         <div class="amp-meter-bar-wrap">
-          <div class="amp-meter-bar" id="amp-fwd-bar"
-            style="width:0%; background: linear-gradient(90deg, #00a86b, #00d4ff, #ffd60a, #ff3333)"></div>
+          <div class="amp-meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div>
         </div>
       </div>
       <div class="amp-meter-card">
@@ -857,8 +882,7 @@ input[type=range]::-webkit-slider-thumb:active {
           <span class="amp-meter-value good" id="amp-swr-val">—</span>
         </div>
         <div class="amp-meter-bar-wrap">
-          <div class="amp-meter-bar" id="amp-swr-bar"
-            style="width:0%; background: linear-gradient(90deg, #00e676, #ffd60a 50%, #ff3333)"></div>
+          <div class="amp-meter-bar meter-good" id="amp-swr-bar" style="width:0%"></div>
         </div>
       </div>
       <div class="amp-meter-card">
@@ -868,8 +892,7 @@ input[type=range]::-webkit-slider-thumb:active {
           <span class="amp-meter-unit">°C</span>
         </div>
         <div class="amp-meter-bar-wrap">
-          <div class="amp-meter-bar" id="amp-temp-bar"
-            style="width:0%; background: linear-gradient(90deg, #00a86b, #ffd60a 60%, #ff3333)"></div>
+          <div class="amp-meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div>
         </div>
       </div>
       <div class="amp-meter-card">
@@ -879,8 +902,7 @@ input[type=range]::-webkit-slider-thumb:active {
           <span class="amp-meter-unit">W</span>
         </div>
         <div class="amp-meter-bar-wrap">
-          <div class="amp-meter-bar" id="amp-drive-bar"
-            style="width:0%; background: linear-gradient(90deg, #00a86b, #ffd60a 70%, #ff3333)"></div>
+          <div class="amp-meter-bar meter-good" id="amp-drive-bar" style="width:0%"></div>
         </div>
       </div>
     </div>
@@ -892,7 +914,7 @@ input[type=range]::-webkit-slider-thumb:active {
       <span class="muted">V</span>
       <span class="muted" style="margin-left:12px">Drain</span>
       <span id="amp-current-val">—</span>
-      <span class="muted">mA</span>
+      <span class="muted">A</span>
       <span class="muted" style="margin-left:12px">Refl</span>
       <span id="amp-refl-val">—</span>
       <span class="muted">W</span>
@@ -923,9 +945,30 @@ input[type=range]::-webkit-slider-thumb:active {
           style="border-color:#5a3200; color:var(--amber)"
           onclick="confirmAmpOn()">AMP ON ⚠<br><span style="font-size:0.6rem;opacity:0.7">Confirm · ≤40W</span></button>
       </div>
-      <div class="row" style="margin-top:8px; font-family:var(--mono); font-size:0.75rem;">
-        <span class="muted">RF power cap:</span>
-        <span id="drive-limit-val">100W max</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- SSB Audio -->
+    <div>
+      <div class="section-label">SSB Audio</div>
+      <div class="control-row" style="margin-bottom:6px">
+        <span class="control-label">MIC GAIN</span>
+        <div class="power-slider-wrap">
+          <input type="range" min="0" max="100" value="50" id="mic-gain-slider"
+            oninput="document.getElementById('mic-gain-val').textContent = this.value + '%'"
+            onchange="setMicGain(this.value)">
+          <span class="power-value" id="mic-gain-val">50%</span>
+        </div>
+      </div>
+      <div class="control-row">
+        <span class="control-label">COMP</span>
+        <div class="power-slider-wrap">
+          <input type="range" min="0" max="100" value="0" id="comp-slider"
+            oninput="document.getElementById('comp-val').textContent = this.value + '%'"
+            onchange="setComp(this.value)">
+          <span class="power-value" id="comp-val">0%</span>
+        </div>
       </div>
     </div>
 
@@ -1078,7 +1121,9 @@ function updateUI(s) {
     const db = rig.strength_db ?? -54;
     // Map -54..+60 → 0..100%
     const pct = Math.max(0, Math.min(100, ((db + 54) / 114) * 100));
-    document.getElementById('smeter-bar').style.width = pct + '%';
+    const smeterBar = document.getElementById('smeter-bar');
+    smeterBar.style.width = pct + '%';
+    smeterBar.classList.toggle('over-s9', db >= 0);  // green up to S9, red above
     document.getElementById('smeter-label').textContent = rig.smeter_label || 'S0';
     // Convert STRENGTH (dB re S9) to approximate dBm: S9 = -73dBm
     const dbm = (db + (-73)).toFixed(1);
@@ -1087,6 +1132,7 @@ function updateUI(s) {
 
   // TX meters
   if (isTx) {
+    // ALC and Radio PO are plain level meters — no danger color, flat fill (see CSS)
     const alc = rig.alc ?? 0;
     setBar('alc-bar', alc * 100);
     document.getElementById('alc-val').textContent = (alc * 100).toFixed(0) + '%';
@@ -1095,9 +1141,11 @@ function updateUI(s) {
     setBar('po-bar', po * 100);
     document.getElementById('po-val').textContent = (po * 100).toFixed(0) + 'W';
 
+    // SWR is safety-relevant — status color
     const swr = rig.swr_radio ?? 1;
     const swrPct = Math.max(0, Math.min(100, ((swr - 1) / 4) * 100));
     setBar('swr-bar', swrPct);
+    setMeterStatus('swr-bar', swr, 2.0, 3.0);
     document.getElementById('swr-val').textContent = swr.toFixed(2);
   }
 
@@ -1129,6 +1177,9 @@ function updateUI(s) {
     btn.className = 'btn' + (btn.dataset.mode === (rig.mode||'') ? ' active' : '');
   });
 
+  // Filter width (NAR/WID) — sync from current mode + passband
+  updateFilterWidth(rig);
+
   // Amp state
   updateAmp(s);
 
@@ -1139,8 +1190,14 @@ function updateUI(s) {
     const isActive = s.operating_mode === m;
     btn.className = 'btn' + (isActive ? (m === 'AMP_ON' ? ' active-amber' : ' active') : '');
   });
-  document.getElementById('drive-limit-val').textContent =
-    (s.drive_limit_w ?? 100) + 'W max';
+
+  // SSB audio sliders
+  const micPct = Math.round((rig.mic_gain ?? 0.5) * 100);
+  document.getElementById('mic-gain-slider').value = micPct;
+  document.getElementById('mic-gain-val').textContent = micPct + '%';
+  const compPct = Math.round((rig.comp_level ?? 0) * 100);
+  document.getElementById('comp-slider').value = compPct;
+  document.getElementById('comp-val').textContent = compPct + '%';
 
   // Antenna buttons
   [1,2,3,4].forEach(n => {
@@ -1210,38 +1267,43 @@ function updateAmp(s) {
   const atuBadge = document.getElementById('amp-atu-badge');
   atuBadge.style.display = s.amp_atu_tuned ? 'inline-block' : 'none';
 
-  // Forward power
+  // Forward power — informational, but very high power approaching the
+  // 1200S's rated max is worth flagging.
   const fwd = s.amp_fwd_w ?? 0;
   document.getElementById('amp-fwd-val').textContent = fwd.toFixed(0);
   setBar('amp-fwd-bar', Math.min(100, (fwd / 1500) * 100));
-  colorValue('amp-fwd-val', fwd, 600, 1200, true);
+  setMeterStatus('amp-fwd-bar', fwd, 1000, 1300);
+  colorValue('amp-fwd-val', fwd, 1000, 1300, true);
 
-  // SWR
+  // SWR — safety-relevant
   const swr = s.amp_swr ?? 0;
   const swrEl = document.getElementById('amp-swr-val');
   swrEl.textContent = swr > 0 ? swr.toFixed(2) : '—';
   setBar('amp-swr-bar', Math.max(0, Math.min(100, ((swr - 1) / 4) * 100)));
+  setMeterStatus('amp-swr-bar', swr, 2.0, 3.0);
   swrEl.className = 'amp-meter-value ' + (swr > 3 ? 'alert' : swr > 2 ? 'warn' : 'good');
 
-  // Temperature
+  // Temperature — safety-relevant
   const temp = s.amp_temp_c ?? 0;
   const tempEl = document.getElementById('amp-temp-val');
   tempEl.textContent = temp > 0 ? temp.toFixed(1) : '—';
   setBar('amp-temp-bar', Math.min(100, (temp / 80) * 100));
+  setMeterStatus('amp-temp-bar', temp, 55, 65);
   tempEl.className = 'amp-meter-value ' + (temp > 65 ? 'alert' : temp > 55 ? 'warn' : '');
 
-  // Drive
+  // Drive — safety-relevant relative to current mode's drive limit
   const drive = s.amp_drive_w ?? 0;
   const limit = s.drive_limit_w ?? 100;
   document.getElementById('amp-drive-val').textContent = drive > 0 ? drive.toFixed(1) : '—';
   setBar('amp-drive-bar', Math.min(100, (drive / limit) * 100));
+  setMeterStatus('amp-drive-bar', drive, limit * 0.75, limit * 0.95);
   colorValue('amp-drive-val', drive, limit * 0.75, limit * 0.95, false);
 
   // Misc
   document.getElementById('amp-hv-val').textContent =
     s.amp_hv_v > 0 ? s.amp_hv_v.toFixed(1) : '—';
   document.getElementById('amp-current-val').textContent =
-    s.amp_current_ma > 0 ? s.amp_current_ma.toFixed(0) : '—';
+    s.amp_current_ma > 0 ? (s.amp_current_ma / 1000).toFixed(1) : '—';
   document.getElementById('amp-refl-val').textContent =
     s.amp_refl_w != null ? s.amp_refl_w.toFixed(0) : '—';
 
@@ -1263,10 +1325,49 @@ function updateAmp(s) {
     : '<span class="muted" style="font-size:0.7rem;font-family:var(--mono)">No active faults</span>';
 }
 
+function updateFilterWidth(rig) {
+  const mode = rig.mode || 'USB';
+  const range = filterRangeFor(mode);
+  const wrap = document.getElementById('width-slider');
+  const narBtn = document.getElementById('filt-NAR');
+  const widBtn = document.getElementById('filt-WID');
+
+  if (!range) {
+    // FM has no variable-width control
+    wrap.disabled = true;
+    narBtn.classList.add('disabled');
+    widBtn.classList.add('disabled');
+    document.getElementById('width-val').textContent = 'N/A';
+    return;
+  }
+  wrap.disabled = false;
+  narBtn.classList.remove('disabled');
+  widBtn.classList.remove('disabled');
+
+  const pb = rig.passband_hz || range.narDefault;
+  // Infer NAR vs WID from which bracket the current passband falls into
+  const which = pb >= range.WID[0] ? 'WID' : 'NAR';
+  _widthMode = which;
+  narBtn.className = 'btn' + (which === 'NAR' ? ' active' : '') + (range ? '' : ' disabled');
+  widBtn.className = 'btn' + (which === 'WID' ? ' active' : '') + (range ? '' : ' disabled');
+  const [lo, hi] = range[which];
+  wrap.min = lo;
+  wrap.max = hi;
+  wrap.value = pb;
+  document.getElementById('width-val').textContent = pb + 'Hz';
+}
+
 // ── Helpers ───────────────────────────────────────────────
 function setBar(id, pct) {
   const el = document.getElementById(id);
   if (el) el.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
+}
+
+function setMeterStatus(id, val, warnAt, alertAt) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('meter-good', 'meter-warn', 'meter-alert');
+  el.classList.add(val >= alertAt ? 'meter-alert' : val >= warnAt ? 'meter-warn' : 'meter-good');
 }
 
 function colorValue(id, val, warnAt, alertAt, higher_is_better) {
@@ -1287,6 +1388,53 @@ function setMode(btn) {
   send({ cmd: 'set_mode', mode: btn.dataset.mode, passband: 0 });
 }
 
+// ── Filter width (NAR/WID) ──────────────────────────────────
+// Approximate per-mode passband ranges for the FT-991A (Hamlib model 1035).
+// NOTE: these are reasonable starting ranges based on the rig's typical IF/DSP
+// filter behavior, not a confirmed Hamlib filter table — verify live against
+// the radio (try a value, read it back with the rig's own width control) and
+// narrow these down once confirmed. FM has no variable-width control.
+const FILTER_RANGES = {
+  USB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 2400 },
+  LSB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 2400 },
+  CW:     { NAR: [50, 500],    WID: [500, 2400],  narDefault: 300,  widDefault: 1200 },
+  AM:     { NAR: [2500, 6000], WID: [6000, 9000], narDefault: 6000, widDefault: 9000 },
+  PKTUSB: { NAR: [50, 1500],   WID: [1500, 3000], narDefault: 500,  widDefault: 2400 },
+  FM:     null,
+};
+
+var _widthMode = 'NAR';  // tracks which half (NAR/WID) the slider is in
+
+function filterRangeFor(mode) {
+  return FILTER_RANGES[mode] || FILTER_RANGES.USB;
+}
+
+function setFilterWidthMode(which) {
+  const mode = (state.rig && state.rig.mode) || 'USB';
+  const range = filterRangeFor(mode);
+  if (!range) return;
+  _widthMode = which;
+  document.getElementById('filt-NAR').className = 'btn' + (which === 'NAR' ? ' active' : '');
+  document.getElementById('filt-WID').className = 'btn' + (which === 'WID' ? ' active' : '');
+  const [lo, hi] = range[which];
+  const slider = document.getElementById('width-slider');
+  slider.min = lo;
+  slider.max = hi;
+  const def = which === 'NAR' ? range.narDefault : range.widDefault;
+  slider.value = def;
+  document.getElementById('width-val').textContent = def + 'Hz';
+  setWidth(def);
+}
+
+function onWidthSlider(val) {
+  document.getElementById('width-val').textContent = val + 'Hz';
+}
+
+function setWidth(val) {
+  const mode = (state.rig && state.rig.mode) || 'USB';
+  send({ cmd: 'set_mode', mode, passband: parseInt(val) });
+}
+
 function onPowerSlider(val) {
   document.getElementById('rf-power-val').textContent = val + 'W';
 }
@@ -1301,6 +1449,14 @@ function setPreamp(level) {
 
 function setOpMode(mode) {
   send({ cmd: 'set_mode_op', mode, confirmed: false });
+}
+
+function setMicGain(val) {
+  send({ cmd: 'set_mic_gain', level: parseFloat(val) / 100 });
+}
+
+function setComp(val) {
+  send({ cmd: 'set_comp', level: parseFloat(val) / 100 });
 }
 
 function confirmAmpOn() {

@@ -236,6 +236,18 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
+        elif cmd == "set_mic_gain":
+            level = max(0.0, min(1.0, float(msg["level"])))
+            ok = await bridge.rig.set_mic_gain(level)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_comp":
+            level = max(0.0, min(1.0, float(msg["level"])))
+            ok = await bridge.rig.set_comp(level)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
         elif cmd == "set_nb":
             ok = await bridge.rig.set_nb_on(bool(msg["on"]))
             await ws.send_text(json.dumps({
