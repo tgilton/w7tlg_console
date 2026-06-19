@@ -957,7 +957,10 @@ input[type=range]::-webkit-slider-thumb:active {
         <div class="power-slider-wrap">
           <input type="range" min="0" max="100" value="50" id="mic-gain-slider"
             oninput="document.getElementById('mic-gain-val').textContent = this.value + '%'"
-            onchange="setMicGain(this.value)">
+            onmousedown="_micGainDragging=true"
+            onmouseup="_micGainDragging=false; setMicGain(this.value)"
+            ontouchstart="_micGainDragging=true"
+            ontouchend="_micGainDragging=false; setMicGain(this.value)">
           <span class="power-value" id="mic-gain-val">50%</span>
         </div>
       </div>
@@ -966,7 +969,10 @@ input[type=range]::-webkit-slider-thumb:active {
         <div class="power-slider-wrap">
           <input type="range" min="0" max="100" value="0" id="comp-slider"
             oninput="document.getElementById('comp-val').textContent = this.value + '%'"
-            onchange="setComp(this.value)">
+            onmousedown="_compDragging=true"
+            onmouseup="_compDragging=false; setComp(this.value)"
+            ontouchstart="_compDragging=true"
+            ontouchend="_compDragging=false; setComp(this.value)">
           <span class="power-value" id="comp-val">0%</span>
         </div>
       </div>
@@ -1191,13 +1197,19 @@ function updateUI(s) {
     btn.className = 'btn' + (isActive ? (m === 'AMP_ON' ? ' active-amber' : ' active') : '');
   });
 
-  // SSB audio sliders
-  const micPct = Math.round((rig.mic_gain ?? 0.5) * 100);
-  document.getElementById('mic-gain-slider').value = micPct;
-  document.getElementById('mic-gain-val').textContent = micPct + '%';
-  const compPct = Math.round((rig.comp_level ?? 0) * 100);
-  document.getElementById('comp-slider').value = compPct;
-  document.getElementById('comp-val').textContent = compPct + '%';
+  // SSB audio sliders — skip sync while the user is actively dragging,
+  // same pattern as the NR level slider (prevents the live state broadcast
+  // from yanking the slider back to the old value mid-drag).
+  if (!_micGainDragging) {
+    const micPct = Math.round((rig.mic_gain ?? 0.5) * 100);
+    document.getElementById('mic-gain-slider').value = micPct;
+    document.getElementById('mic-gain-val').textContent = micPct + '%';
+  }
+  if (!_compDragging) {
+    const compPct = Math.round((rig.comp_level ?? 0) * 100);
+    document.getElementById('comp-slider').value = compPct;
+    document.getElementById('comp-val').textContent = compPct + '%';
+  }
 
   // Antenna buttons
   [1,2,3,4].forEach(n => {
@@ -1480,6 +1492,8 @@ var _nbOn = false;
 var _nrOn = false;
 var _dnfOn = false;
 var _nrDragging = false;
+var _micGainDragging = false;
+var _compDragging = false;
 
 function toggleNB() {
   _nbOn = !_nbOn;
