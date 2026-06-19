@@ -9,10 +9,9 @@ Responsibilities:
   - Publishes unified station state for WebSocket broadcast
 
 Operating Modes:
-  QRP       — amp bypassed, drive ≤ 5W
-  BAREFOOT  — amp bypassed, drive ≤ 100W
-  NORMAL    — amp active, drive ≤ 40W, no confirmation
-  HIGH_POWER— amp active, drive ≤ 40W, requires explicit confirmation
+  AMP_OFF — amp in standby (RF bypass); radio RF power capped at 100W
+  AMP_ON  — amp in OPERATE; radio RF power capped at 40W, requires
+            explicit operator confirmation before engaging
 
 Antenna Configuration (w7tlg station):
   A1F — SS-25 / future DXF   1500W  all bands   unlimited
@@ -344,6 +343,15 @@ class AcomBridge:
         else:
             await self.amp.send(cmd_standby())
             logger.info("Amp → STANDBY")
+
+        # Enforce the new drive limit immediately: if the radio is currently
+        # set above the new cap (e.g. was at 80W with amp off, now switching
+        # to AMP_ON's 40W cap), bring it down rather than letting an
+        # out-of-range setting persist into the new mode.
+        new_limit = MODE_DRIVE_LIMITS[mode]
+        if self.rig.state.rf_power_pct > new_limit:
+            await self.rig.set_rf_power(new_limit)
+            logger.info(f"RF power clamped to {new_limit}W for {mode.value}")
 
         logger.info(f"Operating mode → {mode.value}")
         await self._publish()

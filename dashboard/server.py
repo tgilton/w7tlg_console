@@ -223,9 +223,12 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
         elif cmd == "set_rf_power":
-            ok = await bridge.rig.set_rf_power(int(msg["pct"]))
+            requested = int(msg["pct"])
+            capped = min(requested, bridge.station.drive_limit_w)
+            ok = await bridge.rig.set_rf_power(capped)
             await ws.send_text(json.dumps({
-                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+                "type": "cmd_response", "cmd": cmd, "ok": ok,
+                "capped": capped != requested}))
 
         elif cmd == "set_preamp":
             level = int(msg["level"])

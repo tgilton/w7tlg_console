@@ -804,7 +804,7 @@ input[type=range]::-webkit-slider-thumb:active {
           <input type="range" min="5" max="100" value="50" id="rf-power-slider"
             oninput="onPowerSlider(this.value)"
             onchange="setPower(this.value)">
-          <span class="power-value" id="rf-power-val">50%</span>
+          <span class="power-value" id="rf-power-val">50W</span>
         </div>
       </div>
     </div>
@@ -916,19 +916,15 @@ input[type=range]::-webkit-slider-thumb:active {
     <!-- Operating mode -->
     <div>
       <div class="section-label">Operating Mode</div>
-      <div class="opmode-grid">
-        <button class="btn" id="mode-QRP"
-          onclick="setOpMode('QRP')">QRP<br><span style="font-size:0.6rem;opacity:0.7">≤5W</span></button>
-        <button class="btn active" id="mode-BAREFOOT"
-          onclick="setOpMode('BAREFOOT')">BAREFOOT<br><span style="font-size:0.6rem;opacity:0.7">≤100W</span></button>
-        <button class="btn" id="mode-NORMAL"
-          onclick="setOpMode('NORMAL')">NORMAL<br><span style="font-size:0.6rem;opacity:0.7">≤40W drive</span></button>
-        <button class="btn" id="mode-HIGH_POWER"
+      <div class="opmode-grid" style="grid-template-columns: 1fr 1fr;">
+        <button class="btn active" id="mode-AMP_OFF"
+          onclick="setOpMode('AMP_OFF')">AMP OFF<br><span style="font-size:0.6rem;opacity:0.7">RF ≤100W</span></button>
+        <button class="btn" id="mode-AMP_ON"
           style="border-color:#5a3200; color:var(--amber)"
-          onclick="confirmHighPower()">HIGH PWR<br><span style="font-size:0.6rem;opacity:0.7">⚠ Confirm</span></button>
+          onclick="confirmAmpOn()">AMP ON ⚠<br><span style="font-size:0.6rem;opacity:0.7">Confirm · ≤40W</span></button>
       </div>
       <div class="row" style="margin-top:8px; font-family:var(--mono); font-size:0.75rem;">
-        <span class="muted">Drive limit:</span>
+        <span class="muted">RF power cap:</span>
         <span id="drive-limit-val">100W max</span>
       </div>
     </div>
@@ -1105,10 +1101,13 @@ function updateUI(s) {
     document.getElementById('swr-val').textContent = swr.toFixed(2);
   }
 
-  // RF power slider
-  const pct = rig.rf_power_pct ?? 50;
-  document.getElementById('rf-power-slider').value = pct;
-  document.getElementById('rf-power-val').textContent = pct + '%';
+  // RF power slider (watts; max tracks amp state's drive limit)
+  const driveLimit = s.drive_limit_w ?? 100;
+  const slider = document.getElementById('rf-power-slider');
+  slider.max = driveLimit;
+  const pct = Math.min(rig.rf_power_pct ?? 50, driveLimit);
+  slider.value = pct;
+  document.getElementById('rf-power-val').textContent = pct + 'W';
 
   // Preamp
   const preamp = rig.preamp ?? 0;
@@ -1133,14 +1132,12 @@ function updateUI(s) {
   // Amp state
   updateAmp(s);
 
-  // Operating mode buttons
-  ['QRP','BAREFOOT','NORMAL','HIGH_POWER'].forEach(m => {
+  // Operating mode buttons (AMP OFF / AMP ON)
+  ['AMP_OFF','AMP_ON'].forEach(m => {
     const btn = document.getElementById('mode-' + m);
     if (!btn) return;
     const isActive = s.operating_mode === m;
-    btn.className = 'btn' + (isActive ? (m === 'HIGH_POWER' ? ' active-amber' : ' active') : '');
-    if (m === 'HIGH_POWER' && !isActive)
-      btn.style.borderColor = '#5a3200';
+    btn.className = 'btn' + (isActive ? (m === 'AMP_ON' ? ' active-amber' : ' active') : '');
   });
   document.getElementById('drive-limit-val').textContent =
     (s.drive_limit_w ?? 100) + 'W max';
@@ -1291,7 +1288,7 @@ function setMode(btn) {
 }
 
 function onPowerSlider(val) {
-  document.getElementById('rf-power-val').textContent = val + '%';
+  document.getElementById('rf-power-val').textContent = val + 'W';
 }
 
 function setPower(val) {
@@ -1306,15 +1303,15 @@ function setOpMode(mode) {
   send({ cmd: 'set_mode_op', mode, confirmed: false });
 }
 
-function confirmHighPower() {
+function confirmAmpOn() {
   if (confirm(
-    'HIGH POWER operation — confirm before proceeding:\n\n' +
+    'AMP ON — confirm before proceeding:\n\n' +
     '✓  Antenna is connected and matched\n' +
     '✓  ATU is tuned for current band\n' +
     '✓  Band is clear\n' +
-    '✓  Drive limited to 40W\n\n' +
+    '✓  RF power will be capped to 40W\n\n' +
     'Proceed?'
-  )) send({ cmd: 'set_mode_op', mode: 'HIGH_POWER', confirmed: true });
+  )) send({ cmd: 'set_mode_op', mode: 'AMP_ON', confirmed: true });
 }
 
 function selectAnt(n) { send({ cmd: 'select_antenna', antenna: n }); }
