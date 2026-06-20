@@ -21,6 +21,7 @@ Antenna Configuration (w7tlg station):
 """
 
 import asyncio
+from collections import deque
 import json
 import logging
 import time
@@ -40,6 +41,40 @@ from amplifier.acom_serial import AcomSerial
 from rig.rigctld_client import RigctldClient, RigState
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Trending
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TrendSample:
+    """Single telemetry snapshot for time-series trending."""
+    ts: float           # time.time()
+    fwd_w: float
+    refl_w: float
+    swr: float
+    temp_c: float
+    drive_w: float
+    current_a: float    # amps (not mA)
+    is_tx: bool
+
+    def to_list(self) -> list:
+        """Compact list format for WebSocket transfer."""
+        return [
+            round(self.ts, 2),
+            round(self.fwd_w, 1),
+            round(self.refl_w, 1),
+            round(self.swr, 2),
+            round(self.temp_c, 1),
+            round(self.drive_w, 1),
+            round(self.current_a, 2),
+            1 if self.is_tx else 0,
+        ]
+
+TREND_FIELDS = ["ts", "fwd_w", "refl_w", "swr", "temp_c",
+                "drive_w", "current_a", "is_tx"]
+
 
 # ---------------------------------------------------------------------------
 # Operating modes
@@ -242,6 +277,8 @@ class StationState:
     drive_limit_w: int = 100
     tx_inhibited: bool = False
     tx_inhibit_reason: str = ""
+    duty_cycle_pct: float = 0.0
+    tx_cycle_count: int = 0
     dummy_load_active: bool = False
     dummy_load_remaining_s: float = 0.0
     thermal_inhibit: dict = field(default_factory=dict)
@@ -268,6 +305,8 @@ class StationState:
             "selected_antenna":       self.selected_antenna,
             "drive_limit_w":          self.drive_limit_w,
             "tx_inhibited":           self.tx_inhibited,
+            "duty_cycle_pct":         self.duty_cycle_pct,
+            "tx_cycle_count":         self.tx_cycle_count,
             "tx_inhibit_reason":      self.tx_inhibit_reason,
             "dummy_load_active":      self.dummy_load_active,
             "dummy_load_remaining_s": self.dummy_load_remaining_s,
@@ -303,6 +342,11 @@ class AcomBridge:
         self._selected_antenna = 4
         self._high_power_confirmed = False
         self._tx_inhibited = False
+        # Trending buffers
+        self._trend_buffer = deque(maxlen=6000)   # ~10min at 10Hz
+        self._duty_samples = deque(maxlen=3000)   # ~5min at 10Hz
+        self._tx_cycle_count = 0
+        self._tx_was_trending = False
         self._tx_inhibit_reason = ""
         self._current_acom_band: Optional[AcomBand] = None
         self._last_freq_hz: int = 0
@@ -471,6 +515,30 @@ class AcomBridge:
         self.station.dummy_load_active = False
         self.station.dummy_load_remaining_s = 0.0
 
+
+    def _calc_duty_cycle(self) -> float:
+        """Rolling 5-minute TX duty cycle percentage."""
+        if not self._duty_samples:
+            return 0.0
+        now = time.time()
+        cutoff = now - 300  # 5 minute window
+        while self._duty_samples and self._duty_samples[0][0] < cutoff:
+            self._duty_samples.popleft()
+        if not self._duty_samples:
+            return 0.0
+        tx_count = sum(1 for _, is_tx in self._duty_samples if is_tx)
+        return round(100.0 * tx_count / len(self._duty_samples), 1)
+
+    def get_trend_data(self, since: float = 0) -> dict:
+        """Return trend samples since a given timestamp."""
+        samples = [s.to_list() for s in self._trend_buffer if s.ts > since]
+        return {
+            "fields": TREND_FIELDS,
+            "samples": samples,
+            "duty_cycle_pct": self.station.duty_cycle_pct,
+            "tx_cycle_count": self._tx_cycle_count,
+        }
+
     async def _on_telemetry(self, t: AmpTelemetry):
         self.station.amp_mode       = t.mode_name
         self.station.amp_fwd_w      = t.fwd_power_w
@@ -502,6 +570,24 @@ class AcomBridge:
         self.station.thermal_inhibit = {
             str(k): v.to_dict() for k, v in self.thermal.states.items()
         }
+
+        # ---- Trending sample collection ----
+        now = time.time()
+        is_tx = t.flag_keyin
+        sample = TrendSample(
+            ts=now, fwd_w=t.fwd_power_w, refl_w=t.refl_power_w,
+            swr=t.swr, temp_c=t.pam1_temp_c, drive_w=t.input_power_w,
+            current_a=t.id1_ma / 1000.0, is_tx=is_tx,
+        )
+        self._trend_buffer.append(sample)
+        self._duty_samples.append((now, is_tx))
+        # TX cycle counting
+        if is_tx and not self._tx_was_trending:
+            self._tx_cycle_count += 1
+        self._tx_was_trending = is_tx
+        self.station.duty_cycle_pct = self._calc_duty_cycle()
+        self.station.tx_cycle_count = self._tx_cycle_count
+
         await self._publish()
 
     async def _on_fault(self, faults: FaultStatus):
