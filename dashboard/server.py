@@ -297,6 +297,12 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": True}))
 
+        elif cmd == "get_trend":
+            since = float(msg.get("since", 0))
+            trend = bridge.get_trend_data(since)
+            await ws.send_text(json.dumps({
+                "type": "trend_data", **trend}))
+
         else:
             await ws.send_text(json.dumps({
                 "type": "error", "message": f"Unknown command: {cmd}"}))
@@ -316,3 +322,11 @@ async def dashboard():
     if html_path.exists():
         return HTMLResponse(html_path.read_text())
     return HTMLResponse("<h1>Dashboard HTML not found</h1>")
+
+@app.get("/monitor", response_class=HTMLResponse)
+async def monitor():
+    html_path = Path(__file__).parent / "monitor.html"
+    if html_path.exists():
+        return HTMLResponse(html_path.read_text())
+    return HTMLResponse("<h1>Monitor HTML not found</h1>")
+
