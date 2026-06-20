@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG Monitor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a; color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow-y: auto;
+  }
+
+  /* Top status bar */
+  .status-bar {
+    display: flex; align-items: center; gap: 24px;
+    padding: 10px 20px;
+    background: #111; border-bottom: 1px solid #333;
+    font-size: 0.85rem;
+  }
+  .status-bar .title { font-size: 1.1rem; font-weight: 600; color: #00e5ff; }
+  .status-bar .sep { color: #333; }
+  .stat-box {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 4px 12px;
+  }
+  .stat-label { font-size: 0.65rem; text-transform: uppercase; color: #888; }
+  .stat-value { font-size: 1.3rem; font-weight: 700; font-family: monospace; }
+  .stat-value.green { color: #4caf50; }
+  .stat-value.yellow { color: #ffc107; }
+  .stat-value.red { color: #f44336; }
+  .stat-value.cyan { color: #00e5ff; }
+
+  /* Duty cycle gauge */
+  .duty-gauge {
+    position: relative; width: 70px; height: 70px;
+  }
+  .duty-gauge svg { transform: rotate(-90deg); }
+  .duty-gauge .value {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.85rem; font-weight: 700; font-family: monospace;
+  }
+
+  /* Charts area */
+  .charts { padding: 12px 20px; }
+  .chart-row {
+    display: flex; align-items: stretch; margin-bottom: 8px;
+    background: #111; border: 1px solid #222; border-radius: 4px;
+    overflow: hidden;
+  }
+  .chart-label {
+    width: 110px; min-width: 110px;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+    padding: 8px; border-right: 1px solid #222;
+    font-size: 0.7rem; text-transform: uppercase; color: #888;
+  }
+  .chart-label .current {
+    font-size: 1.4rem; font-weight: 700; font-family: monospace;
+    margin-top: 2px;
+  }
+  .chart-canvas-wrap { flex: 1; height: 120px; }
+  .chart-canvas-wrap canvas { width: 100%; height: 100%; display: block; }
+
+  /* Faults panel */
+  .faults-panel {
+    margin: 0 20px 20px; padding: 12px;
+    background: #111; border: 1px solid #222; border-radius: 4px;
+  }
+  .faults-title {
+    font-size: 0.75rem; text-transform: uppercase; color: #888;
+    margin-bottom: 8px;
+  }
+  .fault-entry {
+    padding: 4px 8px; margin-bottom: 4px; border-radius: 3px;
+    font-size: 0.8rem; font-family: monospace;
+  }
+  .fault-entry.warning { background: #332b00; color: #ffc107; }
+  .fault-entry.soft { background: #331a00; color: #ff9800; }
+  .fault-entry.hard { background: #330000; color: #f44336; }
+  .fault-entry.ok { color: #4caf50; }
+
+  /* Connection indicator */
+  .conn-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block; margin-right: 6px;
+  }
+  .conn-dot.on { background: #4caf50; }
+  .conn-dot.off { background: #f44336; }
+</style>
+</head>
+<body>
+
+<!-- Status Bar -->
+<div class="status-bar">
+  <span class="title">W7TLG MONITOR</span>
+  <span class="sep">|</span>
+  <span><span class="conn-dot off" id="ws-dot"></span><span id="ws-status">Connecting…</span></span>
+  <span class="sep">|</span>
+  <span><span class="conn-dot off" id="amp-dot"></span><span id="amp-status">AMP</span></span>
+  <span class="sep">|</span>
+  <div class="stat-box">
+    <span class="stat-label">Mode</span>
+    <span class="stat-value cyan" id="mode-val">—</span>
+  </div>
+  <div class="stat-box">
+    <span class="stat-label">Antenna</span>
+    <span class="stat-value cyan" id="ant-val">—</span>
+  </div>
+  <div class="stat-box">
+    <span class="stat-label">TX Cycles</span>
+    <span class="stat-value green" id="txcycles-val">0</span>
+  </div>
+  <div class="duty-gauge" id="duty-gauge">
+    <svg width="70" height="70" viewBox="0 0 70 70">
+      <circle cx="35" cy="35" r="28" fill="none" stroke="#222" stroke-width="6"/>
+      <circle cx="35" cy="35" r="28" fill="none" stroke="#4caf50"
+              stroke-width="6" stroke-dasharray="175.93" stroke-dashoffset="175.93"
+              stroke-linecap="round" id="duty-arc"/>
+    </svg>
+    <span class="value green" id="duty-val">0%</span>
+  </div>
+</div>
+
+<!-- Charts -->
+<div class="charts" id="charts-container">
+  <!-- Charts are created by JS -->
+</div>
+
+<!-- Faults -->
+<div class="faults-panel">
+  <div class="faults-title">ACOM Alerts</div>
+  <div id="faults-list">
+    <div class="fault-entry ok">No active faults</div>
+  </div>
+</div>
+
+<script>
+// =========================================================================
+// Chart definitions
+// =========================================================================
+const CHARTS = [
+  { key: 'fwd_w',    label: 'FWD Power',  unit: 'W',  min: 0, max: 1200, color: '#4caf50',
+    warn: null, gridLines: [200, 400, 600, 800, 1000] },
+  { key: 'refl_w',   label: 'REFL Power', unit: 'W',  min: 0, max: 150,  color: '#f44336',
+    warn: 50, gridLines: [25, 50, 75, 100, 125] },
+  { key: 'swr',      label: 'SWR',        unit: ':1', min: 1, max: 3,    color: '#ff9800',
+    warn: 2.0, gridLines: [1.5, 2.0, 2.5] },
+  { key: 'temp_c',   label: 'PA Temp',    unit: '°C', min: 15, max: 90,  color: '#2196f3',
+    warn: 70, gridLines: [30, 40, 50, 60, 70, 80] },
+  { key: 'drive_w',  label: 'Drive',      unit: 'W',  min: 0, max: 60,   color: '#9c27b0',
+    warn: 45, gridLines: [10, 20, 30, 40, 50] },
+  { key: 'current_a', label: 'Drain I',   unit: 'A',  min: 0, max: 40,   color: '#00bcd4',
+    warn: 35, gridLines: [10, 20, 30] },
+];
+
+const TIME_WINDOW = 600; // 10 minutes
+const ANT_NAMES = { 1: 'A1F', 3: 'A3R', 4: 'A4R' };
+
+// =========================================================================
+// Strip chart class
+// =========================================================================
+class StripChart {
+  constructor(def, canvas) {
+    this.def = def;
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.data = [];       // [{ts, value, isTx}]
+    this.currentVal = 0;
+  }
+
+  addPoint(ts, value, isTx) {
+    this.data.push({ ts, value, isTx });
+    this.currentVal = value;
+  }
+
+  trimOld(now) {
+    const cutoff = now - TIME_WINDOW;
+    while (this.data.length > 0 && this.data[0].ts < cutoff) {
+      this.data.shift();
+    }
+  }
+
+  draw(now) {
+    const ctx = this.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = this.canvas.getBoundingClientRect();
+    const w = rect.width * dpr;
+    const h = rect.height * dpr;
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+    }
+
+    const d = this.def;
+    ctx.clearRect(0, 0, w, h);
+
+    // Background
+    ctx.fillStyle = '#0d0d0d';
+    ctx.fillRect(0, 0, w, h);
+
+    const pad = { left: 0, right: 10, top: 8, bottom: 18 };
+    const pw = w - pad.left - pad.right;
+    const ph = h - pad.top - pad.bottom;
+
+    // Grid lines
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1;
+    for (const gv of (d.gridLines || [])) {
+      const y = pad.top + ph - ((gv - d.min) / (d.max - d.min)) * ph;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(w - pad.right, y);
+      ctx.stroke();
+      ctx.fillStyle = '#444';
+      ctx.font = `${10 * dpr}px monospace`;
+      ctx.textAlign = 'right';
+      ctx.fillText(gv.toString(), w - pad.right - 2, y - 2);
+    }
+
+    // Warning threshold
+    if (d.warn !== null) {
+      const wy = pad.top + ph - ((d.warn - d.min) / (d.max - d.min)) * ph;
+      ctx.strokeStyle = 'rgba(255,193,7,0.3)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, wy);
+      ctx.lineTo(w - pad.right, wy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Time axis labels
+    ctx.fillStyle = '#444';
+    ctx.font = `${9 * dpr}px monospace`;
+    ctx.textAlign = 'center';
+    for (let m = 1; m <= 10; m++) {
+      const x = pad.left + pw - (m * 60 / TIME_WINDOW) * pw;
+      if (x > pad.left) {
+        ctx.fillText(`-${m}m`, x, h - 2);
+        ctx.strokeStyle = '#151515';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, pad.top);
+        ctx.lineTo(x, h - pad.bottom);
+        ctx.stroke();
+      }
+    }
+
+    // TX background shading
+    if (this.data.length > 1) {
+      ctx.fillStyle = 'rgba(255,255,255,0.03)';
+      let inTx = false;
+      let txStart = 0;
+      for (let i = 0; i < this.data.length; i++) {
+        const pt = this.data[i];
+        const x = pad.left + ((pt.ts - (now - TIME_WINDOW)) / TIME_WINDOW) * pw;
+        if (pt.isTx && !inTx) { inTx = true; txStart = x; }
+        if (!pt.isTx && inTx) {
+          ctx.fillRect(txStart, pad.top, x - txStart, ph);
+          inTx = false;
+        }
+      }
+      if (inTx) {
+        const endX = pad.left + pw;
+        ctx.fillRect(txStart, pad.top, endX - txStart, ph);
+      }
+    }
+
+    // Data line
+    if (this.data.length < 2) return;
+    ctx.strokeStyle = d.color;
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let started = false;
+    for (const pt of this.data) {
+      const x = pad.left + ((pt.ts - (now - TIME_WINDOW)) / TIME_WINDOW) * pw;
+      const y = pad.top + ph - ((Math.min(Math.max(pt.value, d.min), d.max) - d.min) / (d.max - d.min)) * ph;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+}
+
+// =========================================================================
+// Initialization
+// =========================================================================
+const chartsContainer = document.getElementById('charts-container');
+const charts = {};
+
+CHARTS.forEach(def => {
+  const row = document.createElement('div');
+  row.className = 'chart-row';
+  row.innerHTML = `
+    <div class="chart-label">
+      <span>${def.label}</span>
+      <span class="current" style="color:${def.color}" id="cur-${def.key}">—</span>
+      <span style="font-size:0.65rem;color:#666">${def.unit}</span>
+    </div>
+    <div class="chart-canvas-wrap">
+      <canvas id="chart-${def.key}"></canvas>
+    </div>`;
+  chartsContainer.appendChild(row);
+  const canvas = document.getElementById(`chart-${def.key}`);
+  charts[def.key] = new StripChart(def, canvas);
+});
+
+// =========================================================================
+// WebSocket
+// =========================================================================
+let ws = null;
+let lastTrendTs = 0;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('ws-dot').className = 'conn-dot on';
+    document.getElementById('ws-status').textContent = 'Connected';
+    // Request historical trend data
+    ws.send(JSON.stringify({ cmd: 'get_trend', since: 0 }));
+  };
+
+  ws.onclose = () => {
+    document.getElementById('ws-dot').className = 'conn-dot off';
+    document.getElementById('ws-status').textContent = 'Disconnected';
+    setTimeout(connect, 2000);
+  };
+
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+
+    if (msg.type === 'state') {
+      handleState(msg);
+    } else if (msg.type === 'trend_data') {
+      handleTrendData(msg);
+    }
+  };
+}
+
+function handleState(s) {
+  // Status bar
+  const ampConn = s.amp_connected;
+  document.getElementById('amp-dot').className = `conn-dot ${ampConn ? 'on' : 'off'}`;
+  document.getElementById('mode-val').textContent = s.operating_mode || '—';
+
+  const antNum = s.selected_antenna;
+  document.getElementById('ant-val').textContent = ANT_NAMES[antNum] || `A${antNum}`;
+  document.getElementById('txcycles-val').textContent = s.tx_cycle_count || 0;
+
+  // Duty cycle gauge
+  const duty = s.duty_cycle_pct || 0;
+  const circ = 2 * Math.PI * 28; // 175.93
+  const offset = circ - (duty / 100) * circ;
+  const arc = document.getElementById('duty-arc');
+  arc.setAttribute('stroke-dashoffset', offset.toFixed(1));
+  const dutyColor = duty > 60 ? '#f44336' : duty > 40 ? '#ffc107' : '#4caf50';
+  arc.setAttribute('stroke', dutyColor);
+  const dutyValEl = document.getElementById('duty-val');
+  dutyValEl.textContent = `${duty.toFixed(0)}%`;
+  dutyValEl.className = `value ${duty > 60 ? 'red' : duty > 40 ? 'yellow' : 'green'}`;
+
+  // Append current point to charts from live state
+  if (s.amp_connected) {
+    const now = Date.now() / 1000;
+    const isTx = s.amp_ptt_active;
+    addChartPoint(now, s.amp_fwd_w, s.amp_refl_w, s.amp_swr,
+                  s.amp_temp_c, s.amp_drive_w, s.amp_current_ma / 1000, isTx);
+  }
+
+  // Current values
+  document.getElementById('cur-fwd_w').textContent = (s.amp_fwd_w || 0).toFixed(0);
+  document.getElementById('cur-refl_w').textContent = (s.amp_refl_w || 0).toFixed(0);
+  document.getElementById('cur-swr').textContent = (s.amp_swr || 0).toFixed(1);
+  document.getElementById('cur-temp_c').textContent = (s.amp_temp_c || 0).toFixed(0);
+  document.getElementById('cur-drive_w').textContent = (s.amp_drive_w || 0).toFixed(0);
+  document.getElementById('cur-current_a').textContent = ((s.amp_current_ma || 0) / 1000).toFixed(1);
+
+  // Faults
+  updateFaults(s);
+}
+
+function handleTrendData(msg) {
+  const fields = msg.fields;
+  const fi = {};
+  fields.forEach((f, i) => fi[f] = i);
+
+  for (const row of msg.samples) {
+    const ts = row[fi.ts];
+    if (ts > lastTrendTs) lastTrendTs = ts;
+    addChartPoint(
+      ts, row[fi.fwd_w], row[fi.refl_w], row[fi.swr],
+      row[fi.temp_c], row[fi.drive_w], row[fi.current_a],
+      row[fi.is_tx] === 1
+    );
+  }
+}
+
+function addChartPoint(ts, fwd, refl, swr, temp, drive, currentA, isTx) {
+  charts.fwd_w.addPoint(ts, fwd, isTx);
+  charts.refl_w.addPoint(ts, refl, isTx);
+  charts.swr.addPoint(ts, swr, isTx);
+  charts.temp_c.addPoint(ts, temp, isTx);
+  charts.drive_w.addPoint(ts, drive, isTx);
+  charts.current_a.addPoint(ts, currentA, isTx);
+}
+
+function updateFaults(s) {
+  const el = document.getElementById('faults-list');
+  const entries = [];
+
+  if (s.fault_hard && s.fault_hard.length)
+    s.fault_hard.forEach(f => entries.push(`<div class="fault-entry hard">HARD FAULT: ${f}</div>`));
+  if (s.fault_soft && s.fault_soft.length)
+    s.fault_soft.forEach(f => entries.push(`<div class="fault-entry soft">SOFT FAULT: ${f}</div>`));
+  if (s.fault_warnings && s.fault_warnings.length)
+    s.fault_warnings.forEach(f => entries.push(`<div class="fault-entry warning">WARNING: ${f}</div>`));
+
+  if (s.tx_inhibited)
+    entries.push(`<div class="fault-entry warning">TX INHIBITED: ${s.tx_inhibit_reason || 'Unknown'}</div>`);
+
+  if (entries.length === 0)
+    entries.push('<div class="fault-entry ok">No active faults</div>');
+
+  el.innerHTML = entries.join('');
+}
+
+// =========================================================================
+// Render loop
+// =========================================================================
+function renderLoop() {
+  const now = Date.now() / 1000;
+  for (const key in charts) {
+    charts[key].trimOld(now);
+    charts[key].draw(now);
+  }
+  requestAnimationFrame(renderLoop);
+}
+
+connect();
+requestAnimationFrame(renderLoop);
+</script>
+</body>
+</html>
