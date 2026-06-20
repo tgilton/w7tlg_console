@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 
 RIGCTLD_HOST  = "127.0.0.1"
 RIGCTLD_PORT  = 4532
-ACOM_PORT     = "/dev/cu.usbserial-A9V19CH7"
+# ACOM_PORT     = "/dev/cu.usbserial-A9V19CH7"
+ACOM_PORT = "/dev/cu.usbserial-A92518IM"
 ACOM_BAUD     = 9600
 THERMAL_STATE = Path("config/thermal_state.json")
 
