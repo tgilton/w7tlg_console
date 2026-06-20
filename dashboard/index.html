@@ -1058,6 +1058,8 @@ input[type=range]::-webkit-slider-thumb:active {
 </div><!-- .console -->
 
 <script>
+var _rfPwrDragging = false;
+var _widthDragging = false;
 'use strict';
 
 // ── WebSocket ─────────────────────────────────────────────
@@ -1403,6 +1405,42 @@ const FILTER_RANGES = {
   FM:     null,
 };
 
+
+// Exact valid filter width values from FT-991A SH command table
+const VALID_WIDTHS = {
+  USB: {
+    NAR: [200, 400, 600, 850, 1100, 1350, 1500, 1650, 1800],
+    WID: [1800, 1950, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3200],
+  },
+  LSB: {
+    NAR: [200, 400, 600, 850, 1100, 1350, 1500, 1650, 1800],
+    WID: [1800, 1950, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3200],
+  },
+  CW: {
+    NAR: [50, 100, 150, 200, 250, 300, 350, 400, 450, 500],
+    WID: [500, 800, 1200, 1400, 1700, 2000, 2400, 3000],
+  },
+  PKTUSB: {
+    NAR: [50, 100, 150, 200, 250, 300, 350, 400, 450, 500],
+    WID: [500, 800, 1200, 1400, 1700, 2000, 2400, 3000],
+  },
+  AM: {
+    NAR: [3000, 4000, 5000, 6000],
+    WID: [6000, 7000, 8000, 9000],
+  },
+};
+
+function snapWidth(val, mode, which) {
+  const table = VALID_WIDTHS[mode] || VALID_WIDTHS.USB;
+  const steps = table[which] || table.NAR;
+  let best = steps[0], bestDist = Math.abs(val - steps[0]);
+  for (const s of steps) {
+    const d = Math.abs(val - s);
+    if (d < bestDist) { best = s; bestDist = d; }
+  }
+  return best;
+}
+
 var _widthMode = 'NAR';  // tracks which half (NAR/WID) the slider is in
 
 function filterRangeFor(mode) {
@@ -1427,12 +1465,18 @@ function setFilterWidthMode(which) {
 }
 
 function onWidthSlider(val) {
-  document.getElementById('width-val').textContent = val + 'Hz';
+  const mode = (state.rig && state.rig.mode) || 'USB';
+  const snapped = snapWidth(parseInt(val), mode, _widthMode);
+  document.getElementById('width-val').textContent = snapped + 'Hz';
 }
 
 function setWidth(val) {
   const mode = (state.rig && state.rig.mode) || 'USB';
-  send({ cmd: 'set_mode', mode, passband: parseInt(val) });
+  const snapped = snapWidth(parseInt(val), mode, _widthMode);
+  const slider = document.getElementById('width-slider');
+  slider.value = snapped;
+  document.getElementById('width-val').textContent = snapped + 'Hz';
+  send({ cmd: 'set_mode', mode, passband: snapped });
 }
 
 function onPowerSlider(val) {
