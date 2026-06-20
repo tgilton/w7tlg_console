@@ -582,8 +582,8 @@ input[type=range]::-webkit-slider-thumb:active {
 
 /* ── Divider ─────────────────────────────────────────────── */
 .divider {
-  height: 1px;
-  background: var(--border);
+  height: 2px;
+  background: #000000;
   margin: 0;
 }
 
@@ -813,10 +813,50 @@ input[type=range]::-webkit-slider-thumb:active {
         <div class="power-slider-wrap">
           <input type="range" min="200" max="3000" step="50" value="1800" id="width-slider"
             oninput="onWidthSlider(this.value)"
-            onchange="setWidth(this.value)">
+            onmousedown="_widthDragging=true"
+            onmouseup="_widthDragging=false; setWidth(this.value)"
+            ontouchstart="_widthDragging=true"
+            ontouchend="_widthDragging=false; setWidth(this.value)">
           <span class="power-value" id="width-val">1800Hz</span>
         </div>
       </div>
+
+      <div style="margin-top:10px; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px;">
+        <!-- NB -->
+        <button class="dsp-toggle" id="nb-btn" onclick="toggleNB()">
+          <span class="dsp-func-label">NB</span><span class="dsp-func-state" id="nb-state">OFF</span>
+        </button>
+
+        <!-- DNR + slider -->
+        <div style="display:flex; align-items:center; gap:4px;">
+          <button class="dsp-toggle" id="nr-btn" onclick="toggleNR()" style="flex-shrink:0">
+            <span class="dsp-func-label">DNR</span><span class="dsp-func-state" id="nr-state">OFF</span>
+          </button>
+          <input type="range" min="1" max="15" step="1" value="8"
+                 id="nr-slider"
+                 style="width:80px; accent-color:var(--cyan); cursor:pointer;"
+                 oninput="onNRChange(this.value)"
+                 onmousedown="_nrDragging=true"
+                 onmouseup="_nrDragging=false; setNR(this.value)"
+                 ontouchstart="_nrDragging=true"
+                 ontouchend="_nrDragging=false; setNR(this.value)">
+          <span class="dsp-val" id="nr-val" style="min-width:16px; font-size:0.75rem; color:var(--muted);">8</span>
+        </div>
+
+        <!-- DNF -->
+        <button class="dsp-toggle" id="dnf-btn" onclick="toggleDNF()">
+          <span class="dsp-func-label">DNF</span><span class="dsp-func-state" id="dnf-state">OFF</span>
+        </button>
+
+        <!-- AGC -->
+        <div style="display:flex; align-items:center; gap:2px;">
+          <span class="dsp-func-label" style="margin-right:4px; font-size:0.7rem; color:var(--muted);">AGC</span>
+          <button class="dsp-agc-btn" id="agc-off" onclick="setAGC(0)">OFF</button>
+          <button class="dsp-agc-btn" id="agc-fast" onclick="setAGC(2)">FAST</button>
+          <button class="dsp-agc-btn" id="agc-slow" onclick="setAGC(3)">SLOW</button>
+        </div>
+      </div>
+
     </div>
 
     <div class="divider"></div>
@@ -829,7 +869,10 @@ input[type=range]::-webkit-slider-thumb:active {
         <div class="power-slider-wrap">
           <input type="range" min="5" max="100" value="50" id="rf-power-slider"
             oninput="onPowerSlider(this.value)"
-            onchange="setPower(this.value)">
+            onmousedown="_rfPwrDragging=true"
+            onmouseup="_rfPwrDragging=false; setPower(this.value)"
+            ontouchstart="_rfPwrDragging=true"
+            ontouchend="_rfPwrDragging=false; setPower(this.value)">
           <span class="power-value" id="rf-power-val">50W</span>
         </div>
       </div>
@@ -1000,62 +1043,7 @@ input[type=range]::-webkit-slider-thumb:active {
 
   </section>
 
-  <!-- ── DSP / Filters panel ──────────────────────────────── -->
-  <section class="dsp-panel">
-    <div class="dsp-row">
-
-      <!-- NB -->
-      <div class="dsp-group">
-        <button class="dsp-toggle" id="nb-btn" onclick="toggleNB()">
-          <span class="dsp-func-label">NB</span><span class="dsp-func-state" id="nb-state">OFF</span>
-        </button>
-      </div>
-
-      <div class="dsp-divider"></div>
-
-      <!-- DNR -->
-      <div class="dsp-group dsp-group-wide">
-        <div class="dsp-slider-labeled">
-          <button class="dsp-toggle" id="nr-btn" onclick="toggleNR()" style="flex-shrink:0">
-            <span class="dsp-func-label">DNR</span><span class="dsp-func-state" id="nr-state">OFF</span>
-          </button>
-          <input type="range" min="1" max="15" step="1" value="8"
-                 id="nr-slider"
-                 style="flex:1; accent-color:var(--cyan); cursor:pointer; min-width:80px;"
-                 oninput="onNRChange(this.value)"
-                 onmousedown="_nrDragging=true"
-                 onmouseup="_nrDragging=false; setNR(this.value)"
-                 ontouchstart="_nrDragging=true"
-                 ontouchend="_nrDragging=false; setNR(this.value)">
-          <span class="dsp-val" id="nr-val" style="min-width:20px">8</span>
-        </div>
-      </div>
-
-      <div class="dsp-divider"></div>
-
-      <!-- DNF -->
-      <div class="dsp-group">
-        <button class="dsp-toggle" id="dnf-btn" onclick="toggleDNF()">
-          <span class="dsp-func-label">DNF</span><span class="dsp-func-state" id="dnf-state">OFF</span>
-        </button>
-      </div>
-
-      <div class="dsp-divider"></div>
-
-      <!-- AGC -->
-      <div class="dsp-group">
-        <div class="dsp-btn-row">
-          <span class="dsp-func-label" style="margin-right:4px">AGC</span>
-          <button class="dsp-agc-btn" id="agc-off" onclick="setAGC(0)">OFF</button>
-          <button class="dsp-agc-btn" id="agc-fast" onclick="setAGC(2)">FAST</button>
-          <button class="dsp-agc-btn" id="agc-slow" onclick="setAGC(3)">SLOW</button>
-        </div>
-      </div>
-
-    </div>
-  </section>
-
-  <!-- ── Safety panel ────────────────────────────────────── -->
+  <!-- ── Safety panel  <!-- ── Safety panel ────────────────────────────────────── -->
   <footer class="safety-panel">
     <div class="inhibit-banner" id="inhibit-banner">
       ⛔ TX INHIBITED — <span id="inhibit-reason">—</span>
@@ -1160,7 +1148,7 @@ function updateUI(s) {
   const slider = document.getElementById('rf-power-slider');
   slider.max = driveLimit;
   const pct = Math.min(rig.rf_power_pct ?? 50, driveLimit);
-  slider.value = pct;
+  if (!_rfPwrDragging) { slider.value = pct; }
   document.getElementById('rf-power-val').textContent = pct + 'W';
 
   // Preamp
@@ -1365,7 +1353,7 @@ function updateFilterWidth(rig) {
   const [lo, hi] = range[which];
   wrap.min = lo;
   wrap.max = hi;
-  wrap.value = pb;
+  if (!_widthDragging) { wrap.value = pb; }
   document.getElementById('width-val').textContent = pb + 'Hz';
 }
 
