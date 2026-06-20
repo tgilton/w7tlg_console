@@ -336,7 +336,7 @@ function connect() {
     const msg = JSON.parse(evt.data);
 
     if (msg.type === 'state') {
-      handleState(msg);
+      handleState(msg.data);
     } else if (msg.type === 'trend_data') {
       handleTrendData(msg);
     }
