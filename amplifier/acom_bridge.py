@@ -238,7 +238,7 @@ class StationState:
     fault_soft: list = field(default_factory=list)
     fault_warnings: list = field(default_factory=list)
     operating_mode: str = OperatingMode.AMP_OFF.value
-    selected_antenna: int = 1
+    selected_antenna: int = 4
     drive_limit_w: int = 100
     tx_inhibited: bool = False
     tx_inhibit_reason: str = ""
@@ -300,7 +300,7 @@ class AcomBridge:
         self.station = StationState()
 
         self._mode = OperatingMode.AMP_OFF
-        self._selected_antenna = 1
+        self._selected_antenna = 4
         self._high_power_confirmed = False
         self._tx_inhibited = False
         self._tx_inhibit_reason = ""
