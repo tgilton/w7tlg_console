@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG Panadapter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --surface:   #161b22;
+  --border:    #21262d;
+  --border2:   #30363d;
+  --cyan:      #00d4ff;
+  --cyan-dim:  #005f73;
+  --amber:     #ff8c00;
+  --amber-dim: #5a3200;
+  --green:     #00e676;
+  --green-dim: #003d1f;
+  --red:       #ff3333;
+  --muted:     #58677a;
+  --label:     #8b949e;
+  --text:      #c9d1d9;
+  --mono:      'JetBrains Mono', monospace;
+  --sans:      'Inter', system-ui, sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+.header {
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border2);
+}
+
+.callsign {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+}
+
+.conn-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  display: inline-block;
+  margin-right: 6px;
+}
+.conn-dot.ok { background: var(--green); }
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.sdr-badge {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  color: var(--green);
+  background: var(--green-dim);
+}
+.sdr-badge.tx { color: var(--amber); background: var(--amber-dim); }
+.sdr-badge.unavailable { color: var(--red); background: #4a0000; }
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.control-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#freq-input {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  color: var(--cyan);
+  padding: 5px 8px;
+  border-radius: 3px;
+  width: 130px;
+}
+
+.btn {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 6px 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: #161b22;
+  color: var(--label);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--cyan-dim); color: var(--text); }
+.btn.active { background: #0d2538; border-color: var(--cyan); color: var(--cyan); }
+
+#span-slider { width: 160px; accent-color: var(--cyan); cursor: pointer; }
+
+.span-val {
+  font-family: var(--mono);
+  color: var(--cyan);
+  min-width: 70px;
+  display: inline-block;
+}
+
+.spectrum-wrap {
+  padding: 16px;
+}
+
+.spectrum-canvas-wrap {
+  background: #0a0d11;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  height: 280px;
+  position: relative;
+  cursor: grab;
+}
+.spectrum-canvas-wrap.dragging { cursor: grabbing; }
+#spectrum-canvas { width: 100%; height: 100%; display: block; }
+
+.freq-axis {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  padding: 4px 4px 8px;
+}
+
+.waterfall-canvas-wrap {
+  background: #0a0d11;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  height: 280px;
+}
+#waterfall-canvas { width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="callsign">
+    <span class="conn-dot" id="conn-dot"></span>W7TLG PANADAPTER
+  </span>
+  <div class="header-status">
+    <span class="sdr-badge unavailable" id="sdr-badge">SDR —</span>
+    <span id="hdr-time">—</span>
+  </div>
+</header>
+
+<div class="controls">
+  <span class="control-label">Center Freq</span>
+  <input type="text" id="freq-input" value="14.074000" placeholder="MHz">
+  <button class="btn" onclick="tuneToInput()">Tune</button>
+
+  <span class="control-label" style="margin-left:16px">Span</span>
+  <input type="range" id="span-slider" min="0" max="1000" value="500"
+         oninput="onSpanSlider(this.value)">
+  <span class="span-val" id="span-val">15.0 kHz</span>
+
+  <button class="btn" id="whole-band-btn" onclick="snapToWholeBand()" style="margin-left:8px">Whole Band</button>
+</div>
+
+<div class="controls">
+  <label class="control-label"><input type="checkbox" id="auto-scale-cb" checked onchange="onAutoScaleToggle(this.checked)"> Auto</label>
+
+  <span class="control-label" style="margin-left:16px">Floor</span>
+  <input type="range" id="floor-slider" min="-160" max="0" value="-90" disabled
+         oninput="onFloorSlider(this.value)">
+  <span class="span-val" id="floor-val">-90 dB</span>
+
+  <span class="control-label" style="margin-left:16px">Gain</span>
+  <input type="range" id="gain-slider" min="0" max="100" value="50" disabled
+         oninput="onGainSlider(this.value)">
+  <span class="span-val" id="gain-val">80 dB range</span>
+
+  <span class="control-label" style="margin-left:16px">Palette</span>
+  <select id="palette-select" onchange="onPaletteSelect(this.value)">
+    <option value="default">Default</option>
+    <option value="linrad">Linrad (approx)</option>
+  </select>
+</div>
+
+<div class="spectrum-wrap">
+  <div class="spectrum-canvas-wrap" id="spectrum-wrap">
+    <canvas id="spectrum-canvas"></canvas>
+  </div>
+  <div class="freq-axis">
+    <span id="axis-lo">—</span>
+    <span id="axis-center">—</span>
+    <span id="axis-hi">—</span>
+  </div>
+  <div class="waterfall-canvas-wrap" id="waterfall-wrap">
+    <canvas id="waterfall-canvas"></canvas>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── Band edges (US Amateur Radio Bands, ARRL chart) ──────────
+const BAND_EDGES_HZ = {
+  '160m': [1800000, 2000000],
+  '80m':  [3500000, 4000000],
+  '60m':  [5330500, 5403500],
+  '40m':  [7000000, 7300000],
+  '30m':  [10100000, 10150000],
+  '20m':  [14000000, 14350000],
+  '17m':  [18068000, 18168000],
+  '15m':  [21000000, 21450000],
+  '12m':  [24890000, 24990000],
+  '10m':  [28000000, 29700000],
+  '6m':   [50000000, 54000000],
+};
+
+const SPAN_MIN_HZ = 1000;
+const SPAN_MAX_HZ = 2000000;   // full capture width — can't zoom out further without retuning
+
+// Same per-band digital calling frequencies as rig/rigctld_client.py's
+// DIGITAL_FREQS/near_digital_freq (duplicated here — no shared module
+// between Python and this no-build-step vanilla JS).
+const DIGITAL_FREQS_HZ = {
+  '160m': 1840000, '80m': 3573000, '60m': 5357000, '40m': 7074000,
+  '30m': 10136000, '20m': 14074000, '17m': 18100000, '15m': 21074000,
+  '12m': 24915000, '10m': 28074000, '6m': 50313000,
+};
+const DIGITAL_TOLERANCE_HZ = 3000;
+
+// CW/phone segment boundary per band (ARRL band chart). Below the boundary
+// is CW/data; at/above is phone, using the standard sideband convention
+// (LSB below 10MHz, USB above). 30m has no phone segment at all (boundary
+// = band top); 60m is channelized USB and not modeled segment-by-segment.
+const CW_PHONE_BOUNDARY_HZ = {
+  '160m': 1843000, '80m': 3600000, '40m': 7175000, '30m': 10150000,
+  '20m': 14150000, '17m': 18110000, '15m': 21200000, '12m': 24930000,
+  '10m': 28300000, '6m': 50100000,
+};
+
+function bandForFrequency(freqHz) {
+  for (const [band, [lo, hi]] of Object.entries(BAND_EDGES_HZ)) {
+    if (freqHz >= lo && freqHz <= hi) return band;
+  }
+  return null;
+}
+
+function modeForFrequency(freqHz, band) {
+  const digitalFreq = DIGITAL_FREQS_HZ[band];
+  if (digitalFreq !== undefined && Math.abs(freqHz - digitalFreq) < DIGITAL_TOLERANCE_HZ) {
+    return 'PKTUSB';
+  }
+  if (band === '60m') return 'USB';   // channelized — not segment-modeled
+  const boundary = CW_PHONE_BOUNDARY_HZ[band];
+  if (boundary === undefined) return null;
+  if (freqHz < boundary) return 'CW';
+  return freqHz < 10000000 ? 'LSB' : 'USB';
+}
+
+// ── Main /ws — rig/amp state + commands ─────────────────────
+let ws = null;
+let rigPtt = false;
+let rigBand = null;
+let rigMode = null;
+let rigFreqHz = null;
+let rigPassbandHz = null;
+let wholeBandApplied = false;
+
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { document.getElementById('conn-dot').className = 'conn-dot ok'; };
+  ws.onclose = () => {
+    document.getElementById('conn-dot').className = 'conn-dot';
+    setTimeout(connectWs, 2000);
+  };
+  ws.onmessage = evt => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'state') {
+      const rig = msg.data.rig || {};
+      rigPtt = !!rig.ptt;
+      rigFreqHz = rig.freq_hz ?? rigFreqHz;
+      rigBand = rig.band ?? rigBand;
+      rigMode = rig.near_digital_freq ? 'PKTUSB' : (rig.mode || rigMode);
+      rigPassbandHz = rig.passband_hz ?? rigPassbandHz;
+
+      // Default view is the whole band — manual scroll-to-zoom/drag-to-pan
+      // is how you select what to look at; mode changes no longer hijack
+      // the view out from under you.
+      if (!wholeBandApplied && rigBand && latestFrame) {
+        wholeBandApplied = true;
+        snapToWholeBand();
+      }
+      updateSdrBadge();
+    }
+  };
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function updateSdrBadge() {
+  const badge = document.getElementById('sdr-badge');
+  if (!sdrAvailable) {
+    badge.textContent = 'SDR UNAVAILABLE';
+    badge.className = 'sdr-badge unavailable';
+  } else if (rigPtt) {
+    badge.textContent = 'SDR TX — DISCONNECTED';
+    badge.className = 'sdr-badge tx';
+  } else {
+    badge.textContent = 'SDR LIVE';
+    badge.className = 'sdr-badge';
+  }
+}
+
+// ── Spectrum /ws/spectrum — binary frames ────────────────────
+let specWs = null;
+let sdrAvailable = false;
+let pendingHeader = null;
+let latestFrame = null;   // { centerFreqHz, spanHz, data: Float32Array } — full capture, ~2MHz wide
+let pendingRetuneHz = null;   // set while waiting for the SDR to catch up to a requested retune
+
+function connectSpectrumWs() {
+  specWs = new WebSocket(`ws://${location.host}/ws/spectrum`);
+  specWs.binaryType = 'arraybuffer';
+  specWs.onopen = () => {};
+  specWs.onclose = () => setTimeout(connectSpectrumWs, 2000);
+  specWs.onmessage = evt => {
+    if (typeof evt.data === 'string') {
+      pendingHeader = JSON.parse(evt.data);
+      return;
+    }
+    if (!pendingHeader) return;
+    sdrAvailable = true;
+    updateSdrBadge();
+    const data = new Float32Array(evt.data);
+    const frame = {
+      centerFreqHz: pendingHeader.center_freq_hz,
+      spanHz: pendingHeader.span_hz,
+      data,
+    };
+
+    if (rigPtt) {
+      // SDR Switch disconnects the antenna from the SDR during TX — this
+      // IQ is meaningless (disconnected input), not a real band picture.
+      // Mark the waterfall distinctly and freeze the spectrum line rather
+      // than painting it as if it were a real reading.
+      pushWaterfallTxRow();
+    } else if (pendingRetuneHz !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz) > 1000) {
+      // Waiting for an explicit retune we requested to land — its capture
+      // window is stale relative to where the view now expects to be.
+      // Freeze rather than crop against a window about to move out from
+      // under us.
+    } else {
+      pendingRetuneHz = null;
+      if (viewCenterHz === null || !isViewWithinCapture(frame)) {
+        // Either the very first frame, or the capture moved out from under
+        // the view for a reason we didn't explicitly request — e.g. a
+        // server restart resetting the SDR's default center while this tab
+        // stayed open and just auto-reconnected. Self-heal onto the real
+        // capture rather than render a degenerate single-bin crop.
+        viewCenterHz = frame.centerFreqHz;
+      }
+      latestFrame = frame;
+      pushWaterfallRow(frame);
+    }
+    pendingHeader = null;
+  };
+}
+
+// ── Clock ─────────────────────────────────────────────────
+setInterval(() => {
+  const now = new Date();
+  document.getElementById('hdr-time').textContent = now.toUTCString().slice(17, 25) + 'Z';
+}, 1000);
+
+// ── Controls: tuning ──────────────────────────────────────
+function tuneToInput() {
+  const mhz = parseFloat(document.getElementById('freq-input').value);
+  if (!isFinite(mhz)) return;
+  tuneTo(mhz * 1e6);
+}
+
+function updateFreqInputDisplay() {
+  // Tracks where the SDR is actually tuned (latestFrame.centerFreqHz), not
+  // viewCenterHz — panning/zooming (e.g. to Whole Band) never retunes the
+  // SDR, so the view's geometric center is a display concept, not "the
+  // frequency we're on." This box means the latter.
+  const input = document.getElementById('freq-input');
+  if (document.activeElement === input) return;   // don't fight the user mid-edit
+  if (latestFrame) input.value = (latestFrame.centerFreqHz / 1e6).toFixed(6);
+}
+
+// ── Controls: span / zoom / pan ───────────────────────────
+let viewSpanHz = 15000;
+let viewCenterHz = null;   // null until the first frame arrives
+
+// Slider is 0-1000, mapped log-scale across [SPAN_MIN_HZ, SPAN_MAX_HZ]
+function spanFromSlider(v) {
+  const t = v / 1000;
+  return SPAN_MIN_HZ * Math.pow(SPAN_MAX_HZ / SPAN_MIN_HZ, t);
+}
+function sliderFromSpan(hz) {
+  const t = Math.log(hz / SPAN_MIN_HZ) / Math.log(SPAN_MAX_HZ / SPAN_MIN_HZ);
+  return Math.round(t * 1000);
+}
+
+function setViewSpan(hz) {
+  viewSpanHz = Math.max(SPAN_MIN_HZ, Math.min(SPAN_MAX_HZ, hz));
+  document.getElementById('span-slider').value = sliderFromSpan(viewSpanHz);
+  updateSpanLabel();
+}
+
+function updateSpanLabel() {
+  const el = document.getElementById('span-val');
+  el.textContent = viewSpanHz >= 1e6 ? (viewSpanHz / 1e6).toFixed(2) + ' MHz'
+                                      : (viewSpanHz / 1e3).toFixed(2) + ' kHz';
+}
+
+function onSpanSlider(v) {
+  viewSpanHz = spanFromSlider(parseInt(v));
+  updateSpanLabel();
+}
+
+// Tune the radio (and, if necessary, the SDR's capture center) to freqHz,
+// then recenter the view there — this is what "selecting" a frequency means.
+function tuneTo(freqHz) {
+  freqHz = Math.round(freqHz);
+  send({ cmd: 'set_frequency', freq_hz: freqHz });
+
+  const band = bandForFrequency(freqHz);
+  const mode = modeForFrequency(freqHz, band);
+  if (mode) send({ cmd: 'set_mode', mode, passband: 0 });
+
+  viewCenterHz = freqHz;
+  if (latestFrame) {
+    const margin = viewSpanHz / 2;
+    const lo = latestFrame.centerFreqHz - latestFrame.spanHz / 2 + margin;
+    const hi = latestFrame.centerFreqHz + latestFrame.spanHz / 2 - margin;
+    if (freqHz < lo || freqHz > hi) {
+      // Target is outside the SDR's current capture window — it needs to
+      // physically retune. That takes a moment; freeze rendering (same
+      // pattern as the TX freeze) until a frame confirms the SDR caught up,
+      // rather than cropping the view against a now-stale capture window.
+      send({ cmd: 'set_panadapter_freq', freq_hz: freqHz });
+      pendingRetuneHz = freqHz;
+    }
+  }
+  // No clampViewToCapture() here — that's for drag-to-pan within an
+  // unchanged capture window, not for a deliberate tune that may itself be
+  // moving that window.
+}
+
+function snapToWholeBand() {
+  const edges = BAND_EDGES_HZ[rigBand];
+  if (!edges) return;
+  const [lo, hi] = edges;
+  setViewSpan(Math.min(hi - lo, SPAN_MAX_HZ));
+  viewCenterHz = (lo + hi) / 2;
+}
+
+// Scroll-to-zoom + drag-to-pan directly on the spectrum canvas.
+// Shift+scroll instead fine-tunes the audio listening frequency in small
+// steps — mouse-position resolution alone can't land precisely on a
+// suppressed SSB carrier, and dragging isn't fine-grained enough either.
+const spectrumWrap = document.getElementById('spectrum-wrap');
+let audioFineTuneHz = 0;
+spectrumWrap.addEventListener('wheel', evt => {
+  evt.preventDefault();
+  if (evt.shiftKey) {
+    audioFineTuneHz += (evt.deltaY > 0 ? -10 : 10);
+    onCursorMovedForAudio(true);
+    return;
+  }
+  const factor = evt.deltaY > 0 ? 1.15 : (1 / 1.15);
+  setViewSpan(viewSpanHz * factor);
+}, { passive: false });
+
+// Cursor crosshair: follows the mouse while hovering the spectrum, shows
+// the frequency under it, and simply stops updating (freezes in place)
+// once the cursor leaves — there's no other way to read off a signal's
+// frequency otherwise. audioListenFreqHz includes the fine-tune offset;
+// cursorFreqHz stays the raw mouse-tracked position.
+let cursorFreqHz = null;
+let audioLocked = false;
+
+function audioListenFreqHz() {
+  return cursorFreqHz === null ? null : cursorFreqHz + audioFineTuneHz;
+}
+
+// Hover/lock work the same way over the waterfall as the spectrum line —
+// they're one continuous frequency axis, just two displays of it. Each
+// listener uses ITS OWN element's bounding rect (not a shared parent's),
+// since the outer .spectrum-wrap container has padding that would skew
+// the pixel-to-frequency math if used directly.
+function attachHoverAudio(el) {
+  // Right-click freezes the cursor/audio at the current frequency (so you
+  // can let go of the mouse without losing the signal); left-click resumes
+  // normal hover tracking. Browser's own context menu is suppressed.
+  el.addEventListener('contextmenu', evt => {
+    evt.preventDefault();
+    audioLocked = true;
+  });
+
+  el.addEventListener('mousemove', evt => {
+    if (viewCenterHz === null || audioLocked) return;
+    const rect = el.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    cursorFreqHz = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
+    onCursorMovedForAudio();
+  });
+
+  el.addEventListener('mouseleave', () => {
+    if (audioLocked) return;   // stay live — that's the whole point of locking
+    audioEnabled = false;
+    send({ cmd: 'set_audio_enabled', enabled: false });
+  });
+
+  el.addEventListener('mousedown', evt => {
+    if (evt.button === 0 && audioLocked) audioLocked = false;   // left-click unlocks
+  });
+}
+attachHoverAudio(spectrumWrap);
+attachHoverAudio(document.getElementById('waterfall-wrap'));
+
+// ── Hover-to-listen audio ──────────────────────────────────
+// Demodulates whatever's under the cursor, live, while hovering — separate
+// from click-to-tune (which commits the radio). Audio plays only while
+// actively hovering; leaving the spectrum mutes it (no sensible "frozen"
+// state for audio the way there is for the visual crosshair).
+let audioCtx = null;
+let audioWs = null;
+let audioPlayhead = 0;
+let audioEnabled = false;
+let lastAudioSendMs = 0;
+let lastAudioFreqHz = null;
+
+function bandwidthForMode(mode) {
+  if (mode === 'CW') return 300;
+  if (mode === 'PKTUSB') return 50;   // FT8 and friends — narrow calling tones
+  // SSB: reuse whatever NAR/WID/WIDTH the operator has dialed in on the
+  // rig (rig.passband_hz) — same receive-selectivity control they already
+  // use, applied uniformly regardless of where on the band we're listening.
+  return (rigPassbandHz && rigPassbandHz > 0) ? rigPassbandHz : 2400;
+}
+
+function sidebandForFrequency(freqHz) {
+  return freqHz < 10_000_000 ? 'LSB' : 'USB';
+}
+
+function ensureAudioWs() {
+  if (audioWs && audioWs.readyState <= WebSocket.OPEN) return;
+  audioWs = new WebSocket(`ws://${location.host}/ws/audio`);
+  audioWs.binaryType = 'arraybuffer';
+  audioWs.onmessage = evt => {
+    if (!audioCtx) return;
+    const pcm16 = new Int16Array(evt.data);
+    const buf = audioCtx.createBuffer(1, pcm16.length, 16000);
+    const chan = buf.getChannelData(0);
+    for (let i = 0; i < pcm16.length; i++) chan[i] = pcm16[i] / 32768;
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    if (audioPlayhead < now) audioPlayhead = now + 0.05;   // fell behind — resync with a small buffer
+    src.start(audioPlayhead);
+    audioPlayhead += buf.duration;
+  };
+}
+
+function onCursorMovedForAudio(force) {
+  const freqHz = audioListenFreqHz();
+  if (freqHz === null) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioEnabled) {
+    audioEnabled = true;
+    audioPlayhead = audioCtx.currentTime + 0.1;
+    ensureAudioWs();
+    send({ cmd: 'set_audio_enabled', enabled: true });
+  }
+  const now = performance.now();
+  const movedEnough = lastAudioFreqHz === null || Math.abs(freqHz - lastAudioFreqHz) > 5;
+  if (!force && now - lastAudioSendMs < 100 && !movedEnough) return;   // throttle — avoid flooding the WS
+  lastAudioSendMs = now;
+  lastAudioFreqHz = freqHz;
+  // detectedMode (CW/PKTUSB/LSB/USB) picks the bandwidth; the demodulator
+  // itself only implements LSB/USB sideband filtering, so that's always
+  // what gets sent as `mode` regardless of which one picked the bandwidth.
+  const detectedMode = modeForFrequency(freqHz, bandForFrequency(freqHz));
+  const demodSideband = sidebandForFrequency(freqHz);
+  send({
+    cmd: 'set_audio_target',
+    freq_hz: freqHz,
+    mode: demodSideband,
+    bandwidth_hz: bandwidthForMode(detectedMode || demodSideband),
+  });
+}
+
+spectrumWrap.addEventListener('mouseleave', () => {
+  if (audioLocked) return;   // stay live — that's the whole point of locking
+  audioEnabled = false;
+  send({ cmd: 'set_audio_enabled', enabled: false });
+});
+
+let dragging = false, dragMoved = false, dragStartX = 0, dragStartCenter = 0;
+spectrumWrap.addEventListener('mousedown', evt => {
+  if (evt.button !== 0) return;   // only the left button drives drag/click-to-tune
+  if (audioLocked) {
+    audioLocked = false;   // left-click while locked just unlocks
+    return;
+  }
+  dragging = true;
+  dragMoved = false;
+  dragStartX = evt.clientX;
+  dragStartCenter = viewCenterHz || 0;
+  spectrumWrap.classList.add('dragging');
+});
+window.addEventListener('mouseup', evt => {
+  if (dragging && !dragMoved && latestFrame && viewCenterHz !== null) {
+    // No real drag occurred — treat as click-to-tune at this position.
+    const rect = spectrumWrap.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    const freqHz = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
+    tuneTo(freqHz);
+  }
+  dragging = false;
+  spectrumWrap.classList.remove('dragging');
+});
+window.addEventListener('mousemove', evt => {
+  if (!dragging || !latestFrame) return;
+  const dx = evt.clientX - dragStartX;
+  if (Math.abs(dx) > 3) dragMoved = true;
+  if (!dragMoved) return;
+  const rect = spectrumWrap.getBoundingClientRect();
+  const hzPerPx = viewSpanHz / rect.width;
+  viewCenterHz = dragStartCenter - dx * hzPerPx;
+  clampViewToCapture();
+});
+
+function clampViewToCapture() {
+  if (!latestFrame || viewCenterHz === null) return;
+  const lo = latestFrame.centerFreqHz - latestFrame.spanHz / 2 + viewSpanHz / 2;
+  const hi = latestFrame.centerFreqHz + latestFrame.spanHz / 2 - viewSpanHz / 2;
+  if (lo <= hi) viewCenterHz = Math.max(lo, Math.min(hi, viewCenterHz));
+  else viewCenterHz = latestFrame.centerFreqHz;
+}
+
+// True if the current view window actually overlaps real data in this
+// frame's capture window. False means the view and the capture have
+// diverged (e.g. a server restart silently reset the SDR's center) and the
+// crop would degenerate to a clamped sliver instead of real content.
+function isViewWithinCapture(frame) {
+  const capLo = frame.centerFreqHz - frame.spanHz / 2;
+  const capHi = frame.centerFreqHz + frame.spanHz / 2;
+  const viewLo = viewCenterHz - viewSpanHz / 2;
+  const viewHi = viewCenterHz + viewSpanHz / 2;
+  return viewHi > capLo && viewLo < capHi;
+}
+
+// ── Crop + decimate the full-capture frame to the current view ──
+function cropToView(frame, outPoints) {
+  const n = frame.data.length;
+  const binHz = frame.spanHz / n;
+  const fullLoHz = frame.centerFreqHz - frame.spanHz / 2;
+  const viewLoHz = viewCenterHz - viewSpanHz / 2;
+  const viewHiHz = viewCenterHz + viewSpanHz / 2;
+
+  let startBin = Math.floor((viewLoHz - fullLoHz) / binHz);
+  let endBin = Math.ceil((viewHiHz - fullLoHz) / binHz);
+  startBin = Math.max(0, Math.min(n - 1, startBin));
+  endBin = Math.max(startBin + 1, Math.min(n, endBin));
+  const span = endBin - startBin;
+
+  const out = new Float32Array(outPoints);
+  for (let i = 0; i < outPoints; i++) {
+    const srcIdx = startBin + Math.floor((i / outPoints) * span);
+    out[i] = frame.data[Math.min(n - 1, srcIdx)];
+  }
+  return out;
+}
+
+// ── Spectrum line rendering ────────────────────────────────
+const canvas = document.getElementById('spectrum-canvas');
+const ctx = canvas.getContext('2d');
+
+// Adaptive display range — auto-calibrates to the actual noise floor/peak
+// each frame (band conditions, gain, and antenna all shift the real dB
+// range, so a fixed guess clips or wastes most of the visible height).
+// Uses percentiles rather than literal min/max — a handful of bins that
+// happen to read unusually low (FFT/windowing artifacts, nulls) aren't
+// statistically representative of "the noise floor" and shouldn't be able
+// to drag the whole calibration down by themselves.
+let floorDb = -110, ceilDb = -40;
+function updateDbRange(data) {
+  const sorted = Array.from(data).sort((a, b) => a - b);
+  const p10 = sorted[Math.floor(0.10 * (sorted.length - 1))];
+  const p999 = sorted[Math.floor(0.999 * (sorted.length - 1))];
+  if (!isFinite(p10) || !isFinite(p999)) return;
+  const alpha = 0.05;   // slow smoothing so the range doesn't jitter frame to frame
+  floorDb += ((p10 - 3) - floorDb) * alpha;
+  ceilDb += ((p999 + 5) - ceilDb) * alpha;
+}
+
+// ── Manual calibration (Floor/Gain/Auto), matching commercial SDR controls ──
+let autoScale = true;
+let manualFloorDb = -90;
+let manualRangeDb = 80;   // smaller range = more "gain"/contrast
+
+function effectiveFloorCeil() {
+  return autoScale ? [floorDb, ceilDb] : [manualFloorDb, manualFloorDb + manualRangeDb];
+}
+
+function onAutoScaleToggle(checked) {
+  autoScale = checked;
+  document.getElementById('floor-slider').disabled = checked;
+  document.getElementById('gain-slider').disabled = checked;
+}
+
+function onFloorSlider(v) {
+  manualFloorDb = parseFloat(v);
+  document.getElementById('floor-val').textContent = manualFloorDb.toFixed(0) + ' dB';
+}
+
+// Marks the current view's center frequency — drawn on top of the data so
+// it stays visible regardless of signal strength there. Used as an
+// alignment reference: pan a signal onto this line, then zoom in on it.
+function drawCenterline(c, w, h) {
+  c.save();
+  c.strokeStyle = 'rgba(255, 214, 10, 0.55)';
+  c.lineWidth = 1;
+  c.setLineDash([4, 4]);
+  c.beginPath();
+  c.moveTo(w / 2, 0);
+  c.lineTo(w / 2, h);
+  c.stroke();
+  c.restore();
+}
+
+function onGainSlider(v) {
+  // Slider is 0-100, higher = more gain = smaller dB range mapped to the
+  // full color/height range (steeper response = more visual contrast).
+  const g = parseFloat(v);
+  manualRangeDb = 150 - (g / 100) * 140;   // 150dB (low gain) down to 10dB (high gain)
+  document.getElementById('gain-val').textContent = manualRangeDb.toFixed(0) + ' dB range';
+}
+
+function drawSpectrum() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(1, rect.width * dpr), h = Math.max(1, rect.height * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  ctx.clearRect(0, 0, w, h);
+
+  if (latestFrame && viewCenterHz !== null) {
+    document.getElementById('axis-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4) + ' MHz';
+    document.getElementById('axis-center').textContent = (viewCenterHz / 1e6).toFixed(4) + ' MHz';
+    document.getElementById('axis-hi').textContent = ((viewCenterHz + viewSpanHz / 2) / 1e6).toFixed(4) + ' MHz';
+    updateFreqInputDisplay();
+
+    const points = cropToView(latestFrame, Math.round(w));
+    // Calibrate from what's actually visible right now, not the full ~2MHz
+    // capture — a quieter spot elsewhere in the capture would otherwise drag
+    // the floor below what's relevant to the current zoomed-in view.
+    if (autoScale) updateDbRange(points);
+    const [floor, ceil] = effectiveFloorCeil();
+
+    ctx.strokeStyle = '#00d4ff';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < points.length; i++) {
+      const x = (i / (points.length - 1)) * w;
+      const pct = Math.max(0, Math.min(1, (points[i] - floor) / (ceil - floor)));
+      const y = h - pct * h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    drawCenterline(ctx, w, h);
+    drawCursorCrosshair(ctx, w, h, dpr);
+  }
+
+  requestAnimationFrame(drawSpectrum);
+}
+
+function drawCursorCrosshair(c, w, h, dpr) {
+  if (cursorFreqHz === null || viewCenterHz === null) return;
+  const listenFreqHz = audioListenFreqHz();
+  const cx = ((listenFreqHz - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+  if (cx < 0 || cx > w) return;   // panned/zoomed away from where it was hovering
+
+  c.save();
+  c.strokeStyle = audioLocked ? 'rgba(255, 80, 80, 0.75)' : 'rgba(255, 255, 255, 0.55)';
+  c.lineWidth = 1;
+  c.beginPath();
+  c.moveTo(cx, 0);
+  c.lineTo(cx, h);
+  c.stroke();
+
+  let label = (listenFreqHz / 1e6).toFixed(4) + ' MHz';
+  if (audioFineTuneHz !== 0) label += ` (${audioFineTuneHz > 0 ? '+' : ''}${audioFineTuneHz}Hz)`;
+  if (audioLocked) label += ' [LOCKED]';
+  c.font = `${12 * dpr}px monospace`;
+  c.fillStyle = audioLocked ? '#ff5050' : '#ffffff';
+  const labelW = c.measureText(label).width;
+  const labelX = (cx + labelW + 6 > w) ? cx - labelW - 6 : cx + 6;
+  c.fillText(label, labelX, 14 * dpr);
+  c.restore();
+}
+
+// ── Waterfall rendering ─────────────────────────────────────
+const wfCanvas = document.getElementById('waterfall-canvas');
+const wfCtx = wfCanvas.getContext('2d');
+
+const PALETTES = {
+  default: [   // black -> blue -> cyan -> green -> yellow -> red
+    [0.00, 0, 0, 0],
+    [0.20, 0, 0, 130],
+    [0.40, 0, 180, 200],
+    [0.60, 0, 220, 60],
+    [0.80, 255, 220, 0],
+    [1.00, 255, 30, 30],
+  ],
+  linrad: [   // approximation only — not verified against real Linrad output
+    [0.00, 0, 0, 0],
+    [0.15, 0, 0, 80],
+    [0.35, 0, 0, 255],
+    [0.55, 0, 255, 255],
+    [0.70, 0, 255, 0],
+    [0.85, 255, 255, 0],
+    [0.95, 255, 0, 0],
+    [1.00, 255, 255, 255],
+  ],
+};
+let currentPalette = 'default';
+function onPaletteSelect(v) { currentPalette = v; }
+
+function dbToColor(db, floor, ceil) {
+  const pct = Math.max(0, Math.min(1, (db - floor) / (ceil - floor)));
+  const stops = PALETTES[currentPalette] || PALETTES.default;
+  for (let i = 1; i < stops.length; i++) {
+    if (pct <= stops[i][0]) {
+      const [p0, r0, g0, b0] = stops[i - 1];
+      const [p1, r1, g1, b1] = stops[i];
+      const t = (pct - p0) / (p1 - p0 || 1);
+      return [r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t];
+    }
+  }
+  return stops[stops.length - 1].slice(1);
+}
+
+function ensureWfCanvasSize() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = wfCanvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * dpr)), h = Math.max(1, Math.round(rect.height * dpr));
+  if (wfCanvas.width !== w || wfCanvas.height !== h) {
+    wfCanvas.width = w;
+    wfCanvas.height = h;
+  }
+  return { w, h };
+}
+
+function pushWaterfallRow(frame) {
+  const { w, h } = ensureWfCanvasSize();
+  if (h < 2) return;
+  const img = wfCtx.getImageData(0, 0, w, h - 1);
+  wfCtx.putImageData(img, 0, 1);
+
+  const points = cropToView(frame, w);
+  const [floor, ceil] = effectiveFloorCeil();
+  const row = wfCtx.createImageData(w, 1);
+  for (let x = 0; x < w; x++) {
+    const [r, g, b] = dbToColor(points[x], floor, ceil);
+    row.data[x * 4 + 0] = r;
+    row.data[x * 4 + 1] = g;
+    row.data[x * 4 + 2] = b;
+    row.data[x * 4 + 3] = 255;
+  }
+  wfCtx.putImageData(row, 0, 0);
+  drawCenterline(wfCtx, w, h);
+}
+
+function pushWaterfallTxRow() {
+  const { w, h } = ensureWfCanvasSize();
+  if (h < 2) return;
+  const img = wfCtx.getImageData(0, 0, w, h - 1);
+  wfCtx.putImageData(img, 0, 1);
+  const row = wfCtx.createImageData(w, 1);
+  for (let x = 0; x < w; x++) {
+    row.data[x * 4 + 0] = 90; row.data[x * 4 + 1] = 50; row.data[x * 4 + 2] = 0; row.data[x * 4 + 3] = 255;
+  }
+  wfCtx.putImageData(row, 0, 0);
+  drawCenterline(wfCtx, w, h);
+}
+
+connectWs();
+connectSpectrumWs();
+updateSpanLabel();
+requestAnimationFrame(drawSpectrum);
+</script>
+</body>
+</html>

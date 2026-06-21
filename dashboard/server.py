@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from amplifier.acom_bridge import AcomBridge, OperatingMode, StationState
 from amplifier.acom_serial import AcomSerial, find_acom_port
 from rig.rigctld_client import RigctldClient
+from sdr.sdr_client import SdrClient
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +72,95 @@ class ConnectionManager:
                 self.active.remove(ws)
 
 
+class SpectrumConnectionManager:
+    """
+    Separate from ConnectionManager: spectrum frames are far larger and
+    more frequent than state broadcasts, and it's correct to drop a frame
+    to a slow client rather than block — never appropriate for `state`.
+    """
+    def __init__(self):
+        self.active: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active.append(ws)
+        logger.info(f"Spectrum WebSocket connected. Total: {len(self.active)}")
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.active:
+            self.active.remove(ws)
+        logger.info(f"Spectrum WebSocket disconnected. Total: {len(self.active)}")
+
+    async def broadcast_frame(self, frame: dict):
+        if not self.active:
+            return
+        header = json.dumps({
+            "type": "spectrum",
+            "ts": frame["ts"],
+            "center_freq_hz": frame["center_freq_hz"],
+            "span_hz": frame["span_hz"],
+            "sample_rate_hz": frame["sample_rate_hz"],
+            "bin_count": len(frame["data"]),
+        })
+        payload = frame["data"].astype("float32").tobytes()
+        dead = []
+        for ws in self.active:
+            try:
+                await asyncio.wait_for(ws.send_text(header), timeout=0.05)
+                await asyncio.wait_for(ws.send_bytes(payload), timeout=0.05)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            if ws in self.active:
+                self.active.remove(ws)
+
+
+class AudioConnectionManager:
+    """Live PCM audio — drop-if-slow like spectrum, never buffer stale audio."""
+    def __init__(self):
+        self.active: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active.append(ws)
+        logger.info(f"Audio WebSocket connected. Total: {len(self.active)}")
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.active:
+            self.active.remove(ws)
+        logger.info(f"Audio WebSocket disconnected. Total: {len(self.active)}")
+
+    async def broadcast_audio(self, audio_bytes: bytes):
+        if not self.active:
+            return
+        dead = []
+        for ws in self.active:
+            try:
+                await asyncio.wait_for(ws.send_bytes(audio_bytes), timeout=0.05)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            if ws in self.active:
+                self.active.remove(ws)
+
+
 manager = ConnectionManager()
+spectrum_manager = SpectrumConnectionManager()
+audio_manager = AudioConnectionManager()
 bridge: Optional[AcomBridge] = None
+sdr: Optional[SdrClient] = None
 
 
 async def on_station_state(state: StationState):
     await manager.broadcast({"type": "state", "data": state.to_dict()})
+
+
+async def on_spectrum_frame(frame: dict):
+    await spectrum_manager.broadcast_frame(frame)
+
+
+async def on_audio_frame(audio_bytes: bytes):
+    await audio_manager.broadcast_audio(audio_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +169,7 @@ async def on_station_state(state: StationState):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bridge
+    global bridge, sdr
     logger.info("Starting W7TLG Console...")
 
     rig = RigctldClient(host=RIGCTLD_HOST, port=RIGCTLD_PORT, poll_interval=0.5)
@@ -99,11 +183,31 @@ async def lifespan(app: FastAPI):
     bridge = AcomBridge(rig=rig, amp=amp, state_file=THERMAL_STATE)
     bridge.on_state_change(on_station_state)
     await bridge.start()
+
+    # Wait briefly for rigctld to report the radio's actual current
+    # frequency so the panadapter starts there instead of an arbitrary
+    # default — rig.start() only kicks off the poll loop, it doesn't block
+    # until the first poll completes.
+    initial_freq_hz = None
+    for _ in range(20):
+        if rig.state.connected and rig.state.freq_hz:
+            initial_freq_hz = float(rig.state.freq_hz)
+            break
+        await asyncio.sleep(0.1)
+
+    sdr = SdrClient(rf_freq_hz=initial_freq_hz) if initial_freq_hz else SdrClient()
+    sdr.on_spectrum(on_spectrum_frame)
+    sdr.audio.on_audio(on_audio_frame)
+    await sdr.start()
+    if not sdr.available:
+        logger.warning("SDR unavailable — panadapter features disabled.")
+
     logger.info("W7TLG Console running")
 
     yield
 
     logger.info("Shutting down...")
+    await sdr.stop()
     await bridge.stop()
 
 
@@ -303,6 +407,32 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "trend_data", **trend}))
 
+        elif cmd == "set_panadapter_freq":
+            ok = False
+            if sdr is not None and sdr.available:
+                sdr.set_center_freq_hz(float(msg["freq_hz"]))
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_audio_target":
+            ok = False
+            if sdr is not None and sdr.available:
+                sdr.audio.target_freq_hz = float(msg["freq_hz"])
+                sdr.audio.mode = msg.get("mode", "USB")
+                sdr.audio.bandwidth_hz = float(msg.get("bandwidth_hz", 2400))
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_audio_enabled":
+            ok = False
+            if sdr is not None and sdr.available:
+                sdr.audio.enabled = bool(msg["enabled"])
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
         else:
             await ws.send_text(json.dumps({
                 "type": "error", "message": f"Unknown command: {cmd}"}))
@@ -329,4 +459,31 @@ async def monitor():
     if html_path.exists():
         return HTMLResponse(html_path.read_text())
     return HTMLResponse("<h1>Monitor HTML not found</h1>")
+
+@app.get("/panadapter", response_class=HTMLResponse)
+async def panadapter():
+    html_path = Path(__file__).parent / "panadapter.html"
+    if html_path.exists():
+        return HTMLResponse(html_path.read_text())
+    return HTMLResponse("<h1>Panadapter HTML not found</h1>")
+
+
+@app.websocket("/ws/spectrum")
+async def spectrum_websocket(websocket: WebSocket):
+    await spectrum_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        spectrum_manager.disconnect(websocket)
+
+
+@app.websocket("/ws/audio")
+async def audio_websocket(websocket: WebSocket):
+    await audio_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        audio_manager.disconnect(websocket)
 
