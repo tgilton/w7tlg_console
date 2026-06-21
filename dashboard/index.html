@@ -689,6 +689,63 @@ input[type=range]::-webkit-slider-thumb:active {
 .flex1 { flex: 1; }
 .muted { color: var(--muted); }
 .mono { font-family: var(--mono); }
+
+/* ── Modal ───────────────────────────────────────────────── */
+.modal-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.modal-overlay.visible { display: flex; }
+.modal-box {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 20px 22px;
+  max-width: 360px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.modal-title {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--amber);
+  margin-bottom: 12px;
+  letter-spacing: 0.04em;
+}
+.modal-body {
+  font-size: 0.8rem;
+  color: var(--text);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+.modal-body .check-item { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+.modal-body .check-item input[type=checkbox] { margin-top: 2px; accent-color: var(--cyan); cursor: pointer; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+#modal-confirm:disabled { cursor: not-allowed; }
+
+/* ── Toast ───────────────────────────────────────────────── */
+.toast-stack {
+  position: fixed; bottom: 16px; right: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 1100;
+}
+.toast {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 10px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--red);
+  background: #2a0505;
+  color: #ff8888;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  animation: toast-in 0.15s ease-out;
+  max-width: 320px;
+}
+.toast.info { border-color: var(--cyan); background: #051a2a; color: var(--cyan); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
@@ -1057,28 +1114,86 @@ input[type=range]::-webkit-slider-thumb:active {
 
 </div><!-- .console -->
 
+<!-- ── Modal ──────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-title" id="modal-title"></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn" id="modal-cancel" onclick="hideModal()">Cancel</button>
+      <button class="btn active-amber" id="modal-confirm">Proceed</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toasts ─────────────────────────────────────────────── -->
+<div class="toast-stack" id="toast-stack"></div>
+
 <script>
 var _rfPwrDragging = false;
 var _widthDragging = false;
 'use strict';
 
 // ── WebSocket ─────────────────────────────────────────────
-const ws = new WebSocket(`ws://${location.host}/ws`);
+let ws = null;
 let state = {};
 
-ws.onopen = () => {
-  document.getElementById('conn-dot').className = 'conn-dot ok';
-};
-ws.onclose = () => {
-  document.getElementById('conn-dot').className = 'conn-dot';
-};
-ws.onmessage = evt => {
-  const msg = JSON.parse(evt.data);
-  if (msg.type === 'state') { state = msg.data; updateUI(state); }
-  else if (msg.type === 'cmd_response' && !msg.ok) alert('Error: ' + msg.message);
-};
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
 
-function send(obj) { ws.send(JSON.stringify(obj)); }
+  ws.onopen = () => {
+    document.getElementById('conn-dot').className = 'conn-dot ok';
+  };
+  ws.onclose = () => {
+    document.getElementById('conn-dot').className = 'conn-dot';
+    setTimeout(connectWs, 2000);
+  };
+  ws.onmessage = evt => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'state') { state = msg.data; updateUI(state); }
+    else if (msg.type === 'cmd_response' && !msg.ok) showToast('Error: ' + msg.message, 'error');
+  };
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+connectWs();
+
+// ── Modal / Toast ─────────────────────────────────────────
+function showModal(title, bodyHtml, { confirmLabel = 'Proceed', onConfirm = null, requireChecks = false } = {}) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML = bodyHtml;
+  const confirmBtn = document.getElementById('modal-confirm');
+  confirmBtn.textContent = confirmLabel;
+  confirmBtn.disabled = requireChecks;
+  confirmBtn.style.opacity = requireChecks ? '0.4' : '1';
+  confirmBtn.onclick = () => { hideModal(); if (onConfirm) onConfirm(); };
+
+  if (requireChecks) {
+    const boxes = document.querySelectorAll('#modal-body input[type=checkbox]');
+    boxes.forEach(cb => cb.onchange = () => {
+      const allChecked = [...boxes].every(b => b.checked);
+      confirmBtn.disabled = !allChecked;
+      confirmBtn.style.opacity = allChecked ? '1' : '0.4';
+    });
+  }
+  document.getElementById('modal-overlay').classList.add('visible');
+}
+
+function hideModal() {
+  document.getElementById('modal-overlay').classList.remove('visible');
+}
+
+function showToast(message, type = 'error') {
+  const stack = document.getElementById('toast-stack');
+  const el = document.createElement('div');
+  el.className = 'toast' + (type === 'info' ? ' info' : '');
+  el.textContent = message;
+  stack.appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
 
 // ── Clock ─────────────────────────────────────────────────
 setInterval(() => {
@@ -1504,14 +1619,16 @@ function setComp(val) {
 }
 
 function confirmAmpOn() {
-  if (confirm(
-    'AMP ON — confirm before proceeding:\n\n' +
-    '✓  Antenna is connected and matched\n' +
-    '✓  ATU is tuned for current band\n' +
-    '✓  Band is clear\n' +
-    '✓  RF power will be capped to 40W\n\n' +
-    'Proceed?'
-  )) send({ cmd: 'set_mode_op', mode: 'AMP_ON', confirmed: true });
+  showModal('AMP ON — Confirm Before Proceeding', `
+    <div class="check-item"><input type="checkbox"><span>Antenna is connected and matched</span></div>
+    <div class="check-item"><input type="checkbox"><span>ATU is tuned for current band</span></div>
+    <div class="check-item"><input type="checkbox"><span>Band is clear</span></div>
+    <div class="check-item"><input type="checkbox"><span>RF power will be capped to 40W</span></div>
+  `, {
+    confirmLabel: 'AMP ON',
+    requireChecks: true,
+    onConfirm: () => send({ cmd: 'set_mode_op', mode: 'AMP_ON', confirmed: true })
+  });
 }
 
 function selectAnt(n) { send({ cmd: 'select_antenna', antenna: n }); }
@@ -1623,11 +1740,13 @@ function updateDSP(s) {
 }
 
 function clearThermal(n) {
-  if (confirm(
-    `Confirm antenna ${n} has fully cooled.\n` +
-    `Consider: time since inhibit, ambient temperature,\n` +
-    `how hard it was driven.\n\nRe-enable antenna ${n}?`
-  )) send({ cmd: 'clear_thermal', antenna: n });
+  showModal(`Clear Thermal Inhibit — Antenna ${n}`, `
+    <p>Confirm antenna ${n} has fully cooled. Consider: time since inhibit,
+    ambient temperature, how hard it was driven.</p>
+  `, {
+    confirmLabel: 'Re-enable',
+    onConfirm: () => send({ cmd: 'clear_thermal', antenna: n })
+  });
 }
 </script>
 </body>
