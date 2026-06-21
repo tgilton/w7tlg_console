@@ -117,6 +117,9 @@ These applications share the FT-991A via rigctld and communicate with each other
     +-- config/
     +-- tests/
     +-- README.md
+    +-- ARCHITECTURE.md
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for internal design: data flow, module responsibilities, safety interlocks, and known limitations.
 
 ## License
 
