@@ -20,6 +20,7 @@ import asyncio
 import logging
 import queue
 import threading
+import time
 from collections.abc import Callable, Coroutine
 from typing import Optional
 
@@ -47,15 +48,26 @@ class AudioDemodulator:
         self.mode = "USB"          # USB | LSB
         self.bandwidth_hz = 2800.0
         self.agc_gain = 1.0
+        self.tx_active = False
+        self._was_tx_active = False
+        self.dropped_count = 0
 
-        self._q: "queue.Queue" = queue.Queue(maxsize=64)
+        # Same reasoning as SdrClient's spectrum queue: a small queue gives
+        # almost no headroom against ordinary thread-scheduling/GIL jitter.
+        self._q: "queue.Queue" = queue.Queue(maxsize=512)
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._audio_callbacks: list[AudioCallback] = []
         self._sample_counter = 0
-        self._acc_i = np.empty(0, dtype=np.int16)
-        self._acc_q = np.empty(0, dtype=np.int16)
+        # Pre-allocated and written via slice assignment, not concatenate —
+        # concatenate-and-grow recopies the whole accumulated buffer on
+        # every single native callback, which turned into the real
+        # bottleneck once measured (see _run): O(batch size) per chunk
+        # instead of O(chunk size).
+        self._acc_i = np.empty(self.batch_samples, dtype=np.int16)
+        self._acc_q = np.empty(self.batch_samples, dtype=np.int16)
+        self._acc_len = 0
 
         self._ssb_filter: Optional[np.ndarray] = None
         self._ssb_filter_key = None
@@ -74,6 +86,7 @@ class AudioDemodulator:
         try:
             self._q.put_nowait((xi, xq))
         except queue.Full:
+            self.dropped_count += 1
             try:
                 self._q.get_nowait()
             except queue.Empty:
@@ -87,13 +100,15 @@ class AudioDemodulator:
         self._loop = loop
         self._stop_event.clear()
         self._sample_counter = 0
-        self._acc_i = np.empty(0, dtype=np.int16)
-        self._acc_q = np.empty(0, dtype=np.int16)
+        self._acc_i = np.empty(self.batch_samples, dtype=np.int16)
+        self._acc_q = np.empty(self.batch_samples, dtype=np.int16)
+        self._acc_len = 0
         self._ssb_filter = None
         self._ssb_filter_key = None
         self._ssb_overlap = None
         self._decim_overlap = np.zeros(len(self._decim_filter) - 1, dtype=np.complex64)
         self.agc_gain = 1.0
+        self._was_tx_active = False
         self._thread = threading.Thread(target=self._run, name="sdr-audio", daemon=True)
         self._thread.start()
 
@@ -141,33 +156,71 @@ class AudioDemodulator:
         return shifted.astype(np.complex64)
 
     def _run(self):
+        next_drop_log = time.monotonic() + 5.0
+        last_logged_drops = 0
         while not self._stop_event.is_set():
+            now_check = time.monotonic()
+            if now_check >= next_drop_log:
+                if self.dropped_count != last_logged_drops:
+                    logger.warning(
+                        f"Audio queue drops: {self.dropped_count} total "
+                        f"(+{self.dropped_count - last_logged_drops} in last 5s)")
+                    last_logged_drops = self.dropped_count
+                next_drop_log = now_check + 5.0
             try:
                 xi, xq = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            self._acc_i = np.concatenate([self._acc_i, xi])
-            self._acc_q = np.concatenate([self._acc_q, xq])
-            if len(self._acc_i) < self.batch_samples:
+
+            if self.tx_active:
+                # SDR Switch disconnects the antenna during TX — this IQ is
+                # disconnected-input noise, not a real signal. Feeding it
+                # through would perturb the AGC's slow RMS gain and the
+                # filters' overlap-save state for the whole transmission.
+                # Drop it, and reset state on the falling edge so the next
+                # RX batch isn't convolved against stale pre-TX history.
+                self._was_tx_active = True
+                continue
+            if self._was_tx_active:
+                self._was_tx_active = False
+                self._acc_len = 0
+                self._decim_overlap = np.zeros(len(self._decim_filter) - 1, dtype=np.complex64)
+                if self._ssb_filter is not None:
+                    self._ssb_overlap = np.zeros(len(self._ssb_filter) - 1, dtype=np.complex64)
                 continue
 
-            block_i, self._acc_i = self._acc_i[:self.batch_samples], self._acc_i[self.batch_samples:]
-            block_q, self._acc_q = self._acc_q[:self.batch_samples], self._acc_q[self.batch_samples:]
+            # Write directly into the pre-allocated buffer (slice assignment,
+            # O(chunk size)) rather than concatenate-and-grow. A single
+            # native chunk can in principle complete more than one batch,
+            # so loop rather than assume at most one.
+            pos = 0
+            n = len(xi)
+            while pos < n:
+                space = self.batch_samples - self._acc_len
+                take = min(space, n - pos)
+                self._acc_i[self._acc_len:self._acc_len + take] = xi[pos:pos + take]
+                self._acc_q[self._acc_len:self._acc_len + take] = xq[pos:pos + take]
+                self._acc_len += take
+                pos += take
 
-            if self.target_freq_hz is None or self.rf_center_hz is None:
-                self._sample_counter += self.batch_samples
-                continue
+                if self._acc_len < self.batch_samples:
+                    break
 
-            try:
-                audio_bytes = self._process(block_i, block_q)
-            except Exception:
-                logger.exception("Audio demod error")
-                continue
-            if audio_bytes is not None and self._loop is not None:
+                self._acc_len = 0
+                if self.target_freq_hz is None or self.rf_center_hz is None:
+                    self._sample_counter += self.batch_samples
+                    continue
+
                 try:
-                    asyncio.run_coroutine_threadsafe(self._publish(audio_bytes), self._loop)
-                except RuntimeError:
-                    pass   # loop closing/closed during shutdown
+                    audio_bytes = self._process(self._acc_i, self._acc_q)
+                except Exception:
+                    logger.exception("Audio demod error")
+                    continue
+                if audio_bytes is not None and self._loop is not None:
+                    try:
+                        asyncio.run_coroutine_threadsafe(self._publish(audio_bytes), self._loop)
+                    except RuntimeError:
+                        pass   # loop closing/closed during shutdown
 
     def _process(self, block_i: np.ndarray, block_q: np.ndarray) -> bytes:
         n = len(block_i)

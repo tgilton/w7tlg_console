@@ -166,8 +166,15 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 4px;
   height: 280px;
+  position: relative;
 }
 #waterfall-canvas { width: 100%; height: 100%; display: block; }
+#waterfall-overlay-canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
 </style>
 </head>
 <body>
@@ -193,6 +200,8 @@ html, body {
   <span class="span-val" id="span-val">15.0 kHz</span>
 
   <button class="btn" id="whole-band-btn" onclick="snapToWholeBand()" style="margin-left:8px">Whole Band</button>
+
+  <button class="btn" id="mute-btn" onclick="toggleMute()" style="margin-left:8px">Audio: Muted</button>
 </div>
 
 <div class="controls">
@@ -226,6 +235,7 @@ html, body {
   </div>
   <div class="waterfall-canvas-wrap" id="waterfall-wrap">
     <canvas id="waterfall-canvas"></canvas>
+    <canvas id="waterfall-overlay-canvas"></canvas>
   </div>
 </div>
 
@@ -250,44 +260,6 @@ const BAND_EDGES_HZ = {
 const SPAN_MIN_HZ = 1000;
 const SPAN_MAX_HZ = 2000000;   // full capture width — can't zoom out further without retuning
 
-// Same per-band digital calling frequencies as rig/rigctld_client.py's
-// DIGITAL_FREQS/near_digital_freq (duplicated here — no shared module
-// between Python and this no-build-step vanilla JS).
-const DIGITAL_FREQS_HZ = {
-  '160m': 1840000, '80m': 3573000, '60m': 5357000, '40m': 7074000,
-  '30m': 10136000, '20m': 14074000, '17m': 18100000, '15m': 21074000,
-  '12m': 24915000, '10m': 28074000, '6m': 50313000,
-};
-const DIGITAL_TOLERANCE_HZ = 3000;
-
-// CW/phone segment boundary per band (ARRL band chart). Below the boundary
-// is CW/data; at/above is phone, using the standard sideband convention
-// (LSB below 10MHz, USB above). 30m has no phone segment at all (boundary
-// = band top); 60m is channelized USB and not modeled segment-by-segment.
-const CW_PHONE_BOUNDARY_HZ = {
-  '160m': 1843000, '80m': 3600000, '40m': 7175000, '30m': 10150000,
-  '20m': 14150000, '17m': 18110000, '15m': 21200000, '12m': 24930000,
-  '10m': 28300000, '6m': 50100000,
-};
-
-function bandForFrequency(freqHz) {
-  for (const [band, [lo, hi]] of Object.entries(BAND_EDGES_HZ)) {
-    if (freqHz >= lo && freqHz <= hi) return band;
-  }
-  return null;
-}
-
-function modeForFrequency(freqHz, band) {
-  const digitalFreq = DIGITAL_FREQS_HZ[band];
-  if (digitalFreq !== undefined && Math.abs(freqHz - digitalFreq) < DIGITAL_TOLERANCE_HZ) {
-    return 'PKTUSB';
-  }
-  if (band === '60m') return 'USB';   // channelized — not segment-modeled
-  const boundary = CW_PHONE_BOUNDARY_HZ[band];
-  if (boundary === undefined) return null;
-  if (freqHz < boundary) return 'CW';
-  return freqHz < 10000000 ? 'LSB' : 'USB';
-}
 
 // ── Main /ws — rig/amp state + commands ─────────────────────
 let ws = null;
@@ -297,6 +269,20 @@ let rigMode = null;
 let rigFreqHz = null;
 let rigPassbandHz = null;
 let wholeBandApplied = false;
+
+// Eased copy of rigFreqHz used only for the marker's drawn x-position —
+// rigFreqHz itself only updates once per rig poll (~100ms), so drawing the
+// marker directly at that value made it visibly jump rather than slide as
+// the knob turns. The label text still shows the real rigFreqHz.
+let displayedRigFreqHz = null;
+function updateDisplayedRigFreq() {
+  if (rigFreqHz === null) return;
+  if (displayedRigFreqHz === null || Math.abs(rigFreqHz - displayedRigFreqHz) > 50000) {
+    displayedRigFreqHz = rigFreqHz;   // first frame, or too large a jump to ease (e.g. a retune)
+    return;
+  }
+  displayedRigFreqHz += (rigFreqHz - displayedRigFreqHz) * 0.5;
+}
 
 function connectWs() {
   ws = new WebSocket(`ws://${location.host}/ws`);
@@ -322,6 +308,8 @@ function connectWs() {
         wholeBandApplied = true;
         snapToWholeBand();
       }
+      followRigFrequency();
+      sendAudioTargetFromRig();
       updateSdrBadge();
     }
   };
@@ -454,17 +442,24 @@ function onSpanSlider(v) {
   updateSpanLabel();
 }
 
-// Tune the radio (and, if necessary, the SDR's capture center) to freqHz,
-// then recenter the view there — this is what "selecting" a frequency means.
-function tuneTo(freqHz) {
+// Tune the radio (and, if necessary, the SDR's capture center) to freqHz.
+// recenterView is true for the typed-frequency Tune button — a deliberate
+// jump to somewhere possibly off-screen, worth panning to. Clicking a peak
+// you can already see on the spectrum is the opposite case: the target is
+// by definition already visible, and recentering the view under it just
+// disorients — the marker moving to the click point is feedback enough.
+//
+// Deliberately does NOT touch mode. It used to auto-select a mode from the
+// band-segment convention (CW below the phone boundary, LSB/USB above) —
+// but that silently overrode whatever mode the operator had explicitly
+// chosen, snapping back to CW (and its narrow filter) on the next click
+// into a CW/digital segment. The radio's current mode/NAR-WID setting is
+// ground truth; tuning shouldn't reinterpret it.
+function tuneTo(freqHz, recenterView = true) {
   freqHz = Math.round(freqHz);
   send({ cmd: 'set_frequency', freq_hz: freqHz });
 
-  const band = bandForFrequency(freqHz);
-  const mode = modeForFrequency(freqHz, band);
-  if (mode) send({ cmd: 'set_mode', mode, passband: 0 });
-
-  viewCenterHz = freqHz;
+  if (recenterView) viewCenterHz = freqHz;
   if (latestFrame) {
     const margin = viewSpanHz / 2;
     const lo = latestFrame.centerFreqHz - latestFrame.spanHz / 2 + margin;
@@ -491,156 +486,153 @@ function snapToWholeBand() {
   viewCenterHz = (lo + hi) / 2;
 }
 
+// The radio (knob, band buttons on the main console, etc.) is the ground
+// truth for frequency — this keeps the panadapter following it without
+// fighting manual pan/zoom. Two independent things track rigFreqHz here:
+// the SDR's actual ~2MHz capture window (must be retuned if the knob wanders
+// near/past its edge, same mechanism tuneTo() uses), and the visible view
+// (only recentered once the rig marker nears the edge of what's on screen,
+// not every poll tick — a hybrid between "always follow" and "never follow").
+function followRigFrequency() {
+  if (rigFreqHz === null) return;
+
+  if (latestFrame) {
+    const margin = viewSpanHz / 2;
+    const lo = latestFrame.centerFreqHz - latestFrame.spanHz / 2 + margin;
+    const hi = latestFrame.centerFreqHz + latestFrame.spanHz / 2 - margin;
+    if ((rigFreqHz < lo || rigFreqHz > hi) && pendingRetuneHz === null) {
+      send({ cmd: 'set_panadapter_freq', freq_hz: rigFreqHz });
+      pendingRetuneHz = rigFreqHz;
+    }
+  }
+
+  if (viewCenterHz !== null) {
+    const halfSpan = viewSpanHz / 2;
+    if (Math.abs(rigFreqHz - viewCenterHz) > halfSpan * 0.8) {
+      viewCenterHz = rigFreqHz;
+    }
+  }
+}
+
 // Scroll-to-zoom + drag-to-pan directly on the spectrum canvas.
-// Shift+scroll instead fine-tunes the audio listening frequency in small
-// steps — mouse-position resolution alone can't land precisely on a
-// suppressed SSB carrier, and dragging isn't fine-grained enough either.
 const spectrumWrap = document.getElementById('spectrum-wrap');
-let audioFineTuneHz = 0;
 spectrumWrap.addEventListener('wheel', evt => {
   evt.preventDefault();
-  if (evt.shiftKey) {
-    audioFineTuneHz += (evt.deltaY > 0 ? -10 : 10);
-    onCursorMovedForAudio(true);
-    return;
-  }
   const factor = evt.deltaY > 0 ? 1.15 : (1 / 1.15);
   setViewSpan(viewSpanHz * factor);
 }, { passive: false });
 
-// Cursor crosshair: follows the mouse while hovering the spectrum, shows
-// the frequency under it, and simply stops updating (freezes in place)
-// once the cursor leaves — there's no other way to read off a signal's
-// frequency otherwise. audioListenFreqHz includes the fine-tune offset;
-// cursorFreqHz stays the raw mouse-tracked position.
+// Cursor crosshair: a pure visual readout of the frequency under the mouse
+// while hovering, with no effect on audio or tuning — freezes in place
+// (simply stops updating) once the cursor leaves, since that's the only way
+// to read off a signal's frequency otherwise. Each listener uses ITS OWN
+// element's bounding rect (not a shared parent's), since the outer
+// .spectrum-wrap container has padding that would skew the pixel-to-frequency
+// math if used directly.
 let cursorFreqHz = null;
-let audioLocked = false;
 
-function audioListenFreqHz() {
-  return cursorFreqHz === null ? null : cursorFreqHz + audioFineTuneHz;
-}
-
-// Hover/lock work the same way over the waterfall as the spectrum line —
-// they're one continuous frequency axis, just two displays of it. Each
-// listener uses ITS OWN element's bounding rect (not a shared parent's),
-// since the outer .spectrum-wrap container has padding that would skew
-// the pixel-to-frequency math if used directly.
-function attachHoverAudio(el) {
-  // Right-click freezes the cursor/audio at the current frequency (so you
-  // can let go of the mouse without losing the signal); left-click resumes
-  // normal hover tracking. Browser's own context menu is suppressed.
-  el.addEventListener('contextmenu', evt => {
-    evt.preventDefault();
-    audioLocked = true;
-  });
-
+function attachHoverCrosshair(el) {
   el.addEventListener('mousemove', evt => {
-    if (viewCenterHz === null || audioLocked) return;
+    if (viewCenterHz === null) return;
     const rect = el.getBoundingClientRect();
     const x = evt.clientX - rect.left;
     cursorFreqHz = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
-    onCursorMovedForAudio();
-  });
-
-  el.addEventListener('mouseleave', () => {
-    if (audioLocked) return;   // stay live — that's the whole point of locking
-    audioEnabled = false;
-    send({ cmd: 'set_audio_enabled', enabled: false });
-  });
-
-  el.addEventListener('mousedown', evt => {
-    if (evt.button === 0 && audioLocked) audioLocked = false;   // left-click unlocks
   });
 }
-attachHoverAudio(spectrumWrap);
-attachHoverAudio(document.getElementById('waterfall-wrap'));
+attachHoverCrosshair(spectrumWrap);
+attachHoverCrosshair(document.getElementById('waterfall-wrap'));
 
-// ── Hover-to-listen audio ──────────────────────────────────
-// Demodulates whatever's under the cursor, live, while hovering — separate
-// from click-to-tune (which commits the radio). Audio plays only while
-// actively hovering; leaving the spectrum mutes it (no sensible "frozen"
-// state for audio the way there is for the visual crosshair).
+// ── Audio: always at the rig's live frequency, unless muted ────────────
+// The radio is ground truth, so there's nothing to hover or lock onto —
+// audio simply follows wherever the rig (knob, band buttons, click-to-tune)
+// is actually tuned, using its real mode and NAR/WID/WIDTH passband rather
+// than guessing either from frequency.
 let audioCtx = null;
 let audioWs = null;
-let audioPlayhead = 0;
-let audioEnabled = false;
-let lastAudioSendMs = 0;
+let audioWorkletNode = null;
+let audioWorkletReady = null;   // Promise, set once addModule() has been kicked off
+let audioMuted = true;
 let lastAudioFreqHz = null;
+let lastAudioMode = null;
+let lastAudioBandwidthHz = null;
 
-function bandwidthForMode(mode) {
-  if (mode === 'CW') return 300;
-  if (mode === 'PKTUSB') return 50;   // FT8 and friends — narrow calling tones
-  // SSB: reuse whatever NAR/WID/WIDTH the operator has dialed in on the
-  // rig (rig.passband_hz) — same receive-selectivity control they already
-  // use, applied uniformly regardless of where on the band we're listening.
-  return (rigPassbandHz && rigPassbandHz > 0) ? rigPassbandHz : 2400;
+function sidebandForRigMode(mode) {
+  return (mode && mode.includes('L')) ? 'LSB' : 'USB';
 }
 
-function sidebandForFrequency(freqHz) {
-  return freqHz < 10_000_000 ? 'LSB' : 'USB';
+// AudioWorkletNode runs PCM playback on the dedicated audio thread via a
+// ring buffer (dashboard/audio-worklet.js) instead of scheduling a discrete
+// AudioBufferSourceNode per incoming WebSocket message — the previous
+// approach meant any main-thread delay (canvas redraws, GC, etc.) right
+// when a message arrived produced an audible gap, and that scaled with how
+// many messages/sec there were. The worklet is immune to that: it just
+// reads continuously, regardless of when data shows up.
+function ensureAudioWorklet() {
+  // Pin the context to our actual source rate (16kHz) rather than letting
+  // it default to the system's hardware rate (commonly 44100 or 48000).
+  // The worklet's own resampling is crude sample-repetition — fine for an
+  // exact integer ratio, but produces an irregular (audible, warbly)
+  // repeat pattern at a non-integer one. Matching rates means zero
+  // resampling happens in our code at all; the browser's own native
+  // resampler handles the hop to hardware output instead.
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  if (!audioWorkletReady) {
+    audioWorkletReady = audioCtx.audioWorklet.addModule('/audio-worklet.js').then(() => {
+      audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
+      audioWorkletNode.connect(audioCtx.destination);
+    });
+  }
+  return audioWorkletReady;
 }
 
 function ensureAudioWs() {
   if (audioWs && audioWs.readyState <= WebSocket.OPEN) return;
   audioWs = new WebSocket(`ws://${location.host}/ws/audio`);
   audioWs.binaryType = 'arraybuffer';
+  // Unlike /ws and /ws/spectrum, nothing else re-establishes this socket if
+  // it drops mid-session — reconnect automatically as long as we're still
+  // unmuted, matching the pattern used elsewhere in this file.
+  audioWs.onclose = () => { if (!audioMuted) setTimeout(ensureAudioWs, 1000); };
   audioWs.onmessage = evt => {
-    if (!audioCtx) return;
+    if (!audioWorkletNode) return;
     const pcm16 = new Int16Array(evt.data);
-    const buf = audioCtx.createBuffer(1, pcm16.length, 16000);
-    const chan = buf.getChannelData(0);
-    for (let i = 0; i < pcm16.length; i++) chan[i] = pcm16[i] / 32768;
-    const src = audioCtx.createBufferSource();
-    src.buffer = buf;
-    src.connect(audioCtx.destination);
-    const now = audioCtx.currentTime;
-    if (audioPlayhead < now) audioPlayhead = now + 0.05;   // fell behind — resync with a small buffer
-    src.start(audioPlayhead);
-    audioPlayhead += buf.duration;
+    const f32 = new Float32Array(pcm16.length);
+    for (let i = 0; i < pcm16.length; i++) f32[i] = pcm16[i] / 32768;
+    audioWorkletNode.port.postMessage(f32);
   };
 }
 
-function onCursorMovedForAudio(force) {
-  const freqHz = audioListenFreqHz();
-  if (freqHz === null) return;
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  if (!audioEnabled) {
-    audioEnabled = true;
-    audioPlayhead = audioCtx.currentTime + 0.1;
-    ensureAudioWs();
-    send({ cmd: 'set_audio_enabled', enabled: true });
-  }
-  const now = performance.now();
-  const movedEnough = lastAudioFreqHz === null || Math.abs(freqHz - lastAudioFreqHz) > 5;
-  if (!force && now - lastAudioSendMs < 100 && !movedEnough) return;   // throttle — avoid flooding the WS
-  lastAudioSendMs = now;
-  lastAudioFreqHz = freqHz;
-  // detectedMode (CW/PKTUSB/LSB/USB) picks the bandwidth; the demodulator
-  // itself only implements LSB/USB sideband filtering, so that's always
-  // what gets sent as `mode` regardless of which one picked the bandwidth.
-  const detectedMode = modeForFrequency(freqHz, bandForFrequency(freqHz));
-  const demodSideband = sidebandForFrequency(freqHz);
-  send({
-    cmd: 'set_audio_target',
-    freq_hz: freqHz,
-    mode: demodSideband,
-    bandwidth_hz: bandwidthForMode(detectedMode || demodSideband),
-  });
+function sendAudioTargetFromRig(force) {
+  if (audioMuted || rigFreqHz === null) return;
+  const mode = sidebandForRigMode(rigMode);
+  const bandwidthHz = (rigPassbandHz && rigPassbandHz > 0) ? rigPassbandHz : 2400;
+  if (!force && rigFreqHz === lastAudioFreqHz && mode === lastAudioMode
+      && bandwidthHz === lastAudioBandwidthHz) return;
+  lastAudioFreqHz = rigFreqHz;
+  lastAudioMode = mode;
+  lastAudioBandwidthHz = bandwidthHz;
+  send({ cmd: 'set_audio_target', freq_hz: rigFreqHz, mode, bandwidth_hz: bandwidthHz });
 }
 
-spectrumWrap.addEventListener('mouseleave', () => {
-  if (audioLocked) return;   // stay live — that's the whole point of locking
-  audioEnabled = false;
-  send({ cmd: 'set_audio_enabled', enabled: false });
-});
+function toggleMute() {
+  audioMuted = !audioMuted;
+  const btn = document.getElementById('mute-btn');
+  btn.textContent = audioMuted ? 'Audio: Muted' : 'Audio: Live';
+  btn.classList.toggle('active', !audioMuted);
+  if (audioMuted) {
+    send({ cmd: 'set_audio_enabled', enabled: false });
+  } else {
+    ensureAudioWorklet().then(() => {
+      ensureAudioWs();
+      send({ cmd: 'set_audio_enabled', enabled: true });
+      sendAudioTargetFromRig(true);
+    });
+  }
+}
 
 let dragging = false, dragMoved = false, dragStartX = 0, dragStartCenter = 0;
 spectrumWrap.addEventListener('mousedown', evt => {
   if (evt.button !== 0) return;   // only the left button drives drag/click-to-tune
-  if (audioLocked) {
-    audioLocked = false;   // left-click while locked just unlocks
-    return;
-  }
   dragging = true;
   dragMoved = false;
   dragStartX = evt.clientX;
@@ -653,7 +645,7 @@ window.addEventListener('mouseup', evt => {
     const rect = spectrumWrap.getBoundingClientRect();
     const x = evt.clientX - rect.left;
     const freqHz = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
-    tuneTo(freqHz);
+    tuneTo(freqHz, false);
   }
   dragging = false;
   spectrumWrap.classList.remove('dragging');
@@ -753,18 +745,34 @@ function onFloorSlider(v) {
   document.getElementById('floor-val').textContent = manualFloorDb.toFixed(0) + ' dB';
 }
 
-// Marks the current view's center frequency — drawn on top of the data so
-// it stays visible regardless of signal strength there. Used as an
-// alignment reference: pan a signal onto this line, then zoom in on it.
-function drawCenterline(c, w, h) {
+// Marks the radio's actual live frequency (ground truth) — drawn on top of
+// the data so it stays visible regardless of signal strength there. Not
+// necessarily at the geometric center of the view: followRigFrequency()
+// only recenters the view once this nears the edge, so it can sit anywhere
+// in the visible window in between.
+function drawRigMarker(c, w, h, dpr) {
+  dpr = dpr || 1;
+  if (rigFreqHz === null || viewCenterHz === null) return;
+  const drawFreqHz = displayedRigFreqHz === null ? rigFreqHz : displayedRigFreqHz;
+  const x = ((drawFreqHz - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+  if (x < 0 || x > w) return;   // panned away from where the rig is tuned
+
   c.save();
-  c.strokeStyle = 'rgba(255, 214, 10, 0.55)';
-  c.lineWidth = 1;
+  c.strokeStyle = 'rgba(255, 214, 10, 0.85)';
+  c.lineWidth = 1.5 * dpr;
   c.setLineDash([4, 4]);
   c.beginPath();
-  c.moveTo(w / 2, 0);
-  c.lineTo(w / 2, h);
+  c.moveTo(x, 0);
+  c.lineTo(x, h);
   c.stroke();
+
+  c.setLineDash([]);
+  const label = (rigFreqHz / 1e6).toFixed(4) + ' MHz';
+  c.font = `${12 * dpr}px monospace`;
+  c.fillStyle = '#ffd60a';
+  const labelW = c.measureText(label).width;
+  const labelX = (x + labelW + 6 > w) ? x - labelW - 6 : x + 6;
+  c.fillText(label, labelX, h - 6 * dpr);
   c.restore();
 }
 
@@ -777,6 +785,7 @@ function onGainSlider(v) {
 }
 
 function drawSpectrum() {
+  updateDisplayedRigFreq();
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   const w = Math.max(1, rect.width * dpr), h = Math.max(1, rect.height * dpr);
@@ -807,32 +816,30 @@ function drawSpectrum() {
     }
     ctx.stroke();
 
-    drawCenterline(ctx, w, h);
+    drawRigMarker(ctx, w, h, dpr);
     drawCursorCrosshair(ctx, w, h, dpr);
   }
 
+  drawWaterfallOverlay();
   requestAnimationFrame(drawSpectrum);
 }
 
 function drawCursorCrosshair(c, w, h, dpr) {
   if (cursorFreqHz === null || viewCenterHz === null) return;
-  const listenFreqHz = audioListenFreqHz();
-  const cx = ((listenFreqHz - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+  const cx = ((cursorFreqHz - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
   if (cx < 0 || cx > w) return;   // panned/zoomed away from where it was hovering
 
   c.save();
-  c.strokeStyle = audioLocked ? 'rgba(255, 80, 80, 0.75)' : 'rgba(255, 255, 255, 0.55)';
+  c.strokeStyle = 'rgba(255, 255, 255, 0.55)';
   c.lineWidth = 1;
   c.beginPath();
   c.moveTo(cx, 0);
   c.lineTo(cx, h);
   c.stroke();
 
-  let label = (listenFreqHz / 1e6).toFixed(4) + ' MHz';
-  if (audioFineTuneHz !== 0) label += ` (${audioFineTuneHz > 0 ? '+' : ''}${audioFineTuneHz}Hz)`;
-  if (audioLocked) label += ' [LOCKED]';
+  const label = (cursorFreqHz / 1e6).toFixed(4) + ' MHz';
   c.font = `${12 * dpr}px monospace`;
-  c.fillStyle = audioLocked ? '#ff5050' : '#ffffff';
+  c.fillStyle = '#ffffff';
   const labelW = c.measureText(label).width;
   const labelX = (cx + labelW + 6 > w) ? cx - labelW - 6 : cx + 6;
   c.fillText(label, labelX, 14 * dpr);
@@ -891,6 +898,27 @@ function ensureWfCanvasSize() {
   return { w, h };
 }
 
+// Separate overlay, fully redrawn every animation frame — the waterfall
+// canvas itself is an incrementally-scrolled bitmap (each row push shifts
+// the previous pixels down), so anything drawn directly into it becomes
+// permanent history and scrolls along with the data. A live marker needs
+// its own layer that gets cleared and repainted from scratch each frame,
+// the same way the spectrum canvas already redraws everything every tick.
+const wfOverlayCanvas = document.getElementById('waterfall-overlay-canvas');
+const wfOverlayCtx = wfOverlayCanvas.getContext('2d');
+
+function drawWaterfallOverlay() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = wfOverlayCanvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * dpr)), h = Math.max(1, Math.round(rect.height * dpr));
+  if (wfOverlayCanvas.width !== w || wfOverlayCanvas.height !== h) {
+    wfOverlayCanvas.width = w;
+    wfOverlayCanvas.height = h;
+  }
+  wfOverlayCtx.clearRect(0, 0, w, h);
+  drawRigMarker(wfOverlayCtx, w, h, dpr);
+}
+
 function pushWaterfallRow(frame) {
   const { w, h } = ensureWfCanvasSize();
   if (h < 2) return;
@@ -908,7 +936,6 @@ function pushWaterfallRow(frame) {
     row.data[x * 4 + 3] = 255;
   }
   wfCtx.putImageData(row, 0, 0);
-  drawCenterline(wfCtx, w, h);
 }
 
 function pushWaterfallTxRow() {
@@ -921,7 +948,6 @@ function pushWaterfallTxRow() {
     row.data[x * 4 + 0] = 90; row.data[x * 4 + 1] = 50; row.data[x * 4 + 2] = 0; row.data[x * 4 + 3] = 255;
   }
   wfCtx.putImageData(row, 0, 0);
-  drawCenterline(wfCtx, w, h);
 }
 
 connectWs();

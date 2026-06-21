@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from amplifier.acom_bridge import AcomBridge, OperatingMode, StationState
@@ -137,6 +137,8 @@ class AudioConnectionManager:
         for ws in self.active:
             try:
                 await asyncio.wait_for(ws.send_bytes(audio_bytes), timeout=0.05)
+            except asyncio.TimeoutError:
+                pass   # one slow frame, not a dead connection — just skip it
             except Exception:
                 dead.append(ws)
         for ws in dead:
@@ -152,6 +154,8 @@ sdr: Optional[SdrClient] = None
 
 
 async def on_station_state(state: StationState):
+    if sdr is not None and sdr.available:
+        sdr.audio.tx_active = bool(state.rig.get("ptt", False))
     await manager.broadcast({"type": "state", "data": state.to_dict()})
 
 
@@ -172,7 +176,10 @@ async def lifespan(app: FastAPI):
     global bridge, sdr
     logger.info("Starting W7TLG Console...")
 
-    rig = RigctldClient(host=RIGCTLD_HOST, port=RIGCTLD_PORT, poll_interval=0.5)
+    # Tighter than the original 0.5s — the panadapter's rig-frequency marker
+    # only moves as often as this polls, so turning the tuning knob looked
+    # like a series of jumps rather than smooth motion.
+    rig = RigctldClient(host=RIGCTLD_HOST, port=RIGCTLD_PORT, poll_interval=0.1)
 
     acom_port = ACOM_PORT or find_acom_port()
     if not acom_port:
@@ -466,6 +473,12 @@ async def panadapter():
     if html_path.exists():
         return HTMLResponse(html_path.read_text())
     return HTMLResponse("<h1>Panadapter HTML not found</h1>")
+
+
+@app.get("/audio-worklet.js")
+async def audio_worklet():
+    js_path = Path(__file__).parent / "audio-worklet.js"
+    return Response(content=js_path.read_text(), media_type="application/javascript")
 
 
 @app.websocket("/ws/spectrum")

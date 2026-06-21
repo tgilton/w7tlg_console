@@ -68,7 +68,11 @@ class SdrClient:
         self._lib: Optional[object] = None
         self._device = capi.DeviceT()
         self._has_device = False
-        self._q: "queue.Queue" = queue.Queue(maxsize=8)
+        # 8 slots (the original size) gave almost no headroom against
+        # ordinary thread-scheduling/GIL jitter between the native callback
+        # thread and the consumer — measured ~1000+/s drops continuously
+        # even after fixing the consumer's own per-chunk cost separately.
+        self._q: "queue.Queue" = queue.Queue(maxsize=512)
         self._stop_event = threading.Event()
         self._consumer_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -83,6 +87,10 @@ class SdrClient:
         self._cb_stream = capi.StreamCallback_t(self._on_stream_data)
         self._cb_stream_b = capi.StreamCallback_t()
         self._cb_event = capi.EventCallback_t(self._on_event)
+        # Playback now runs through an AudioWorklet ring buffer (panadapter.html),
+        # which is immune to per-message scheduling jitter — so batch size is
+        # purely a latency knob now, not a glitch-avoidance one. Smaller is
+        # better: it also caps the relative cost of the accumulation buffer.
         self.audio = AudioDemodulator(input_rate_hz=sample_rate_hz)
 
     # ------------------------------------------------------------------
@@ -274,25 +282,57 @@ class SdrClient:
     # ------------------------------------------------------------------
 
     def _consumer_loop(self):
-        acc_i = np.empty(0, dtype=np.int16)
-        acc_q = np.empty(0, dtype=np.int16)
+        # Pre-allocated, double-sized buffer written via slice assignment,
+        # with the trailing fft_size window compacted back to the front
+        # only when about to overflow — amortized O(chunk size) per write.
+        # The previous concatenate-and-slice approach recopied the entire
+        # fft_size window on every single native callback regardless of
+        # chunk size, which was the actual bottleneck: it made the consumer
+        # fall behind badly enough to drop the vast majority of callbacks
+        # (measured ~1400/s into an 8-slot queue), splicing non-contiguous
+        # IQ together in every FFT frame.
+        buf_cap = self.fft_size * 2
+        buf_i = np.empty(buf_cap, dtype=np.int16)
+        buf_q = np.empty(buf_cap, dtype=np.int16)
+        write_pos = 0
+
         tick_interval = 1.0 / self.display_fps
         next_tick = time.monotonic()
+        next_drop_log = time.monotonic() + 5.0
+        last_logged_drops = 0
 
         while not self._stop_event.is_set():
+            now_check = time.monotonic()
+            if now_check >= next_drop_log:
+                if self.dropped_count != last_logged_drops:
+                    logger.warning(
+                        f"Spectrum queue drops: {self.dropped_count} total "
+                        f"(+{self.dropped_count - last_logged_drops} in last 5s) — "
+                        f"native callbacks arriving faster than the FFT consumer can drain them")
+                    last_logged_drops = self.dropped_count
+                next_drop_log = now_check + 5.0
             try:
                 i, q_arr = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            acc_i = np.concatenate([acc_i, i])[-self.fft_size:]
-            acc_q = np.concatenate([acc_q, q_arr])[-self.fft_size:]
+
+            n = len(i)
+            if write_pos + n > buf_cap:
+                keep = min(write_pos, self.fft_size)
+                buf_i[:keep] = buf_i[write_pos - keep:write_pos]
+                buf_q[:keep] = buf_q[write_pos - keep:write_pos]
+                write_pos = keep
+            buf_i[write_pos:write_pos + n] = i
+            buf_q[write_pos:write_pos + n] = q_arr
+            write_pos += n
 
             now = time.monotonic()
-            if now < next_tick or len(acc_i) < self.fft_size:
+            if now < next_tick or write_pos < self.fft_size:
                 continue
             next_tick = now + tick_interval
 
-            frame = self._compute_frame(acc_i, acc_q)
+            frame = self._compute_frame(buf_i[write_pos - self.fft_size:write_pos],
+                                         buf_q[write_pos - self.fft_size:write_pos])
             if self._loop is not None:
                 try:
                     asyncio.run_coroutine_threadsafe(self._publish(frame), self._loop)
