@@ -104,7 +104,7 @@ class AcomSerial:
 
     def on_antenna_change(self, cb):
         """Register async callback for ANT_BAND_INFO (0x27) messages.
-        cb(antenna: int, band_byte: int) -> None
+        cb(antenna: int, ant_type_byte: int) -> None
         """
         self._ant_callbacks.append(cb)
 
@@ -303,13 +303,14 @@ class AcomSerial:
                     logger.error(f"Fault callback error: {e}")
 
         elif address == AmpMsg.ANT_BAND_INFO:
-            # data[0]=antenna#, data[1]=band byte (per ACOM protocol)
+            # data[0]=antenna# [1..10], data[1]=antenna type (Sharp/Regular/
+            # Wide/Fixed, MSB set if marked default) — per protocol v1.3
             if len(data) >= 2:
-                ant_num  = data[0]
-                band_byte = data[1]
+                ant_num = data[0]
+                ant_type_byte = data[1]
                 for cb in self._ant_callbacks:
                     try:
-                        await cb(ant_num, band_byte)
+                        await cb(ant_num, ant_type_byte)
                     except Exception as e:
                         logger.error(f"Antenna callback error: {e}")
 

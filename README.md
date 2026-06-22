@@ -51,9 +51,13 @@ The ACOM serial port is hardcoded in dashboard/server.py. Update ACOM_PORT to ma
 
 ### Starting
 
-    ~/start_rigctld.sh && sleep 2 && ~/start_console.sh
+    ~/start_w7tlg.sh
 
-Open Chrome to http://localhost:8000 (dashboard) and optionally http://localhost:8000/monitor (trending).
+Starts rigctld if it isn't already running, starts the console, and opens the dashboard and panadapter tabs in Chrome. Load http://localhost:8000/monitor manually if you want the trending view too.
+
+To start the pieces individually instead:
+
+    ~/start_rigctld.sh && sleep 2 && ~/start_console.sh
 
 ### Stopping
 Ctrl+C in the console terminal.
@@ -65,7 +69,7 @@ Ctrl+C in the console terminal.
 | AMP OFF | Standby (RF bypass) | 100W | Safe default |
 | AMP ON | Operate | 40W drive | Requires confirmation dialog |
 
-The console starts with AMP OFF and antenna defaulting to A4R (dummy load) for safety. The amp front panel antenna selection is authoritative and the console follows it.
+The console starts with AMP OFF and antenna defaulting to A4R (dummy load) for safety. Antenna changes (from either the console's NEXT ANT button or the amp's front panel) are mirrored on both sides — see "Antenna Switching" below.
 
 ## ACOM 1200S Integration Notes
 
@@ -89,7 +93,9 @@ If ATU/ASEL communication is lost:
 The ACOM 1200S streams 68-byte telemetry frames (72 bytes on the wire including header) at approximately 10Hz via RS232. The console parses these for forward power, reflected power, SWR, PA temperature, drain current, HV voltage, and fault status.
 
 ### Antenna Switching
-The 0x09 antenna-select command is implemented but the 1200S currently ignores it. ACOM support has been contacted. The reference implementation (bjornekelund/ACOM-Controller on GitHub) also does not implement remote antenna selection. Antenna changes must be made on the amp front panel; the console reads and follows them via 0x27 telemetry messages.
+The 1200S has no remote "select antenna N" command — confirmed against ACOM's own engineer-supplied v1.3 protocol doc and live hardware. The console's NEXT ANT button sends the same forward-only cycle command as the amp's front-panel ANT button (`cmd_next_antenna()`); the firmware itself skips antennas not assigned to the current band. The console's antenna indicator follows the amp's `0x27` telemetry regardless of which side triggered the change, so it stays in sync either way.
+
+Band-following (so the amp's display/LPF tracks the radio even while in STANDBY, when the amp has no drive RF for its own frequency counter to sense band from) is sent automatically on every band change via the same `0x09` command's band-number field — this isn't in ACOM's documented value list for that field, but is required and confirmed working in practice.
 
 ## Digital Mode Integration
 

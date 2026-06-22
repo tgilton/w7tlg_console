@@ -80,7 +80,9 @@ class AmpMode(IntEnum):
     TX_PROHIBIT        = 0x40  # Prohibit TX
     TX_ALLOW           = 0x80  # Allow TX
 
-# Band numbers used in ANT_BAND_SELECT
+# Band numbers (used for frequency→band classification, not for any
+# serial command — the A1200S has no direct band-select command, see
+# cmd_next_antenna() below)
 class Band(IntEnum):
     B160M  = 0x01
     B80M   = 0x02
@@ -92,8 +94,6 @@ class Band(IntEnum):
     B15M   = 0x08
     B12M   = 0x09
     B10M   = 0x0A
-    NEXT   = 0x80
-    PREV   = 0x40
 
 # Frequency (Hz) → Band mapping
 FREQ_TO_BAND = [
@@ -202,12 +202,31 @@ def cmd_tx_allow() -> bytes:
     return build_frame(CmdMsg.AMP_COMMAND, data)
 
 
-def cmd_select_antenna_band(antenna: int, band: Band) -> bytes:
+def cmd_next_antenna() -> bytes:
     """
-    Select antenna (1-10) and band.
-    antenna: 1=A1F, 2=A2F, 3=A3R, 4=A4R (per station config)
+    Cycle to the next antenna — the exact action of the amp's front-panel
+    ANT button. Per protocol v1.3 (the version that actually documents the
+    A1200S), command 0x09's Byte4 (antenna number) is ignored by the
+    firmware and Byte5 only accepts a small set of relative cycle codes
+    (0x30 = Next Antenna). There is no direct "select antenna N" command,
+    and no "previous antenna" either — only forward cycling, same as the
+    physical button.
     """
-    data = bytes([AmpCmd.ANT_BAND_SELECT, antenna, int(band), 0x00])
+    data = bytes([AmpCmd.ANT_BAND_SELECT, 0x00, 0x30, 0x00])
+    return build_frame(CmdMsg.AMP_COMMAND, data)
+
+
+def cmd_select_band(band: Band) -> bytes:
+    """
+    Tell the amp which band to track (for its LPF/display), independent of
+    antenna selection. Byte4 is zeroed since it's the (ignored) antenna
+    slot; only Byte5 = raw band number matters here. This raw-number form
+    of Byte5 isn't in the documented v1.3 cycle-code list (0x10/0x20/0x30/
+    0x40/0x80), but is confirmed against real hardware — it's the only way
+    the amp's band/LPF stays in sync with the radio while in STANDBY, since
+    its own RF frequency counter has nothing to detect without drive power.
+    """
+    data = bytes([AmpCmd.ANT_BAND_SELECT, 0x00, int(band), 0x00])
     return build_frame(CmdMsg.AMP_COMMAND, data)
 
 
@@ -592,13 +611,10 @@ if __name__ == '__main__':
     print(f"TX prohibit:          {txp.hex(' ').upper()}")
     print(f"TX allow:             {txa.hex(' ').upper()}")
 
-    # Test antenna/band select
-    ant1_20m = cmd_select_antenna_band(1, Band.B20M)
-    ant3_40m = cmd_select_antenna_band(3, Band.B40M)
-    assert verify_frame(ant1_20m)
-    assert verify_frame(ant3_40m)
-    print(f"ANT1 20m:             {ant1_20m.hex(' ').upper()}")
-    print(f"ANT3 40m:             {ant3_40m.hex(' ').upper()}")
+    # Test next-antenna cycle command
+    next_ant = cmd_next_antenna()
+    assert verify_frame(next_ant)
+    print(f"Next antenna:         {next_ant.hex(' ').upper()}")
 
     # Test frequency → band conversion
     tests = [

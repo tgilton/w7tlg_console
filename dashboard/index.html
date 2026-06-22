@@ -512,6 +512,8 @@ input[type=range]::-webkit-slider-thumb:active {
   grid-template-columns: repeat(4, 1fr);
   gap: 4px;
 }
+/* Read-only — the amp has no command to jump to a specific antenna */
+.ant-indicator { cursor: default; pointer-events: none; }
 
 /* ── Fault display ───────────────────────────────────────── */
 .fault-row {
@@ -1116,11 +1118,14 @@ input[type=range]::-webkit-slider-thumb:active {
     <div>
       <div class="section-label">Antenna</div>
       <div class="ant-grid">
-        <button class="btn" id="ant-1" onclick="selectAnt(1)">A1F<br><span style="font-size:0.6rem;opacity:0.7">SS-25/DXF</span></button>
-        <button class="btn disabled" id="ant-2">A2F<br><span style="font-size:0.6rem;opacity:0.7">—</span></button>
-        <button class="btn" id="ant-3" onclick="selectAnt(3)">A3R<br><span style="font-size:0.6rem;opacity:0.7">EFHW</span></button>
-        <button class="btn" id="ant-4" onclick="selectAnt(4)">A4R<br><span style="font-size:0.6rem;opacity:0.7">Dummy</span></button>
+        <div class="btn ant-indicator" id="ant-1">A1F<br><span style="font-size:0.6rem;opacity:0.7">SS-25/DXF</span></div>
+        <div class="btn ant-indicator disabled" id="ant-2">A2F<br><span style="font-size:0.6rem;opacity:0.7">—</span></div>
+        <div class="btn ant-indicator" id="ant-3">A3R<br><span style="font-size:0.6rem;opacity:0.7">EFHW</span></div>
+        <div class="btn ant-indicator" id="ant-4">A4R<br><span style="font-size:0.6rem;opacity:0.7">Dummy</span></div>
       </div>
+      <!-- The amp has no command to select a specific antenna — only a
+           forward-only cycle, same as its own front-panel ANT button. -->
+      <button class="btn" style="width:100%; margin-top:6px" onclick="nextAntenna()">⟳ NEXT ANT</button>
       <!-- Dummy load timer -->
       <div class="dummy-timer-wrap" id="dummy-timer-wrap" style="margin-top:8px">
         <span class="muted mono" style="font-size:0.7rem">DUMMY LOAD:</span>
@@ -1690,7 +1695,7 @@ function confirmAmpOn() {
   });
 }
 
-function selectAnt(n) { send({ cmd: 'select_antenna', antenna: n }); }
+function nextAntenna() { send({ cmd: 'next_antenna' }); }
 function inhibitTx()  { send({ cmd: 'inhibit_tx', reason: 'Manual operator inhibit' }); }
 function allowTx()    { send({ cmd: 'allow_tx' }); }
 

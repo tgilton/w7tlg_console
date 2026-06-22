@@ -33,7 +33,7 @@ from typing import Optional, Callable, Coroutine
 
 from amplifier.acom_protocol import (
     AmpTelemetry, FaultStatus,
-    cmd_select_antenna_band, cmd_tx_prohibit, cmd_tx_allow,
+    cmd_next_antenna, cmd_select_band, cmd_tx_prohibit, cmd_tx_allow,
     cmd_standby, cmd_operate,
     freq_to_band as acom_freq_to_band, Band as AcomBand,
 )
@@ -401,31 +401,17 @@ class AcomBridge:
         await self._publish()
         return True, f"Mode set to {mode.value}"
 
-    async def select_antenna(self, antenna_number: int) -> tuple[bool, str]:
-        config = ANTENNAS.get(antenna_number)
-        if not config:
-            return False, f"Unknown antenna {antenna_number}"
-        if not config.enabled:
-            return False, f"{config.port} ({config.name}) is disabled"
-
-        therm = self.thermal.get(antenna_number)
-        if therm.inhibited:
-            return False, (
-                f"{config.name} is thermally inhibited since "
-                f"{therm.inhibited_at}. "
-                f"Reason: {therm.inhibited_reason}. "
-                f"Operator must clear before use.")
-
-        self._selected_antenna = antenna_number
-
-        band = self._current_acom_band or AcomBand.B20M
-        cmd = cmd_select_antenna_band(antenna_number, band)
-        await self.amp.send(cmd)
-        logger.info(f"Sent antenna select: ANT{antenna_number} band {band.name}")
-
-        logger.info(f"Antenna → {config.port} ({config.name})")
-        await self._publish()
-        return True, f"Antenna {config.port} selected"
+    async def next_antenna(self) -> tuple[bool, str]:
+        """
+        Cycle to the next antenna — same action as the amp's front-panel
+        ANT button. The A1200S has no command to jump directly to a given
+        antenna, so the console can only nudge forward and wait for the
+        amp's own ANT_BAND_INFO (0x27) feedback to learn which antenna it
+        landed on (see _on_antenna_change).
+        """
+        await self.amp.send(cmd_next_antenna())
+        logger.info("Sent NEXT ANTENNA (front-panel ANT button equivalent)")
+        return True, "Antenna cycle requested"
 
     async def operator_clear_thermal(self, antenna_number: int):
         self.thermal.clear_inhibit(antenna_number)
@@ -470,13 +456,12 @@ class AcomBridge:
         if new_band is None:
             logger.warning(f"Frequency {freq_hz} Hz out of ACOM band range")
             return
-        ant_config = ANTENNAS.get(self._selected_antenna)
-        if ant_config and ant_config.enabled:
-            cmd = cmd_select_antenna_band(self._selected_antenna, new_band)
-            await self.amp.send(cmd)
-            logger.info(
-                f"Band → {band_name}: sent ANT{self._selected_antenna} "
-                f"({ant_config.port}) band {new_band.name}")
+        # Keeps the amp's band/LPF tracking the radio even while in
+        # STANDBY (no drive RF for the amp's own F-counter to detect band
+        # from) — confirmed on real hardware, despite not being in the
+        # documented v1.3 cycle-code list for this sub-command.
+        await self.amp.send(cmd_select_band(new_band))
+        logger.info(f"Band → {band_name}: sent amp band select {new_band.name}")
 
     async def _on_tx_start(self):
         logger.info("TX start detected")
@@ -605,10 +590,15 @@ class AcomBridge:
 
         await self._publish()
 
-    async def _on_antenna_change(self, ant_num: int, band_byte: int):
-        """Called when amp sends ANT_BAND_INFO (0x27) — sync console indicator."""
-        logger.debug(f"Amp antenna sync: A{ant_num}, band_byte=0x{band_byte:02X}")
-        self._selected_antenna = ant_num + 1  # amp reports 0-indexed
+    async def _on_antenna_change(self, ant_num: int, ant_type_byte: int):
+        """Called when amp sends ANT_BAND_INFO (0x27) — sync console indicator.
+        For this amp's 4 built-in relay antennas, the live 0x27 message
+        reports ant_num 0-indexed (Ant0..Ant3) — confirmed against real
+        hardware (front-panel toggling lit the wrong indicator without this
+        +1). The protocol doc's "[1..10]" wording describes the ASEL
+        accessory case; doesn't hold for the built-in relays."""
+        logger.debug(f"Amp antenna sync: A{ant_num}, type_byte=0x{ant_type_byte:02X}")
+        self._selected_antenna = ant_num + 1
         await self._publish()
 
     async def _on_amp_connection(self, connected: bool):

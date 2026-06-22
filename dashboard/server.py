@@ -7,9 +7,9 @@ All station state flows through here to connected browsers.
 Endpoints:
   GET  /              — Dashboard HTML
   WS   /ws            — WebSocket: station state stream + command channel
-  POST /api/mode      — Set operating mode
-  POST /api/antenna   — Select antenna
-  POST /api/tx        — TX inhibit / allow
+  POST /api/mode         — Set operating mode
+  POST /api/antenna/next — Cycle to next antenna (front-panel ANT button)
+  POST /api/tx           — TX inhibit / allow
   POST /api/thermal/clear/{ant} — Clear thermal inhibit
   GET  /api/state     — Current state snapshot (REST)
 """
@@ -249,9 +249,6 @@ class ModeRequest(BaseModel):
     mode: str
     confirmed: bool = False
 
-class AntennaRequest(BaseModel):
-    antenna: int
-
 class TxRequest(BaseModel):
     inhibit: bool
     reason: str = "Manual inhibit"
@@ -281,11 +278,11 @@ async def set_mode(req: ModeRequest):
     return {"status": "ok", "message": msg}
 
 
-@app.post("/api/antenna")
-async def select_antenna(req: AntennaRequest):
+@app.post("/api/antenna/next")
+async def next_antenna():
     if bridge is None:
         raise HTTPException(503, "Bridge not initialized")
-    ok, msg = await bridge.select_antenna(req.antenna)
+    ok, msg = await bridge.next_antenna()
     if not ok:
         raise HTTPException(400, msg)
     return {"status": "ok", "message": msg}
@@ -422,8 +419,8 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
-        elif cmd == "select_antenna":
-            ok, reply = await bridge.select_antenna(int(msg["antenna"]))
+        elif cmd == "next_antenna":
+            ok, reply = await bridge.next_antenna()
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd,
                 "ok": ok, "message": reply}))
