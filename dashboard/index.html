@@ -242,6 +242,17 @@ html, body {
   color: var(--muted);
 }
 
+#s9-cal-input {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  color: var(--text);
+  padding: 3px 5px;
+  border-radius: 3px;
+  width: 48px;
+}
+
 /* ── TX meters (ALC, PO, SWR) ───────────────────────────── */
 .tx-meters {
   display: grid;
@@ -791,7 +802,11 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
       <div class="smeter-readout">
         <span class="smeter-label-value" id="smeter-label">S0</span>
-        <span class="smeter-db-value" id="smeter-db">— dBm</span>
+        <span class="smeter-db-value" id="smeter-db">— dBFS</span>
+      </div>
+      <div class="smeter-readout">
+        <span class="smeter-db-value">S9 Cal</span>
+        <input type="number" id="s9-cal-input" value="-75" step="1" oninput="onS9CalInput(this.value)">
       </div>
     </div>
 
@@ -905,12 +920,29 @@ input[type=range]::-webkit-slider-thumb:active {
           <span class="dsp-func-label">DNF</span><span class="dsp-func-state" id="dnf-state">OFF</span>
         </button>
 
-        <!-- AGC -->
+        <!-- AGC — controls the SDR audio chain's auto-leveling speed (the
+             radio's own CAT-commanded AGC has no audible effect, since the
+             RSPdx-R2 is the actual receiver), not just the radio's setting -->
         <div style="display:flex; align-items:center; gap:2px;">
           <span class="dsp-func-label" style="margin-right:4px; font-size:0.7rem; color:var(--muted);">AGC</span>
           <button class="dsp-agc-btn" id="agc-off" onclick="setAGC(0)">OFF</button>
           <button class="dsp-agc-btn" id="agc-fast" onclick="setAGC(2)">FAST</button>
           <button class="dsp-agc-btn" id="agc-slow" onclick="setAGC(3)">SLOW</button>
+        </div>
+
+        <!-- RX Volume — manual gain on the SDR audio chain, independent of
+             the AGC above. The real loudness control. -->
+        <div style="display:flex; align-items:center; gap:4px;">
+          <span class="dsp-func-label" style="margin-right:2px; font-size:0.7rem; color:var(--muted);">VOL</span>
+          <input type="range" min="0" max="1000" step="10" value="400"
+                 id="rx-vol-slider"
+                 style="width:80px; accent-color:var(--cyan); cursor:pointer;"
+                 oninput="document.getElementById('rx-vol-val').textContent = this.value + '%'"
+                 onmousedown="_rxVolDragging=true"
+                 onmouseup="_rxVolDragging=false; setRxVolume(this.value)"
+                 ontouchstart="_rxVolDragging=true"
+                 ontouchend="_rxVolDragging=false; setRxVolume(this.value)">
+          <span class="dsp-val" id="rx-vol-val" style="min-width:36px; font-size:0.75rem; color:var(--muted);">400%</span>
         </div>
       </div>
 
@@ -1138,6 +1170,30 @@ var _widthDragging = false;
 let ws = null;
 let state = {};
 
+// S-meter calibration — rig.strength_db (Hamlib STRENGTH) is dead under this
+// station's SDR Switch wiring (radio's RX antenna port sees nothing; the
+// RSPdx-R2 is the actual receiver), so the meter is driven by rig.sdr_strength_db
+// (raw dBFS from the SDR's own spectrum) instead. There's no fixed dBFS-to-dBm
+// mapping without knowing the SDR's exact RF gain chain, so this is a single
+// adjustable reference point (dBFS that should read as S9), not a true
+// calibration — tune by ear/comparison against a real signal.
+let s9CalDb = -75;
+function onS9CalInput(v) {
+  const n = parseFloat(v);
+  if (isFinite(n)) s9CalDb = n;
+}
+
+// Mirrors rig/rigctld_client.py's smeter_label(): S9 = 0dB re S9, 6dB/S-unit
+// below, 10dB/S-unit ("S9+NN") above.
+function smeterLabel(strengthDb) {
+  if (strengthDb >= 0) {
+    const over = Math.round(strengthDb / 10) * 10;
+    return over > 0 ? `S9+${over}` : 'S9';
+  }
+  const s = Math.max(0, Math.min(9, 9 + Math.floor(strengthDb / 6)));
+  return `S${s}`;
+}
+
 function connectWs() {
   ws = new WebSocket(`ws://${location.host}/ws`);
 
@@ -1227,18 +1283,16 @@ function updateUI(s) {
   const isTx = rig.ptt;
   document.getElementById('tx-meters').style.display = isTx ? 'grid' : 'none';
 
-  if (!isTx) {
-    // S-meter: STRENGTH is dB re S9. Range roughly -54 (S0) to +60
-    const db = rig.strength_db ?? -54;
+  if (!isTx && rig.sdr_strength_db !== undefined && rig.sdr_strength_db !== null) {
+    const dbFs = rig.sdr_strength_db;
+    const strengthDb = dbFs - s9CalDb;   // dB re S9, same scale the bar below expects
     // Map -54..+60 → 0..100%
-    const pct = Math.max(0, Math.min(100, ((db + 54) / 114) * 100));
+    const pct = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100));
     const smeterBar = document.getElementById('smeter-bar');
     smeterBar.style.width = pct + '%';
-    smeterBar.classList.toggle('over-s9', db >= 0);  // green up to S9, red above
-    document.getElementById('smeter-label').textContent = rig.smeter_label || 'S0';
-    // Convert STRENGTH (dB re S9) to approximate dBm: S9 = -73dBm
-    const dbm = (db + (-73)).toFixed(1);
-    document.getElementById('smeter-db').textContent = dbm + ' dBm';
+    smeterBar.classList.toggle('over-s9', strengthDb >= 0);  // green up to S9, red above
+    document.getElementById('smeter-label').textContent = smeterLabel(strengthDb);
+    document.getElementById('smeter-db').textContent = dbFs.toFixed(1) + ' dBFS';
   }
 
   // TX meters
@@ -1314,6 +1368,11 @@ function updateUI(s) {
     const compPct = Math.round((rig.comp_level ?? 0) * 100);
     document.getElementById('comp-slider').value = compPct;
     document.getElementById('comp-val').textContent = compPct + '%';
+  }
+  if (!_rxVolDragging && rig.sdr_rx_volume !== undefined) {
+    const volPct = Math.round(rig.sdr_rx_volume * 100);
+    document.getElementById('rx-vol-slider').value = volPct;
+    document.getElementById('rx-vol-val').textContent = volPct + '%';
   }
 
   // Antenna buttons
@@ -1643,6 +1702,7 @@ var _dnfOn = false;
 var _nrDragging = false;
 var _micGainDragging = false;
 var _compDragging = false;
+var _rxVolDragging = false;
 
 function toggleNB() {
   _nbOn = !_nbOn;
@@ -1700,6 +1760,10 @@ function setAGC(value) {
   send({ cmd: 'set_agc', value: value });
 }
 
+function setRxVolume(v) {
+  send({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 });
+}
+
 function updateDSP(s) {
   // NB
   if (s.nb_on !== undefined && s.nb_on !== _nbOn) {
@@ -1726,13 +1790,17 @@ function updateDSP(s) {
     _dnfOn = !!s.dnf_on;
     _applyDNF(_dnfOn);
   }
-  // AGC buttons
-  const agcMap = { 0: 'agc-off', 2: 'agc-fast', 3: 'agc-slow' };
+  // AGC buttons — reflect sdr_agc_mode (what's actually driving the SDR
+  // audio chain), not rig.agc. The radio's own AGC is software state inside
+  // this server process (resets to its "slow" default on every restart) and
+  // can drift from rig.agc, which is the radio's own persistent hardware
+  // setting and no longer has any audible effect.
+  const agcMap = { off: 'agc-off', fast: 'agc-fast', slow: 'agc-slow' };
   ['agc-off', 'agc-fast', 'agc-slow'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.remove('active');
   });
-  const activeId = agcMap[s.agc];
+  const activeId = agcMap[s.sdr_agc_mode];
   if (activeId) {
     const el = document.getElementById(activeId);
     if (el) el.classList.add('active');

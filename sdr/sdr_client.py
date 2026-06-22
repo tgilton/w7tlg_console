@@ -49,6 +49,7 @@ class SdrClient:
         sample_rate_hz: float = 2_000_000.0,
         fft_size: int = 65536,
         display_fps: float = 18.0,
+        spectrum_avg_frames: float = 3.0,
         gr_db: int = 40,
         lna_state: int = 4,
         lib_path: str = capi.DEFAULT_LIB_PATH,
@@ -60,6 +61,16 @@ class SdrClient:
         self.gr_db = gr_db
         self.lna_state = lna_state
         self.lib_path = lib_path
+        # Exponential moving average in linear power across consecutive FFT
+        # frames, weighted to match the steady-state variance reduction of an
+        # N-frame box average: (1-decay)/(1+decay) = 1/N => decay = (N-1)/(N+1).
+        # A raw single-shot periodogram (what this was before) has the same
+        # bin variance regardless of fft_size — only averaging independent
+        # frames together actually quiets the noise floor.
+        self.spectrum_avg_frames = spectrum_avg_frames
+        self._avg_decay = max(0.0, (spectrum_avg_frames - 1.0) / (spectrum_avg_frames + 1.0))
+        self._avg_power: Optional[np.ndarray] = None
+        self._reset_avg_event = threading.Event()
 
         self.available = False
         self.status = "stopped"   # stopped | live | unavailable
@@ -128,6 +139,7 @@ class SdrClient:
         if self._consumer_thread:
             await self._loop.run_in_executor(None, self._consumer_thread.join, 3.0)
         await self._loop.run_in_executor(None, self._close)
+        self._avg_power = None
         self.available = False
         self.status = "stopped"
         logger.info("SdrClient stopped")
@@ -140,6 +152,9 @@ class SdrClient:
             return
         self.rf_freq_hz = freq_hz
         self.audio.rf_center_hz = freq_hz
+        # A retune is a discontinuity, not noise — don't let the average blend
+        # the old frequency's content into the new view's first few frames.
+        self._reset_avg_event.set()
         if self._loop:
             self._loop.run_in_executor(None, self._apply_center_freq, freq_hz)
 
@@ -275,6 +290,7 @@ class SdrClient:
         if self._consumer_thread:
             await self._loop.run_in_executor(None, self._consumer_thread.join, 3.0)
         await self._loop.run_in_executor(None, self._close)
+        self._avg_power = None
         logger.info("SdrClient cleaned up after device removal")
 
     # ------------------------------------------------------------------
@@ -343,7 +359,33 @@ class SdrClient:
         iq = (block_i.astype(np.float32) + 1j * block_q.astype(np.float32)).astype(np.complex64)
         iq *= self._window
         spectrum = np.fft.fftshift(np.fft.fft(iq))
-        mag_db = (20.0 * np.log10(np.abs(spectrum) / self._fullscale_ref + 1e-12)).astype(np.float32)
+        power = (np.abs(spectrum) ** 2).astype(np.float32)
+
+        if self.audio.tx_active:
+            # SDR Switch disconnects the antenna during TX — this magnitude
+            # is disconnected-input noise, not a real reading. Same reasoning
+            # as AudioDemodulator's TX handling: don't let it pollute the
+            # rolling average, or RX would resume post-TX blended with a few
+            # hundred ms of garbage instead of starting clean. The frontend
+            # already freezes its own display during TX (rig.ptt), but the
+            # server kept computing+publishing real frames underneath that
+            # freeze regardless — this average is shared state across calls,
+            # so it has to stay correct even though nobody's looking at it.
+            self._avg_power = None
+            mag_db = (10.0 * np.log10(power / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
+        else:
+            if self._reset_avg_event.is_set():
+                self._avg_power = None
+                self._reset_avg_event.clear()
+            if self._avg_power is None:
+                self._avg_power = power
+            else:
+                # Averaged in linear power, not dB — averaging dB values directly
+                # is biased low by log compression. Converting to dB once at the
+                # end, after averaging, matches how Bartlett/Welch averaging is
+                # done in real spectrum analyzers.
+                self._avg_power = self._avg_power * self._avg_decay + power * (1.0 - self._avg_decay)
+            mag_db = (10.0 * np.log10(self._avg_power / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
         return {
             "ts": time.time(),
             "center_freq_hz": self.rf_freq_hz,
@@ -351,6 +393,26 @@ class SdrClient:
             "sample_rate_hz": self.sample_rate_hz,
             "data": mag_db,
         }
+
+    def passband_strength_db(self, center_hz: float, bandwidth_hz: float) -> Optional[float]:
+        """Average power (dBFS) across the bins spanning [center_hz ± bandwidth_hz/2]
+        in the latest averaged frame — used as the S-meter source, since the
+        radio's own receive antenna port sees nothing under this station's SDR
+        Switch wiring (the RSPdx-R2 is the actual receiver). None if no frame
+        computed yet, or mid-TX (averaging is reset/skipped during TX, see
+        _compute_frame)."""
+        if self._avg_power is None:
+            return None
+        n = len(self._avg_power)
+        span_hz = self.sample_rate_hz
+        bin_hz = span_hz / n
+        full_lo_hz = self.rf_freq_hz - span_hz / 2
+        start_bin = int((center_hz - bandwidth_hz / 2 - full_lo_hz) / bin_hz)
+        end_bin = int(np.ceil((center_hz + bandwidth_hz / 2 - full_lo_hz) / bin_hz))
+        start_bin = max(0, min(n - 1, start_bin))
+        end_bin = max(start_bin + 1, min(n, end_bin))
+        avg_power = float(np.mean(self._avg_power[start_bin:end_bin]))
+        return 10.0 * float(np.log10(avg_power / (self._fullscale_ref ** 2) + 1e-30))
 
     async def _publish(self, frame: dict):
         for cb in self._spectrum_callbacks:

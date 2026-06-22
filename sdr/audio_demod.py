@@ -48,6 +48,20 @@ class AudioDemodulator:
         self.mode = "USB"          # USB | LSB
         self.bandwidth_hz = 2800.0
         self.agc_gain = 1.0
+        # Auto-leveling speed, driven by the console's AGC OFF/FAST/SLOW
+        # buttons — repurposed to control this instead of the radio's own
+        # (now-irrelevant) receiver AGC, since the RSPdx-R2 is the actual
+        # receiver and the radio's CAT-commanded AGC has no audible effect.
+        # "off" bypasses auto-leveling entirely (manual_gain alone sets the
+        # level, same as riding a real radio's AF gain knob with AGC off).
+        self.agc_mode = "slow"    # off | fast | slow
+        # Separate, user-facing master volume (RX Volume slider) — kept
+        # independent of the AGC's own internal gain so "still too quiet"
+        # has a direct, predictable knob instead of more guessing at the
+        # auto-leveling target. Default landed at 4.0 (400%) after live
+        # listening still found 2.0 too quiet — slider goes to 10.0 (1000%)
+        # if more is still needed.
+        self.manual_gain = 4.0
         self.tx_active = False
         self._was_tx_active = False
         self.dropped_count = 0
@@ -264,12 +278,28 @@ class AudioDemodulator:
         # transients) — without being able to listen directly, a slower,
         # symmetric, predictable design plus a hard safety limiter is more
         # trustworthy than continuing to chase attack/decay parameters.
+        # AGC leveling and overall volume are now two separate stages: the
+        # AGC (when not OFF) levels toward a modest, safe target_rms so
+        # peaks don't ride right up against the limiter; manual_gain is the
+        # user-facing RX Volume control applied on top, independent of
+        # whatever the AGC decides — so "too quiet" has a direct knob
+        # instead of needing the auto-leveling target chased over and over.
         rms = float(np.sqrt(np.mean(audio ** 2))) + 1e-6
-        target_rms = 0.1
-        desired_gain = target_rms / rms
-        self.agc_gain += (desired_gain - self.agc_gain) * 0.03
-        self.agc_gain = float(np.clip(self.agc_gain, 0.1, 6.0))
-        audio = np.clip(audio * self.agc_gain, -0.95, 0.95)   # hard safety backstop, not the primary leveler
+        if self.agc_mode == "off":
+            gain = 1.0   # pure manual — same as riding a real radio's AF gain knob with AGC off
+        else:
+            # FAST adapts ~4x quicker than SLOW. SLOW's 0.03 time constant is
+            # the original, carefully-tuned value (several rounds of
+            # asymmetric-attack/decay tuning each fixed one failure mode
+            # while introducing another — see module docstring) — left
+            # untouched as the default.
+            decay_rate = 0.12 if self.agc_mode == "fast" else 0.03
+            target_rms = 0.15
+            desired_gain = target_rms / rms
+            self.agc_gain += (desired_gain - self.agc_gain) * decay_rate
+            self.agc_gain = float(np.clip(self.agc_gain, 0.1, 6.0))
+            gain = self.agc_gain
+        audio = np.clip(audio * gain * self.manual_gain, -0.95, 0.95)   # hard safety backstop, not the primary leveler
 
         pcm16 = (audio * 32767).astype(np.int16)
         return pcm16.tobytes()

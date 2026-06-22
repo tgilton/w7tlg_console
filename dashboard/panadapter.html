@@ -130,6 +130,45 @@ html, body {
 
 #span-slider { width: 160px; accent-color: var(--cyan); cursor: pointer; }
 
+.smeter-mini-wrap {
+  width: 130px;
+  height: 14px;
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.smeter-mini-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--green);
+  transition: width 0.15s ease-out, background-color 0.15s ease-out;
+}
+.smeter-mini-bar.over-s9 { background: var(--red); }
+.smeter-mini-label {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--cyan);
+  min-width: 32px;
+}
+.smeter-mini-db {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  min-width: 68px;
+}
+#s9-cal-input {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  color: var(--text);
+  padding: 4px 5px;
+  border-radius: 3px;
+  width: 50px;
+}
+
 .span-val {
   font-family: var(--mono);
   color: var(--cyan);
@@ -222,6 +261,13 @@ html, body {
     <option value="default">Default</option>
     <option value="linrad">Linrad (approx)</option>
   </select>
+
+  <span class="control-label" style="margin-left:16px">Signal</span>
+  <div class="smeter-mini-wrap"><div class="smeter-mini-bar" id="smeter-mini-bar"></div></div>
+  <span class="smeter-mini-label" id="smeter-mini-label">S0</span>
+  <span class="smeter-mini-db" id="smeter-mini-db">— dBFS</span>
+  <span class="control-label" style="margin-left:8px">S9 Cal</span>
+  <input type="number" id="s9-cal-input" value="-75" step="1" oninput="onS9CalInput(this.value)">
 </div>
 
 <div class="spectrum-wrap">
@@ -703,6 +749,60 @@ function cropToView(frame, outPoints) {
   return out;
 }
 
+// ── S-meter — computed from the RSPdx-R2's own spectrum, not rig.strength_db.
+// Under this station's SDR Switch wiring the radio's receive antenna port
+// sees nothing during RX (the RSPdx-R2 is the actual receiver), so Hamlib's
+// STRENGTH level reads a fixed S0 floor always — confirmed live, not a guess.
+// S9 Cal is a single adjustable reference point (dBFS that should read as
+// S9), not a true dBm calibration — there's no fixed dBFS-to-dBm mapping
+// without knowing the SDR's exact RF gain chain, so tune it by ear/comparison
+// against a real signal rather than trusting the default.
+let s9CalDb = -75;
+function onS9CalInput(v) {
+  const n = parseFloat(v);
+  if (isFinite(n)) s9CalDb = n;
+}
+
+// Average power (not dB) across the bins spanning the rig's passband —
+// averaging dB directly would be biased low by log compression, same
+// reasoning as the server-side spectrum averaging.
+function passbandAvgDb(frame, centerHz, bandwidthHz) {
+  const n = frame.data.length;
+  const binHz = frame.spanHz / n;
+  const fullLoHz = frame.centerFreqHz - frame.spanHz / 2;
+  let startBin = Math.floor((centerHz - bandwidthHz / 2 - fullLoHz) / binHz);
+  let endBin = Math.ceil((centerHz + bandwidthHz / 2 - fullLoHz) / binHz);
+  startBin = Math.max(0, Math.min(n - 1, startBin));
+  endBin = Math.max(startBin + 1, Math.min(n, endBin));
+  let sumPower = 0;
+  for (let i = startBin; i < endBin; i++) sumPower += Math.pow(10, frame.data[i] / 10);
+  return 10 * Math.log10(sumPower / (endBin - startBin) + 1e-30);
+}
+
+// Mirrors rig/rigctld_client.py's smeter_label(): S9 = 0dB re S9, 6dB/S-unit
+// below, 10dB/S-unit ("S9+NN") above — same convention as the main console's
+// widget, just fed from a different source.
+function smeterLabel(strengthDb) {
+  if (strengthDb >= 0) {
+    const over = Math.round(strengthDb / 10) * 10;
+    return over > 0 ? `S9+${over}` : 'S9';
+  }
+  const s = Math.max(0, Math.min(9, 9 + Math.floor(strengthDb / 6)));
+  return `S${s}`;
+}
+
+function updateSmeter() {
+  if (!latestFrame || rigFreqHz === null) return;
+  const bandwidthHz = (rigPassbandHz && rigPassbandHz > 0) ? rigPassbandHz : 2400;
+  const dbFs = passbandAvgDb(latestFrame, rigFreqHz, bandwidthHz);
+  const strengthDb = dbFs - s9CalDb;   // dB re S9, same scale rig.strength_db uses
+  const pct = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100));
+  document.getElementById('smeter-mini-bar').style.width = pct + '%';
+  document.getElementById('smeter-mini-bar').classList.toggle('over-s9', strengthDb >= 0);
+  document.getElementById('smeter-mini-label').textContent = smeterLabel(strengthDb);
+  document.getElementById('smeter-mini-db').textContent = dbFs.toFixed(1) + ' dBFS';
+}
+
 // ── Spectrum line rendering ────────────────────────────────
 const canvas = document.getElementById('spectrum-canvas');
 const ctx = canvas.getContext('2d');
@@ -786,6 +886,7 @@ function onGainSlider(v) {
 
 function drawSpectrum() {
   updateDisplayedRigFreq();
+  updateSmeter();
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
   const w = Math.max(1, rect.width * dpr), h = Math.max(1, rect.height * dpr);
@@ -805,15 +906,31 @@ function drawSpectrum() {
     if (autoScale) updateDbRange(points);
     const [floor, ceil] = effectiveFloorCeil();
 
+    const xs = new Float32Array(points.length);
+    const ys = new Float32Array(points.length);
+    for (let i = 0; i < points.length; i++) {
+      xs[i] = (i / (points.length - 1)) * w;
+      const pct = Math.max(0, Math.min(1, (points[i] - floor) / (ceil - floor)));
+      ys[i] = h - pct * h;
+    }
+
+    // Filled below the trace, then stroked on top — a solid fill reads as a
+    // continuous signal level at a glance, where a thin line on a noisy
+    // trace was easy to lose against the background.
+    ctx.beginPath();
+    ctx.moveTo(xs[0], ys[0]);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(xs[i], ys[i]);
+    ctx.lineTo(xs[points.length - 1], h);
+    ctx.lineTo(xs[0], h);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 212, 255, 0.25)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(xs[0], ys[0]);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(xs[i], ys[i]);
     ctx.strokeStyle = '#00d4ff';
     ctx.lineWidth = 1.5 * dpr;
-    ctx.beginPath();
-    for (let i = 0; i < points.length; i++) {
-      const x = (i / (points.length - 1)) * w;
-      const pct = Math.max(0, Math.min(1, (points[i] - floor) / (ceil - floor)));
-      const y = h - pct * h;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
     ctx.stroke();
 
     drawRigMarker(ctx, w, h, dpr);

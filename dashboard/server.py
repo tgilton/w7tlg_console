@@ -153,10 +153,31 @@ bridge: Optional[AcomBridge] = None
 sdr: Optional[SdrClient] = None
 
 
+def build_state_payload(state: StationState) -> dict:
+    data = state.to_dict()
+    data["rig"] = dict(data["rig"])   # copy — to_dict() hands back the live StationState.rig dict by reference
+    # rig.strength_db (Hamlib STRENGTH) is dead under this station's SDR
+    # Switch wiring — the radio's own receive antenna port sees nothing
+    # during RX, the RSPdx-R2 is the actual receiver. Compute a real S-meter
+    # from the SDR's own spectrum instead, at the rig's current passband.
+    # None (omitted) during TX — the antenna's disconnected then too.
+    if sdr is not None and sdr.available:
+        data["rig"]["sdr_rx_volume"] = sdr.audio.manual_gain   # config values, not TX/RX-gated
+        data["rig"]["sdr_agc_mode"] = sdr.audio.agc_mode
+        if not data["rig"].get("ptt", False):
+            freq_hz = data["rig"].get("freq_hz")
+            if freq_hz:
+                bandwidth_hz = data["rig"].get("passband_hz") or 2400
+                db_fs = sdr.passband_strength_db(float(freq_hz), float(bandwidth_hz))
+                if db_fs is not None:
+                    data["rig"]["sdr_strength_db"] = db_fs
+    return data
+
+
 async def on_station_state(state: StationState):
     if sdr is not None and sdr.available:
         sdr.audio.tx_active = bool(state.rig.get("ptt", False))
-    await manager.broadcast({"type": "state", "data": state.to_dict()})
+    await manager.broadcast({"type": "state", "data": build_state_payload(state)})
 
 
 async def on_spectrum_frame(frame: dict):
@@ -243,7 +264,7 @@ class TxRequest(BaseModel):
 async def get_state():
     if bridge is None:
         raise HTTPException(503, "Bridge not initialized")
-    return bridge.station.to_dict()
+    return build_state_payload(bridge.station)
 
 
 @app.post("/api/mode")
@@ -299,7 +320,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     if bridge:
         await websocket.send_text(json.dumps({
-            "type": "state", "data": bridge.station.to_dict()}))
+            "type": "state", "data": build_state_payload(bridge.station)}))
     try:
         while True:
             text = await websocket.receive_text()
@@ -383,7 +404,21 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
         elif cmd == "set_agc":
-            ok = await bridge.rig.set_agc(int(msg["value"]))
+            value = int(msg["value"])
+            ok = await bridge.rig.set_agc(value)
+            # Also drives the SDR audio chain's auto-leveling speed — the
+            # radio's own CAT-commanded AGC has no audible effect, since the
+            # RSPdx-R2 (not the radio's receiver) is what's actually heard.
+            if sdr is not None and sdr.available:
+                sdr.audio.agc_mode = {0: "off", 2: "fast", 3: "slow"}.get(value, "slow")
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_rx_volume":
+            ok = False
+            if sdr is not None and sdr.available:
+                sdr.audio.manual_gain = max(0.0, min(10.0, float(msg["gain"])))
+                ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
