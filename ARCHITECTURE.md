@@ -44,6 +44,89 @@ The console is a single FastAPI process that owns three persistent connections �
                                               → WSJT-X/digital-mode software
 ```
 
+## System Diagram (hardware + software, full stack)
+
+The diagram above is software-only. This one adds the RF hardware chain and the third-party ham radio software that shares the Mac with this console — i.e. the whole station, not just this repo.
+
+```mermaid
+flowchart TB
+    subgraph RF["RF Hardware"]
+        ANT1["SS-25/DXF Vertical<br/>(A1F, 1500W)"]
+        ANT3["40m EFHW<br/>(A3R, 300W)"]
+        ANT4["Dummy Load<br/>(A4R, 1500W)"]
+        SWITCH["SDR Switch<br/>(3-port, PTT-driven relay)"]
+        RSP["SDRplay RSPdx-R2<br/>(SDR — actual RX receiver)"]
+        TUNER["ACOM 06AT<br/>Auto Antenna Tuner<br/>(powered via 1200S, no own PSU)"]
+        AMP["ACOM 1200S<br/>1200W Linear Amp<br/>(also: 4-port antenna relay)"]
+        FT991["Yaesu FT-991A<br/>Transceiver"]
+
+        ANT1 --- SWITCH
+        ANT3 --- SWITCH
+        ANT4 --- SWITCH
+        SWITCH -. "RX (default state)" .- RSP
+        SWITCH -. "TX (relay hands over for the duration of TX only)" .- TUNER
+        TUNER --- AMP
+        AMP -- "drive RF in / amplified RF out" --- FT991
+    end
+
+    subgraph MACSW["Mac Studio — this repo's Python backend"]
+        RIGCTLD["rigctld (Hamlib)"]
+        RIGCLIENT["RigctldClient<br/>rig/rigctld_client.py"]
+        ACOMSER["AcomSerial + acom_protocol<br/>amplifier/"]
+        BRIDGE["AcomBridge<br/>amplifier/acom_bridge.py<br/>safety interlocks, trending"]
+        SDRCLIENT["SdrClient<br/>sdr/sdr_client.py<br/>IQ capture + FFT (numpy)"]
+        AUDIODEMOD["AudioDemodulator<br/>sdr/audio_demod.py<br/>SSB demod, EQ, AGC (scipy)"]
+        NR["DeepFilterNet3 + torch<br/>noise reduction"]
+        DIGAUDIO["DigitalAudioOutput<br/>sdr/virtual_audio_output.py<br/>(sounddevice)"]
+        BLACKHOLE[("BlackHole 2ch<br/>virtual audio device")]
+        FASTAPI["FastAPI app<br/>dashboard/server.py<br/>REST + WebSocket"]
+
+        RIGCTLD <--> RIGCLIENT --> BRIDGE
+        ACOMSER <--> BRIDGE
+        SDRCLIENT --> AUDIODEMOD
+        AUDIODEMOD <--> NR
+        AUDIODEMOD --> DIGAUDIO --> BLACKHOLE
+        BRIDGE --> FASTAPI
+        SDRCLIENT --> FASTAPI
+        AUDIODEMOD --> FASTAPI
+    end
+
+    subgraph BROWSER["Browser UI (vanilla HTML/JS, no build step)"]
+        DASH["index.html<br/>Operating console"]
+        PAN["panadapter.html<br/>Spectrum/waterfall + RX audio"]
+        MON["monitor.html<br/>Trending/health"]
+    end
+
+    subgraph EXT["Third-party ham radio software (same Mac, separate apps)"]
+        WSJTX["WSJT-X<br/>FT8/digital encode+decode"]
+        GT["GridTracker2<br/>grid/POTA spotting"]
+        LOG["RUMLogNG<br/>QSO logging"]
+    end
+
+    FT991 == "USB: CAT + audio CODEC" ==> RIGCTLD
+    FT991 == "USB: TX audio (digital modes only)" ==> WSJTX
+    AMP == "FTDI USB-serial: telemetry + commands" ==> ACOMSER
+    RSP == "USB: SDRplay vendor API (native)" ==> SDRCLIENT
+
+    FASTAPI <-. "WebSocket: /ws" .-> DASH
+    FASTAPI <-. "WebSocket: /ws, /ws/spectrum, /ws/audio" .-> PAN
+    FASTAPI <-. "WebSocket: /ws" .-> MON
+
+    BLACKHOLE -. "RX audio" .-> WSJTX
+    WSJTX -. "CAT (separate rigctld client)" .-> RIGCTLD
+    WSJTX -. UDP .-> GT
+    WSJTX -. UDP .-> LOG
+
+    classDef hw fill:#2b2b2b,stroke:#888888,color:#ffffff;
+    classDef sw fill:#0d3b54,stroke:#00d4ff,color:#ffffff;
+    classDef ext fill:#3a2b0d,stroke:#e0a030,color:#ffffff;
+    class ANT1,ANT3,ANT4,SWITCH,RSP,TUNER,AMP,FT991 hw;
+    class RIGCTLD,RIGCLIENT,ACOMSER,BRIDGE,SDRCLIENT,AUDIODEMOD,NR,DIGAUDIO,BLACKHOLE,FASTAPI,DASH,PAN,MON sw;
+    class WSJTX,GT,LOG ext;
+```
+
+Solid lines in the RF subgraph are fixed RF coax runs; dotted lines are the SDR Switch's relay fork (one or the other, never both); `==>` are physical USB/serial links into the Mac; dotted arrows elsewhere are software-level connections (WebSocket, CAT-over-TCP, UDP). GridTracker2/RUMLogNG's own rigctld/UDP connections exist but aren't this repo's concern, so they're only sketched at the WSJT-X boundary — see the README's "Operating" section for the full third-party chain.
+
 ## Modules
 
 ### `rig/rigctld_client.py`
