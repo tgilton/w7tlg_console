@@ -27,6 +27,7 @@ import numpy as np
 
 from . import sdrplay_capi as capi
 from .audio_demod import AudioDemodulator
+from .virtual_audio_output import DigitalAudioOutput
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,17 @@ class SdrClient:
         # purely a latency knob now, not a glitch-avoidance one. Smaller is
         # better: it also caps the relative cost of the accumulation buffer.
         self.audio = AudioDemodulator(input_rate_hz=sample_rate_hz)
+        # Second subscriber on the same demodulated audio — feeds digital-mode
+        # software (WSJT-X etc.) via a virtual audio cable instead of needing
+        # the antenna switched back to the radio's own receiver.
+        self.digital_audio = DigitalAudioOutput()
+        self.audio.on_audio(self.digital_audio.on_audio_frame)
+        # Digital-mode fine spectrum rides the same broadcast path as the
+        # wideband one (_publish already just fans out to whatever's
+        # subscribed via on_spectrum) — the "kind": "fine" tag on the frame
+        # is what lets the frontend and SpectrumConnectionManager tell them
+        # apart downstream.
+        self.audio.on_fine_spectrum(self._publish)
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,6 +141,7 @@ class SdrClient:
         self._consumer_thread.start()
         self.audio.rf_center_hz = self.rf_freq_hz
         self.audio.start(self._loop)
+        self.digital_audio.start()
         logger.info("SdrClient started")
 
     async def stop(self):
@@ -136,6 +149,7 @@ class SdrClient:
             return
         self._stop_event.set()
         self.audio.stop()
+        self.digital_audio.stop()
         if self._consumer_thread:
             await self._loop.run_in_executor(None, self._consumer_thread.join, 3.0)
         await self._loop.run_in_executor(None, self._close)
@@ -287,6 +301,7 @@ class SdrClient:
         full app restart. Now actually tears down like a normal stop()."""
         self._stop_event.set()
         self.audio.stop()
+        self.digital_audio.stop()
         if self._consumer_thread:
             await self._loop.run_in_executor(None, self._consumer_thread.join, 3.0)
         await self._loop.run_in_executor(None, self._close)

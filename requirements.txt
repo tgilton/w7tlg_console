@@ -4,3 +4,8 @@ websockets==16.0
 pyserial==3.5
 pydantic==2.13.4
 numpy==2.4.6
+scipy==1.18.0
+sounddevice==0.5.5
+torch==2.12.1
+torchaudio==2.11.0
+deepfilternet==0.5.6

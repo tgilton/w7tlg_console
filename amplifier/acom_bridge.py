@@ -4,7 +4,9 @@ ACOM Bridge — Ties RigctldClient to AcomSerial
 Responsibilities:
   - Watches rig frequency changes → sends band/antenna select to ACOM 1200S
   - Enforces operating mode power limits and safety interlocks
-  - Monitors ACOM telemetry → reflected power watchdog for A3R (EFHW)
+  - Surfaces a passive SWR warning (>2.5) from ACOM telemetry — never inhibits
+  - Mirrors the amp's own hard/soft fault bits (message 0x21) into TX inhibit —
+    real safety enforcement lives in the amp's firmware, not console heuristics
   - Enforces A4R (dummy load) 10-second TX hard cutoff
   - Publishes unified station state for WebSocket broadcast
 
@@ -16,25 +18,22 @@ Operating Modes:
 Antenna Configuration (w7tlg station):
   A1F — SS-25 / future DXF   1500W  all bands   unlimited
   A2F — unconnected           0W    disabled
-  A3R — 40m EFHW multiband  300W   all HF      reflected power watchdog
+  A3R — 40m EFHW multiband  300W   all HF
   A4R — dummy load          1500W   any         10s hard TX cutoff
 """
 
 import asyncio
 from collections import deque
-import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path
 from typing import Optional, Callable, Coroutine
 
 from amplifier.acom_protocol import (
     AmpTelemetry, FaultStatus,
     cmd_next_antenna, cmd_select_band, cmd_tx_prohibit, cmd_tx_allow,
-    cmd_standby, cmd_operate,
+    cmd_standby, cmd_operate, cmd_clear_soft_faults,
     freq_to_band as acom_freq_to_band, Band as AcomBand,
 )
 from amplifier.acom_serial import AcomSerial
@@ -105,7 +104,6 @@ class AntennaConfig:
     bands: list
     enabled: bool
     dummy_load: bool
-    refl_watchdog: bool
 
     def allows_band(self, band: AcomBand) -> bool:
         if not self.enabled:
@@ -120,135 +118,31 @@ ANTENNAS: dict[int, AntennaConfig] = {
         port="A1F", number=1,
         name="SS-25 / DXF Vertical",
         max_power_w=1500, bands=[], enabled=True,
-        dummy_load=False, refl_watchdog=False,
+        dummy_load=False,
     ),
     2: AntennaConfig(
         port="A2F", number=2,
         name="Unconnected",
         max_power_w=0, bands=[], enabled=False,
-        dummy_load=False, refl_watchdog=False,
+        dummy_load=False,
     ),
     3: AntennaConfig(
         port="A3R", number=3,
         name="40m EFHW Multiband",
         max_power_w=300, bands=[], enabled=True,
-        dummy_load=False, refl_watchdog=True,
+        dummy_load=False,
     ),
     4: AntennaConfig(
         port="A4R", number=4,
         name="Dummy Load",
         max_power_w=1500, bands=[], enabled=True,
-        dummy_load=True, refl_watchdog=False,
+        dummy_load=True,
     ),
 }
 
 DUMMY_LOAD_MAX_TX_S = 10.0
-REFL_WATCHDOG_RATIO = 2.0
-
-# ---------------------------------------------------------------------------
-# Thermal state
-# ---------------------------------------------------------------------------
-
-@dataclass
-class AntennaThermState:
-    antenna_number: int
-    inhibited: bool = False
-    inhibited_at: Optional[str] = None
-    inhibited_reason: str = ""
-    ambient_temp_c: Optional[float] = None
-    refl_baseline: dict = field(default_factory=dict)
-    operator_cleared: bool = False
-
-    def to_dict(self) -> dict:
-        return {
-            "antenna_number":   self.antenna_number,
-            "inhibited":        self.inhibited,
-            "inhibited_at":     self.inhibited_at,
-            "inhibited_reason": self.inhibited_reason,
-            "ambient_temp_c":   self.ambient_temp_c,
-            "refl_baseline":    self.refl_baseline,
-            "operator_cleared": self.operator_cleared,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "AntennaThermState":
-        obj = cls(antenna_number=d.get("antenna_number", 0))
-        obj.inhibited        = d.get("inhibited", False)
-        obj.inhibited_at     = d.get("inhibited_at")
-        obj.inhibited_reason = d.get("inhibited_reason", "")
-        obj.ambient_temp_c   = d.get("ambient_temp_c")
-        obj.refl_baseline    = d.get("refl_baseline", {})
-        obj.operator_cleared = d.get("operator_cleared", False)
-        return obj
-
-
-class ThermalStateManager:
-    def __init__(self, state_file: Path):
-        self.state_file = state_file
-        self.states: dict[int, AntennaThermState] = {}
-        self._load()
-
-    def _load(self):
-        if self.state_file.exists():
-            try:
-                data = json.loads(self.state_file.read_text())
-                for ant_num, d in data.items():
-                    self.states[int(ant_num)] = AntennaThermState.from_dict(d)
-                logger.info(f"Loaded thermal state from {self.state_file}")
-            except Exception as e:
-                logger.warning(f"Could not load thermal state: {e}")
-
-    def save(self):
-        try:
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            data = {str(k): v.to_dict() for k, v in self.states.items()}
-            self.state_file.write_text(json.dumps(data, indent=2))
-        except Exception as e:
-            logger.error(f"Could not save thermal state: {e}")
-
-    def get(self, antenna_number: int) -> AntennaThermState:
-        if antenna_number not in self.states:
-            self.states[antenna_number] = AntennaThermState(
-                antenna_number=antenna_number)
-        return self.states[antenna_number]
-
-    def inhibit(self, antenna_number: int, reason: str,
-                ambient_temp_c: Optional[float] = None):
-        state = self.get(antenna_number)
-        state.inhibited        = True
-        state.inhibited_at     = datetime.now(timezone.utc).isoformat()
-        state.inhibited_reason = reason
-        state.ambient_temp_c   = ambient_temp_c
-        state.operator_cleared = False
-        self.save()
-        logger.warning(f"Antenna {antenna_number} thermally inhibited: {reason}")
-
-    def clear_inhibit(self, antenna_number: int):
-        state = self.get(antenna_number)
-        state.inhibited        = False
-        state.inhibited_reason = ""
-        state.refl_baseline    = {}
-        state.operator_cleared = True
-        self.save()
-        logger.info(f"Antenna {antenna_number} thermal inhibit cleared by operator")
-
-    def set_refl_baseline(self, antenna_number: int,
-                          band_name: str, refl_w: float):
-        state = self.get(antenna_number)
-        if band_name not in state.refl_baseline:
-            state.refl_baseline[band_name] = refl_w
-            self.save()
-            logger.info(
-                f"Ant {antenna_number} {band_name} refl baseline: {refl_w:.1f}W")
-
-    def check_refl_watchdog(self, antenna_number: int,
-                            band_name: str, refl_w: float) -> bool:
-        state = self.get(antenna_number)
-        baseline = state.refl_baseline.get(band_name)
-        if baseline is None or baseline < 1.0:
-            return False
-        return refl_w >= baseline * REFL_WATCHDOG_RATIO
-
+SWR_WARNING_THRESHOLD = 2.5
+SWR_WARNING_CLEAR_THRESHOLD = 2.3
 
 # ---------------------------------------------------------------------------
 # Unified station state
@@ -281,7 +175,8 @@ class StationState:
     tx_cycle_count: int = 0
     dummy_load_active: bool = False
     dummy_load_remaining_s: float = 0.0
-    thermal_inhibit: dict = field(default_factory=dict)
+    swr_warning_active: bool = False
+    swr_warning_peak: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -310,7 +205,8 @@ class StationState:
             "tx_inhibit_reason":      self.tx_inhibit_reason,
             "dummy_load_active":      self.dummy_load_active,
             "dummy_load_remaining_s": self.dummy_load_remaining_s,
-            "thermal_inhibit":        self.thermal_inhibit,
+            "swr_warning_active":     self.swr_warning_active,
+            "swr_warning_peak":       self.swr_warning_peak,
         }
 
 
@@ -331,17 +227,16 @@ class AcomBridge:
         self,
         rig: RigctldClient,
         amp: AcomSerial,
-        state_file: Path = Path("config/thermal_state.json"),
     ):
         self.rig = rig
         self.amp = amp
-        self.thermal = ThermalStateManager(state_file)
         self.station = StationState()
 
         self._mode = OperatingMode.AMP_OFF
         self._selected_antenna = 4
         self._high_power_confirmed = False
         self._tx_inhibited = False
+        self._swr_warning_active = False
         # Trending buffers
         self._trend_buffer = deque(maxlen=6000)   # ~10min at 10Hz
         self._duty_samples = deque(maxlen=3000)   # ~5min at 10Hz
@@ -413,10 +308,6 @@ class AcomBridge:
         logger.info("Sent NEXT ANTENNA (front-panel ANT button equivalent)")
         return True, "Antenna cycle requested"
 
-    async def operator_clear_thermal(self, antenna_number: int):
-        self.thermal.clear_inhibit(antenna_number)
-        await self._publish()
-
     async def inhibit_tx(self, reason: str):
         if not self._tx_inhibited:
             self._tx_inhibited = True
@@ -429,6 +320,13 @@ class AcomBridge:
         if self._tx_inhibited:
             self._tx_inhibited = False
             self._tx_inhibit_reason = ""
+            if self.station.fault_soft:
+                # Soft faults can latch on the amp's own side (e.g. "PA LOAD
+                # SWR TOO HIGH") — clearing only the console's flag would let
+                # the next fault-status read immediately re-trip _on_fault.
+                # Ask the amp to clear its own soft faults at the source.
+                await self.amp.send(cmd_clear_soft_faults())
+                logger.info("Sent CLEAR_SOFT_FAULTS to amp")
             await self.amp.send(cmd_tx_allow())
             logger.info("TX inhibit cleared")
             await self._publish()
@@ -467,11 +365,6 @@ class AcomBridge:
         logger.info("TX start detected")
         ant_config = ANTENNAS.get(self._selected_antenna)
         if not ant_config:
-            return
-
-        therm = self.thermal.get(self._selected_antenna)
-        if therm.inhibited:
-            await self.inhibit_tx(f"{ant_config.name} is thermally inhibited")
             return
 
         if ant_config.dummy_load:
@@ -536,25 +429,21 @@ class AcomBridge:
         self.station.amp_ptt_active = t.flag_keyin
         self.station.amp_atu_tuned  = t.flag_atu_tuned
 
-        ant_config = ANTENNAS.get(self._selected_antenna)
-        if (ant_config and ant_config.refl_watchdog
-                and self._tx_was_active
-                and self._current_acom_band):
-            band_name = self._current_acom_band.name
-            refl = t.refl_power_w
-            self.thermal.set_refl_baseline(
-                self._selected_antenna, band_name, refl)
-            if self.thermal.check_refl_watchdog(
-                    self._selected_antenna, band_name, refl):
-                reason = (
-                    f"Reflected power {refl:.0f}W exceeded 2x baseline "
-                    f"on {band_name} — antenna may be overheating")
-                await self.inhibit_tx(reason)
-                self.thermal.inhibit(self._selected_antenna, reason)
-
-        self.station.thermal_inhibit = {
-            str(k): v.to_dict() for k, v in self.thermal.states.items()
-        }
+        # SWR is purely a passive notification to the operator — never an
+        # auto-inhibit. The amp's own firmware-computed fault bits (handled
+        # in _on_fault) are the real, robust protection; this is just a
+        # heads-up. Edge-triggered with hysteresis so it doesn't chatter
+        # right at the threshold.
+        if self._tx_was_active and t.swr >= SWR_WARNING_THRESHOLD:
+            if not self._swr_warning_active:
+                self._swr_warning_active = True
+                logger.warning(
+                    f"SWR {t.swr:.2f} exceeded {SWR_WARNING_THRESHOLD} warning threshold")
+            self.station.swr_warning_peak = max(self.station.swr_warning_peak, t.swr)
+        elif not self._tx_was_active or t.swr <= SWR_WARNING_CLEAR_THRESHOLD:
+            self._swr_warning_active = False
+            self.station.swr_warning_peak = 0.0
+        self.station.swr_warning_active = self._swr_warning_active
 
         # ---- Trending sample collection ----
         now = time.time()

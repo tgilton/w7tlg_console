@@ -177,6 +177,8 @@ html, body {
 .badge-ptt-rx { background: var(--green-dim); color: var(--green); }
 .badge-ptt-tx { background: var(--amber-dim); color: var(--amber); animation: pulse-tx 0.8s infinite; }
 .badge-digital { background: #1a2a1a; color: #4f8; font-size: 0.6rem; }
+.badge-digital-audio-active { background: #1a2a1a; color: #4f8; font-size: 0.6rem; }
+.badge-digital-audio-inactive { background: #2a1a1a; color: #f88; font-size: 0.6rem; }
 
 @keyframes pulse-tx {
   0%, 100% { opacity: 1; }
@@ -254,10 +256,17 @@ html, body {
 }
 
 /* ── TX meters (ALC, PO, SWR) ───────────────────────────── */
+/* Always laid out (never display:none) so the rig panel never resizes when
+   PTT toggles — only dimmed/reset while receiving, lit up on TX. */
 .tx-meters {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
+  transition: opacity 0.15s ease-out;
+}
+
+.tx-meters.inactive {
+  opacity: 0.35;
 }
 
 .tx-meter { }
@@ -581,18 +590,6 @@ input[type=range]::-webkit-slider-thumb:active {
 }
 .dummy-timer.critical { color: var(--red); animation: pulse-tx 0.4s infinite; }
 
-/* ── Thermal inhibit ─────────────────────────────────────── */
-.thermal-item {
-  background: #1a0505;
-  border: 1px solid #5a1a1a;
-  border-radius: 3px;
-  padding: 6px 10px;
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  color: #ff8888;
-  margin-top: 4px;
-}
-
 /* ── Divider ─────────────────────────────────────────────── */
 .divider {
   height: 2px;
@@ -786,6 +783,7 @@ input[type=range]::-webkit-slider-thumb:active {
         <span class="badge badge-mode" id="badge-mode">—</span>
         <span class="badge badge-ptt-rx" id="badge-ptt">RX</span>
         <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
+        <span class="badge badge-digital-audio-inactive" id="badge-digital-audio" style="display:none">DIGI AUDIO</span>
       </div>
     </div>
 
@@ -812,8 +810,8 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
-    <!-- TX meters (shown during TX) -->
-    <div class="tx-meters" id="tx-meters" style="display:none">
+    <!-- TX meters (always laid out; dimmed/reset in RX, lit on TX) -->
+    <div class="tx-meters inactive" id="tx-meters">
       <div class="tx-meter">
         <div class="tx-meter-label">ALC</div>
         <div class="tx-meter-bar-wrap">
@@ -901,7 +899,10 @@ input[type=range]::-webkit-slider-thumb:active {
           <span class="dsp-func-label">NB</span><span class="dsp-func-state" id="nb-state">OFF</span>
         </button>
 
-        <!-- DNR + slider -->
+        <!-- DNR + slider — controls DeepFilterNet3 on the SDR audio chain
+             (the radio's own NR has no audible effect, since the RSPdx-R2 is
+             the actual receiver), not the radio's setting. Slider sets the
+             noise attenuation limit (stronger at higher values). -->
         <div style="display:flex; align-items:center; gap:4px;">
           <button class="dsp-toggle" id="nr-btn" onclick="toggleNR()" style="flex-shrink:0">
             <span class="dsp-func-label">DNR</span><span class="dsp-func-state" id="nr-state">OFF</span>
@@ -945,6 +946,44 @@ input[type=range]::-webkit-slider-thumb:active {
                  ontouchstart="_rxVolDragging=true"
                  ontouchend="_rxVolDragging=false; setRxVolume(this.value)">
           <span class="dsp-val" id="rx-vol-val" style="min-width:36px; font-size:0.75rem; color:var(--muted);">400%</span>
+        </div>
+
+        <!-- EQ — 3-band tone shaping on the SDR audio chain (bass/mid/treble
+             shelf+peak), since the radio's own mic EQ only shapes what you
+             transmit, not what you hear from the panadapter. -->
+        <div style="display:flex; align-items:center; gap:4px;">
+          <button class="dsp-toggle active" id="eq-btn" onclick="toggleEQ()" style="flex-shrink:0">
+            <span class="dsp-func-label">EQ</span><span class="dsp-func-state" id="eq-state">ON</span>
+          </button>
+          <span class="dsp-func-label" style="font-size:0.65rem; color:var(--muted);">BASS</span>
+          <input type="range" min="-12" max="12" step="1" value="0" id="eq-bass-slider"
+                 style="width:60px; accent-color:var(--cyan); cursor:pointer;"
+                 oninput="document.getElementById('eq-bass-val').textContent = this.value"
+                 onmousedown="_eqDragging=true"
+                 onmouseup="_eqDragging=false; setEQ()"
+                 ontouchstart="_eqDragging=true"
+                 ontouchend="_eqDragging=false; setEQ()">
+          <span class="dsp-val" id="eq-bass-val" style="min-width:18px; font-size:0.75rem; color:var(--muted);">0</span>
+
+          <span class="dsp-func-label" style="font-size:0.65rem; color:var(--muted);">MID</span>
+          <input type="range" min="-12" max="12" step="1" value="0" id="eq-mid-slider"
+                 style="width:60px; accent-color:var(--cyan); cursor:pointer;"
+                 oninput="document.getElementById('eq-mid-val').textContent = this.value"
+                 onmousedown="_eqDragging=true"
+                 onmouseup="_eqDragging=false; setEQ()"
+                 ontouchstart="_eqDragging=true"
+                 ontouchend="_eqDragging=false; setEQ()">
+          <span class="dsp-val" id="eq-mid-val" style="min-width:18px; font-size:0.75rem; color:var(--muted);">0</span>
+
+          <span class="dsp-func-label" style="font-size:0.65rem; color:var(--muted);">TREB</span>
+          <input type="range" min="-12" max="12" step="1" value="0" id="eq-treble-slider"
+                 style="width:60px; accent-color:var(--cyan); cursor:pointer;"
+                 oninput="document.getElementById('eq-treble-val').textContent = this.value"
+                 onmousedown="_eqDragging=true"
+                 onmouseup="_eqDragging=false; setEQ()"
+                 ontouchstart="_eqDragging=true"
+                 ontouchend="_eqDragging=false; setEQ()">
+          <span class="dsp-val" id="eq-treble-val" style="min-width:18px; font-size:0.75rem; color:var(--muted);">0</span>
         </div>
       </div>
 
@@ -1083,8 +1122,8 @@ input[type=range]::-webkit-slider-thumb:active {
 
     <div class="divider"></div>
 
-    <!-- SSB Audio -->
-    <div>
+    <!-- SSB Audio (voice modes) -->
+    <div id="voice-tx-controls">
       <div class="section-label">SSB Audio</div>
       <div class="control-row" style="margin-bottom:6px">
         <span class="control-label">MIC GAIN</span>
@@ -1112,6 +1151,26 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
+    <!-- Digital Audio (DATA-U etc.) — DT GAIN is CAT menu 073 "DATA OUT
+         LEVEL", the digital-mode TX audio drive from USB/DATA into the
+         modulator. Mic Gain/Comp don't apply here (no mic input in this
+         mode), so this swaps in for them rather than sitting alongside. -->
+    <div id="digital-tx-controls" style="display:none">
+      <div class="section-label">Digital Audio</div>
+      <div class="control-row">
+        <span class="control-label">DT GAIN</span>
+        <div class="power-slider-wrap">
+          <input type="range" min="0" max="100" value="15" id="dt-gain-slider"
+            oninput="document.getElementById('dt-gain-val').textContent = this.value"
+            onmousedown="_dtGainDragging=true"
+            onmouseup="_dtGainDragging=false; setDtGain(this.value)"
+            ontouchstart="_dtGainDragging=true"
+            ontouchend="_dtGainDragging=false; setDtGain(this.value)">
+          <span class="power-value" id="dt-gain-val">15</span>
+        </div>
+      </div>
+    </div>
+
     <div class="divider"></div>
 
     <!-- Antenna -->
@@ -1131,8 +1190,6 @@ input[type=range]::-webkit-slider-thumb:active {
         <span class="muted mono" style="font-size:0.7rem">DUMMY LOAD:</span>
         <span class="dummy-timer" id="dummy-timer">10.0s</span>
       </div>
-      <!-- Thermal inhibits -->
-      <div id="thermal-panel"></div>
     </div>
 
   </section>
@@ -1169,6 +1226,7 @@ input[type=range]::-webkit-slider-thumb:active {
 <script>
 var _rfPwrDragging = false;
 var _widthDragging = false;
+var _swrWarningShown = false;
 'use strict';
 
 // ── WebSocket ─────────────────────────────────────────────
@@ -1284,9 +1342,29 @@ function updateUI(s) {
   const digBadge = document.getElementById('badge-digital');
   digBadge.style.display = rig.near_digital_freq ? 'inline-block' : 'none';
 
+  // Digital-mode TX controls (DT GAIN) swap in for Mic Gain/Comp — those
+  // don't apply once the radio's drawing TX audio from USB/DATA instead of
+  // the mic. Digital-audio badge shows whether the virtual-cable feed to
+  // WSJT-X (etc.) is actually flowing, only relevant in digital mode.
+  const isDigitalMode = !!rig.is_digital;
+  document.getElementById('voice-tx-controls').style.display = isDigitalMode ? 'none' : '';
+  document.getElementById('digital-tx-controls').style.display = isDigitalMode ? '' : 'none';
+  if (isDigitalMode && !_dtGainDragging && rig.dt_gain !== undefined) {
+    document.getElementById('dt-gain-slider').value = rig.dt_gain;
+    document.getElementById('dt-gain-val').textContent = rig.dt_gain;
+  }
+  const digAudioBadge = document.getElementById('badge-digital-audio');
+  digAudioBadge.style.display = isDigitalMode ? 'inline-block' : 'none';
+  if (isDigitalMode) {
+    const active = !!rig.digital_audio_active;
+    digAudioBadge.className = 'badge ' +
+      (active ? 'badge-digital-audio-active' : 'badge-digital-audio-inactive');
+    digAudioBadge.textContent = active ? 'DIGI AUDIO' : 'DIGI AUDIO: NO CABLE';
+  }
+
   // S-meter (RX) / TX meters
   const isTx = rig.ptt;
-  document.getElementById('tx-meters').style.display = isTx ? 'grid' : 'none';
+  document.getElementById('tx-meters').classList.toggle('inactive', !isTx);
 
   if (!isTx && rig.sdr_strength_db !== undefined && rig.sdr_strength_db !== null) {
     const dbFs = rig.sdr_strength_db;
@@ -1317,6 +1395,16 @@ function updateUI(s) {
     setBar('swr-bar', swrPct);
     setMeterStatus('swr-bar', swr, 2.0, 3.0);
     document.getElementById('swr-val').textContent = swr.toFixed(2);
+  } else {
+    // Reset to an idle placeholder rather than leaving the last TX reading
+    // frozen under the dimmed overlay.
+    setBar('alc-bar', 0);
+    document.getElementById('alc-val').textContent = '—';
+    setBar('po-bar', 0);
+    document.getElementById('po-val').textContent = '—';
+    setBar('swr-bar', 0);
+    setMeterStatus('swr-bar', 1, 2.0, 3.0);
+    document.getElementById('swr-val').textContent = '—';
   }
 
   // RF power slider (watts; max tracks amp state's drive limit)
@@ -1400,18 +1488,15 @@ function updateUI(s) {
     dtp.className = 'dummy-timer-wrap';
   }
 
-  // Thermal inhibits
-  const tp = document.getElementById('thermal-panel');
-  const inhibits = Object.values(s.thermal_inhibit || {}).filter(t => t.inhibited);
-  tp.innerHTML = inhibits.map(t => `
-    <div class="thermal-item">
-      Ant ${t.antenna_number}: ${t.inhibited_reason || 'Thermal inhibit'}<br>
-      <span style="opacity:0.7">Since: ${t.inhibited_at ? new Date(t.inhibited_at).toLocaleString() : '?'}</span>
-      <button class="btn" style="margin-top:4px; font-size:0.65rem; padding:3px 8px"
-        onclick="clearThermal(${t.antenna_number})">
-        ✓ Cooled — re-enable
-      </button>
-    </div>`).join('');
+  // SWR warning — passive notification only, never inhibits TX. Fire the
+  // toast once on the rising edge; the amp-swr meter stays as the
+  // persistent visual cue while it remains elevated.
+  if (s.swr_warning_active && !_swrWarningShown) {
+    _swrWarningShown = true;
+    showToast(`⚠ SWR ${(s.swr_warning_peak ?? 0).toFixed(2)} — check antenna/feedline`, 'info');
+  } else if (!s.swr_warning_active) {
+    _swrWarningShown = false;
+  }
 
   // TX inhibit
   const banner = document.getElementById('inhibit-banner');
@@ -1461,8 +1546,8 @@ function updateAmp(s) {
   const swrEl = document.getElementById('amp-swr-val');
   swrEl.textContent = swr > 0 ? swr.toFixed(2) : '—';
   setBar('amp-swr-bar', Math.max(0, Math.min(100, ((swr - 1) / 4) * 100)));
-  setMeterStatus('amp-swr-bar', swr, 2.0, 3.0);
-  swrEl.className = 'amp-meter-value ' + (swr > 3 ? 'alert' : swr > 2 ? 'warn' : 'good');
+  setMeterStatus('amp-swr-bar', swr, 2.5, 3.0);
+  swrEl.className = 'amp-meter-value ' + (swr > 3 ? 'alert' : swr > 2.5 ? 'warn' : 'good');
 
   // Temperature — safety-relevant
   const temp = s.amp_temp_c ?? 0;
@@ -1704,10 +1789,13 @@ function allowTx()    { send({ cmd: 'allow_tx' }); }
 var _nbOn = false;
 var _nrOn = false;
 var _dnfOn = false;
+var _eqOn = true;
 var _nrDragging = false;
+var _eqDragging = false;
 var _micGainDragging = false;
 var _compDragging = false;
 var _rxVolDragging = false;
+var _dtGainDragging = false;
 
 function toggleNB() {
   _nbOn = !_nbOn;
@@ -1725,7 +1813,7 @@ function _applyNB(on) {
 
 function toggleNR() {
   _nrOn = !_nrOn;
-  send({ cmd: 'set_nr_on', on: _nrOn });
+  send({ cmd: 'set_audio_nr', on: _nrOn });
   _applyNR(_nrOn);
 }
 
@@ -1744,7 +1832,7 @@ function onNRChange(val) {
 }
 
 function setNR(val) {
-  send({ cmd: 'set_nr', level: parseInt(val) });
+  send({ cmd: 'set_audio_nr', on: _nrOn, level: parseInt(val) });
 }
 
 function toggleDNF() {
@@ -1769,23 +1857,53 @@ function setRxVolume(v) {
   send({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 });
 }
 
+function toggleEQ() {
+  _eqOn = !_eqOn;
+  setEQ();
+  _applyEQ(_eqOn);
+}
+
+function _applyEQ(on) {
+  const btn = document.getElementById('eq-btn');
+  const st  = document.getElementById('eq-state');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+  if (st) st.textContent = on ? 'ON' : 'OFF';
+}
+
+function setEQ() {
+  send({
+    cmd: 'set_eq',
+    enabled: _eqOn,
+    bass_db: parseFloat(document.getElementById('eq-bass-slider').value),
+    mid_db: parseFloat(document.getElementById('eq-mid-slider').value),
+    treble_db: parseFloat(document.getElementById('eq-treble-slider').value),
+  });
+}
+
+function setDtGain(val) {
+  send({ cmd: 'set_dt_gain', value: parseInt(val) });
+}
+
 function updateDSP(s) {
   // NB
   if (s.nb_on !== undefined && s.nb_on !== _nbOn) {
     _nbOn = !!s.nb_on;
     _applyNB(_nbOn);
   }
-  // NR on/off
-  if (s.nr_on !== undefined && s.nr_on !== _nrOn) {
-    _nrOn = !!s.nr_on;
+  // NR on/off — reflects sdr_nr_enabled (DeepFilterNet3 on the SDR audio
+  // chain, what's actually heard), not the radio's dead rig.nr_on.
+  if (s.sdr_nr_enabled !== undefined && s.sdr_nr_enabled !== _nrOn) {
+    _nrOn = !!s.sdr_nr_enabled;
     _applyNR(_nrOn);
   }
-  // NR level — only update slider if user is not dragging
+  // NR attenuation limit — only update slider if user is not dragging
   if (!_nrDragging) {
     const nrSlider = document.getElementById('nr-slider');
     const nrVal = document.getElementById('nr-val');
-    if (nrSlider && s.nr_level !== undefined) {
-      const lvl = Math.max(1, Math.round(s.nr_level * 15));
+    if (nrSlider && s.sdr_nr_atten_limit_db !== undefined) {
+      const lvl = Math.max(1, Math.min(15,
+        Math.round(1 + (s.sdr_nr_atten_limit_db - 6.0) / 34.0 * 14.0)));
       nrSlider.value = lvl;
       if (nrVal) nrVal.textContent = lvl;
     }
@@ -1810,16 +1928,26 @@ function updateDSP(s) {
     const el = document.getElementById(activeId);
     if (el) el.classList.add('active');
   }
-}
 
-function clearThermal(n) {
-  showModal(`Clear Thermal Inhibit — Antenna ${n}`, `
-    <p>Confirm antenna ${n} has fully cooled. Consider: time since inhibit,
-    ambient temperature, how hard it was driven.</p>
-  `, {
-    confirmLabel: 'Re-enable',
-    onConfirm: () => send({ cmd: 'clear_thermal', antenna: n })
-  });
+  // EQ — reflects sdr_eq_* (the SDR audio chain's tone shaping)
+  if (s.sdr_eq_enabled !== undefined && s.sdr_eq_enabled !== _eqOn) {
+    _eqOn = !!s.sdr_eq_enabled;
+    _applyEQ(_eqOn);
+  }
+  if (!_eqDragging) {
+    const bands = [
+      ['eq-bass-slider', 'eq-bass-val', s.sdr_eq_bass_db],
+      ['eq-mid-slider', 'eq-mid-val', s.sdr_eq_mid_db],
+      ['eq-treble-slider', 'eq-treble-val', s.sdr_eq_treble_db],
+    ];
+    for (const [sliderId, valId, db] of bands) {
+      if (db === undefined) continue;
+      const slider = document.getElementById(sliderId);
+      const val = document.getElementById(valId);
+      if (slider) slider.value = db;
+      if (val) val.textContent = db;
+    }
+  }
 }
 </script>
 </body>

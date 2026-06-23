@@ -314,7 +314,31 @@ let rigBand = null;
 let rigMode = null;
 let rigFreqHz = null;
 let rigPassbandHz = null;
+let rigIsDigital = false;
 let wholeBandApplied = false;
+
+// DATA-U/digital: the window is locked to exactly DIGITAL_VIEW_SPAN_HZ
+// wide with the dial frequency pinned to the left edge — matches
+// AudioDemodulator's own digital-mode passband convention (0-3000Hz above
+// the dial frequency). This is an ongoing constraint while in this mode,
+// not just a one-time default — enforced every tick, not snapshotted and
+// restored on enter/exit (an earlier version did that and it broke: a
+// transient digital-mode misread right as a transmission started — mode
+// is the slowest-polled rig field — fired the "restore" step onto a
+// whole-band snapshot, which is exactly the "jumps to full band width at
+// the start of a TX" bug). Outside DATA-U the view is left alone entirely
+// — free-form pan/zoom, same as before this feature existed.
+const DIGITAL_VIEW_SPAN_HZ = 3000;
+
+function handleDigitalViewMode() {
+  if (!rigIsDigital) return;
+  setViewSpan(DIGITAL_VIEW_SPAN_HZ);
+  // Frozen during TX (no center update) so it doesn't chase WSJT-X's
+  // small dial wobble around each transmission.
+  if (rigFreqHz !== null && (!rigPtt || viewCenterHz === null)) {
+    viewCenterHz = rigFreqHz + viewSpanHz / 2;
+  }
+}
 
 // Eased copy of rigFreqHz used only for the marker's drawn x-position —
 // rigFreqHz itself only updates once per rig poll (~100ms), so drawing the
@@ -346,6 +370,7 @@ function connectWs() {
       rigBand = rig.band ?? rigBand;
       rigMode = rig.near_digital_freq ? 'PKTUSB' : (rig.mode || rigMode);
       rigPassbandHz = rig.passband_hz ?? rigPassbandHz;
+      rigIsDigital = !!rig.is_digital;
 
       // Default view is the whole band — manual scroll-to-zoom/drag-to-pan
       // is how you select what to look at; mode changes no longer hijack
@@ -354,6 +379,7 @@ function connectWs() {
         wholeBandApplied = true;
         snapToWholeBand();
       }
+      handleDigitalViewMode();
       followRigFrequency();
       sendAudioTargetFromRig();
       updateSdrBadge();
@@ -384,6 +410,7 @@ let specWs = null;
 let sdrAvailable = false;
 let pendingHeader = null;
 let latestFrame = null;   // { centerFreqHz, spanHz, data: Float32Array } — full capture, ~2MHz wide
+let latestFineFrame = null;   // digital-mode fine spectrum — 16kHz wide, centered on the audio target
 let pendingRetuneHz = null;   // set while waiting for the SDR to catch up to a requested retune
 
 function connectSpectrumWs() {
@@ -406,7 +433,22 @@ function connectSpectrumWs() {
       data,
     };
 
-    if (rigPtt) {
+    if (pendingHeader.kind === 'fine') {
+      // Digital-mode fine spectrum — AudioDemodulator's own decimated
+      // baseband, already centered exactly on the audio target (which
+      // always tracks the rig), so there's no capture-window-divergence
+      // concept to self-heal against here, unlike the wide capture below.
+      // Should never arrive during TX (the audio thread skips processing
+      // entirely while tx_active) — but tx_active itself is only as
+      // prompt as the rig's PTT broadcast, which can lag, so still check
+      // rigPtt directly rather than trust that timing blindly: a real
+      // (leakage) signal during TX is not a legitimate reading either way.
+      latestFineFrame = frame;
+      if (rigIsDigital) {
+        if (rigPtt) pushWaterfallTxRow();
+        else pushWaterfallRow(frame);
+      }
+    } else if (rigPtt) {
       // SDR Switch disconnects the antenna from the SDR during TX — this
       // IQ is meaningless (disconnected input), not a real band picture.
       // Mark the waterfall distinctly and freeze the spectrum line rather
@@ -428,7 +470,7 @@ function connectSpectrumWs() {
         viewCenterHz = frame.centerFreqHz;
       }
       latestFrame = frame;
-      pushWaterfallRow(frame);
+      if (!rigIsDigital) pushWaterfallRow(frame);
     }
     pendingHeader = null;
   };
@@ -551,6 +593,12 @@ function followRigFrequency() {
       pendingRetuneHz = rigFreqHz;
     }
   }
+
+  // Digital mode's view is fully owned by handleDigitalViewMode() (locked
+  // span, dial pinned to the left edge) — the generic centered-recenter
+  // below would immediately fight it, since "pinned at the left edge" is,
+  // by definition, far enough from center to cross this threshold.
+  if (rigIsDigital) return;
 
   if (viewCenterHz !== null) {
     const halfSpan = viewSpanHz / 2;
@@ -893,13 +941,17 @@ function drawSpectrum() {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
 
-  if (latestFrame && viewCenterHz !== null) {
+  // Digital mode renders from the fine spectrum (finer resolution, narrow
+  // span) instead of the wideband capture — see latestFineFrame.
+  const frame = (rigIsDigital && latestFineFrame) ? latestFineFrame : latestFrame;
+
+  if (frame && viewCenterHz !== null) {
     document.getElementById('axis-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4) + ' MHz';
     document.getElementById('axis-center').textContent = (viewCenterHz / 1e6).toFixed(4) + ' MHz';
     document.getElementById('axis-hi').textContent = ((viewCenterHz + viewSpanHz / 2) / 1e6).toFixed(4) + ' MHz';
     updateFreqInputDisplay();
 
-    const points = cropToView(latestFrame, Math.round(w));
+    const points = cropToView(frame, Math.round(w));
     // Calibrate from what's actually visible right now, not the full ~2MHz
     // capture — a quieter spot elsewhere in the capture would otherwise drag
     // the floor below what's relevant to the current zoomed-in view.

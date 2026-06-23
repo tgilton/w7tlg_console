@@ -10,7 +10,6 @@ Endpoints:
   POST /api/mode         — Set operating mode
   POST /api/antenna/next — Cycle to next antenna (front-panel ANT button)
   POST /api/tx           — TX inhibit / allow
-  POST /api/thermal/clear/{ant} — Clear thermal inhibit
   GET  /api/state     — Current state snapshot (REST)
 """
 
@@ -27,7 +26,7 @@ from pydantic import BaseModel
 
 from amplifier.acom_bridge import AcomBridge, OperatingMode, StationState
 from amplifier.acom_serial import AcomSerial, find_acom_port
-from rig.rigctld_client import RigctldClient
+from rig.rigctld_client import RigctldClient, RigState
 from sdr.sdr_client import SdrClient
 
 logger = logging.getLogger(__name__)
@@ -37,7 +36,6 @@ RIGCTLD_PORT  = 4532
 # ACOM_PORT     = "/dev/cu.usbserial-A9V19CH7"
 ACOM_PORT = "/dev/cu.usbserial-A92518IM"
 ACOM_BAUD     = 9600
-THERMAL_STATE = Path("config/thermal_state.json")
 
 # ---------------------------------------------------------------------------
 # WebSocket connection manager
@@ -96,6 +94,7 @@ class SpectrumConnectionManager:
             return
         header = json.dumps({
             "type": "spectrum",
+            "kind": frame.get("kind", "wide"),
             "ts": frame["ts"],
             "center_freq_hz": frame["center_freq_hz"],
             "span_hz": frame["span_hz"],
@@ -164,6 +163,14 @@ def build_state_payload(state: StationState) -> dict:
     if sdr is not None and sdr.available:
         data["rig"]["sdr_rx_volume"] = sdr.audio.manual_gain   # config values, not TX/RX-gated
         data["rig"]["sdr_agc_mode"] = sdr.audio.agc_mode
+        data["rig"]["sdr_eq_enabled"] = sdr.audio.eq_enabled
+        data["rig"]["sdr_eq_bass_db"] = sdr.audio.eq_bass_db
+        data["rig"]["sdr_eq_mid_db"] = sdr.audio.eq_mid_db
+        data["rig"]["sdr_eq_treble_db"] = sdr.audio.eq_treble_db
+        data["rig"]["sdr_nr_enabled"] = sdr.audio.nr_enabled
+        data["rig"]["sdr_nr_atten_limit_db"] = sdr.audio.nr_atten_limit_db
+        data["rig"]["digital_audio_available"] = sdr.digital_audio.available
+        data["rig"]["digital_audio_active"] = sdr.digital_audio.active
         if not data["rig"].get("ptt", False):
             freq_hz = data["rig"].get("freq_hz")
             if freq_hz:
@@ -188,6 +195,24 @@ async def on_audio_frame(audio_bytes: bytes):
     await audio_manager.broadcast_audio(audio_bytes)
 
 
+_last_is_digital = False
+
+
+async def on_rig_state_for_audio_mode(rig_state: RigState):
+    """Drives the SDR audio chain's voice/digital profile off the rig's own
+    mode (DATA-U etc.) — separate from AcomBridge's own rig-state callback,
+    since this is purely an SDR-audio concern, not a safety interlock."""
+    global _last_is_digital
+    if sdr is None or not sdr.available:
+        return
+    is_digital = bool(rig_state.is_digital)
+    if is_digital and not _last_is_digital:
+        sdr.audio.enter_digital_mode()
+    elif not is_digital and _last_is_digital:
+        sdr.audio.exit_digital_mode()
+    _last_is_digital = is_digital
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -208,7 +233,7 @@ async def lifespan(app: FastAPI):
         acom_port = "/dev/null"
 
     amp = AcomSerial(port=acom_port, baud=ACOM_BAUD)
-    bridge = AcomBridge(rig=rig, amp=amp, state_file=THERMAL_STATE)
+    bridge = AcomBridge(rig=rig, amp=amp)
     bridge.on_state_change(on_station_state)
     await bridge.start()
 
@@ -229,6 +254,7 @@ async def lifespan(app: FastAPI):
     await sdr.start()
     if not sdr.available:
         logger.warning("SDR unavailable — panadapter features disabled.")
+    rig.on_state_change(on_rig_state_for_audio_mode)
 
     logger.info("W7TLG Console running")
 
@@ -297,15 +323,6 @@ async def tx_control(req: TxRequest):
     else:
         await bridge.allow_tx()
     return {"status": "ok"}
-
-
-@app.post("/api/thermal/clear/{antenna_number}")
-async def clear_thermal(antenna_number: int):
-    if bridge is None:
-        raise HTTPException(503, "Bridge not initialized")
-    await bridge.operator_clear_thermal(antenna_number)
-    return {"status": "ok",
-            "message": f"Thermal inhibit cleared for antenna {antenna_number}"}
 
 
 # ---------------------------------------------------------------------------
@@ -383,15 +400,44 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
-        elif cmd == "set_nr_on":
-            ok = await bridge.rig.set_nr_on(bool(msg["on"]))
+        elif cmd == "set_audio_nr":
+            # Noise reduction (DeepFilterNet3) on the SDR audio chain — this
+            # is what's actually heard, unlike the radio's own NR (dead for
+            # audio purposes since the SDR, not the radio, is the receiver).
+            # Optional level (1-15, matching the UI slider) sets the
+            # attenuation limit — higher = more aggressive suppression.
+            ok = False
+            if sdr is not None and sdr.available:
+                if "on" in msg:
+                    sdr.audio.nr_enabled = bool(msg["on"])
+                if "level" in msg:
+                    level = max(1, min(15, int(msg["level"])))
+                    sdr.audio.nr_atten_limit_db = 6.0 + (level - 1) / 14.0 * 34.0
+                ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
-        elif cmd == "set_nr":
-            # level 0-15 from UI, scale to 0.0-1.0
-            level = max(0, min(15, int(msg["level"])))
-            ok = await bridge.rig.set_nr(level / 15.0)
+        elif cmd == "set_eq":
+            ok = False
+            if sdr is not None and sdr.available:
+                if "enabled" in msg:
+                    sdr.audio.eq_enabled = bool(msg["enabled"])
+                if "bass_db" in msg:
+                    sdr.audio.eq_bass_db = max(-12.0, min(12.0, float(msg["bass_db"])))
+                if "mid_db" in msg:
+                    sdr.audio.eq_mid_db = max(-12.0, min(12.0, float(msg["mid_db"])))
+                if "treble_db" in msg:
+                    sdr.audio.eq_treble_db = max(-12.0, min(12.0, float(msg["treble_db"])))
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_dt_gain":
+            # CAT menu 073 "DATA OUT LEVEL" — digital-mode TX audio drive,
+            # not exposed as a normal Hamlib level on this rig (raw CAT
+            # passthrough, see RigctldClient.set_dt_gain).
+            value = max(0, min(100, int(msg["value"])))
+            ok = await bridge.rig.set_dt_gain(value)
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
@@ -432,11 +478,6 @@ async def handle_ws_command(text: str, ws: WebSocket):
 
         elif cmd == "allow_tx":
             await bridge.allow_tx()
-            await ws.send_text(json.dumps({
-                "type": "cmd_response", "cmd": cmd, "ok": True}))
-
-        elif cmd == "clear_thermal":
-            await bridge.operator_clear_thermal(int(msg["antenna"]))
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": True}))
 

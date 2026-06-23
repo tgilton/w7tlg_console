@@ -156,6 +156,7 @@ class RigState:
     nb_on: bool         = False   # NB func on/off
     nr_on: bool         = False   # NR func on/off
     dnf_on: bool        = False   # ANF (auto-notch) on/off
+    dt_gain: int        = 0       # DATA OUT LEVEL (CAT menu 073), 0-100, digital modes only
 
     # Derived
     is_digital: bool        = False
@@ -190,6 +191,7 @@ class RigState:
             "nb_on":            self.nb_on,
             "nr_on":            self.nr_on,
             "dnf_on":           self.dnf_on,
+            "dt_gain":          self.dt_gain,
             "is_digital":       self.is_digital,
             "near_digital_freq": self.near_digital_freq,
         }
@@ -202,8 +204,9 @@ class RigState:
         self.preamp_name = {0: "IPO", 1: "AMP1", 2: "AMP2"}.get(
             self.preamp, "IPO")
 
-        digital_modes = {"DATA-U", "DATA-L", "PKT-U", "PKT-L",
-                         "PKTUSB", "PKTLSB", "USB", "LSB"}
+        # Real Hamlib mode strings for this rig's DATA-U/DATA-L (confirmed via
+        # `rigctl --dump-caps -m 1035`) — plain USB/LSB are voice, not digital.
+        digital_modes = {"PKTUSB", "PKTLSB"}
         self.is_digital = self.mode in digital_modes
 
         std_freq = DIGITAL_FREQS.get(band_enum)
@@ -247,6 +250,7 @@ class RigctldClient:
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._cycle = 0
+        self._dt_gain_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -370,6 +374,67 @@ class RigctldClient:
             self.state.dnf_on = on
             await self._fire_callbacks()
         return ok
+
+    # Raw CAT passthrough — for params Hamlib doesn't expose as a standard
+    # level on this rig (confirmed via `rigctl --dump-caps -m 1035`).
+    async def send_raw_cmd(self, cmd: str) -> Optional[str]:
+        """Send a raw CAT command via Hamlib's passthrough ('w'). Unlike
+        cached Hamlib level/func GETs, passthrough always forces a fresh
+        serial round-trip to the radio, so it can take longer under load
+        from rigctld's own internal polling and other clients (e.g.
+        WSJT-X) sharing the same serial link — give it more slack than the
+        regular 2s GET timeout. Returns the radio's raw reply line (e.g.
+        "EX073030;") or None."""
+        lines = await self._send_get(f"w {cmd}\n", n_lines=1, timeout=5.0)
+        return lines[0] if lines else None
+
+    async def get_dt_gain(self) -> Optional[int]:
+        """Read CAT menu 073 ("DATA OUT LEVEL", the digital-mode TX audio
+        drive level operators call "DT GAIN" — not menu 049 "AM DATA GAIN",
+        which is unrelated/AM-only). Range 0-100. Live-verified against the
+        real FT-991A: `w EX073;` returns the rig's raw echo, e.g. "EX073030;".
+
+        Uses its OWN short-lived connection rather than the shared poll
+        connection/lock: this passthrough can take several seconds under
+        contention with WSJT-X on the radio's serial link (see
+        send_raw_cmd), and blocking the shared connection that long would
+        delay the PTT/frequency broadcasts the SDR Switch freeze and
+        panadapter depend on being prompt — confirmed live as a multi-
+        second delay in the panadapter showing real (leakage) signal after
+        a transmission actually started."""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port), timeout=2.0)
+        except (OSError, asyncio.TimeoutError):
+            return None
+        try:
+            writer.write(b"w EX073;\n")
+            await writer.drain()
+            line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+            reply = line.decode(errors='replace').strip()
+        except (asyncio.TimeoutError, ConnectionResetError, OSError):
+            return None
+        finally:
+            writer.close()
+        if reply and reply.startswith("EX073"):
+            try:
+                return int(reply[5:8])
+            except ValueError:
+                pass
+        return None
+
+    async def set_dt_gain(self, value: int) -> bool:
+        """Set DT GAIN (CAT menu 073, "DATA OUT LEVEL"), 0-100."""
+        value = max(0, min(100, int(value)))
+        reply = await self.send_raw_cmd(f"EX073{value:03d};")
+        if reply and reply.startswith("EX073"):
+            try:
+                self.state.dt_gain = int(reply[5:8])
+                await self._fire_callbacks()
+                return True
+            except ValueError:
+                pass
+        return False
 
     # ------------------------------------------------------------------
     # Internal: run / connect / disconnect
@@ -561,7 +626,26 @@ class RigctldClient:
                     setattr(self.state, attr, on)
                     changed = True
 
+        # DT GAIN — only meaningful in digital modes, and it's a raw CAT
+        # passthrough (no Hamlib level equivalent), so skip it otherwise
+        # rather than spend a round-trip on every slow-poll cycle. Fired as
+        # a detached background task rather than awaited here: even on its
+        # own connection (see get_dt_gain), awaiting it inline would still
+        # make THIS poll cycle's return — and therefore this cycle's
+        # PTT/frequency broadcast — wait on it. It fires its own
+        # _fire_callbacks() once it actually resolves, decoupled from the
+        # main poll cadence entirely.
+        if self.state.is_digital and (
+                self._dt_gain_task is None or self._dt_gain_task.done()):
+            self._dt_gain_task = asyncio.create_task(self._poll_dt_gain())
+
         return changed
+
+    async def _poll_dt_gain(self):
+        val = await self.get_dt_gain()
+        if val is not None and val != self.state.dt_gain:
+            self.state.dt_gain = val
+            await self._fire_callbacks()
 
     # ------------------------------------------------------------------
     # Internal: I/O helpers
@@ -596,7 +680,9 @@ class RigctldClient:
                 pass
         return None
 
-    async def _send_get(self, cmd: str, n_lines: int) -> Optional[list[str]]:
+    async def _send_get(
+            self, cmd: str, n_lines: int, timeout: float = 2.0
+    ) -> Optional[list[str]]:
         """Send GET command. Read exactly n_lines (no RPRT terminator)."""
         async with self._lock:
             if not self._writer or self._writer.is_closing():
@@ -607,16 +693,36 @@ class RigctldClient:
                 lines = []
                 for _ in range(n_lines):
                     line = await asyncio.wait_for(
-                        self._reader.readline(), timeout=2.0)
+                        self._reader.readline(), timeout=timeout)
                     decoded = line.decode(errors='replace').strip()
                     if not decoded or decoded.startswith('RPRT'):
                         break
                     lines.append(decoded)
                 return lines if lines else None
-            except (asyncio.TimeoutError, ConnectionResetError, OSError) as e:
+            except asyncio.TimeoutError:
+                # A read (not the socket) timed out — the rig's serial link
+                # is shared with rigctld's own internal polling and other
+                # clients, so a slow reply doesn't mean the connection is
+                # dead. Treat it as a miss, not a disconnect, but swallow
+                # any late reply now so it can't desync the next command's
+                # read.
+                logger.warning(
+                    f"GET '{cmd.strip()}' timed out (no reply within {timeout}s)")
+                await self._drain_stale_reply()
+                return None
+            except (ConnectionResetError, OSError) as e:
                 logger.warning(f"GET '{cmd.strip()}' failed: {e}")
                 self.state.connected = False
                 return None
+
+    async def _drain_stale_reply(self):
+        """Swallow a reply that arrives just after we gave up on it, so it
+        doesn't get mistaken for the response to the next command sent on
+        this connection."""
+        try:
+            await asyncio.wait_for(self._reader.readline(), timeout=0.5)
+        except (asyncio.TimeoutError, ConnectionResetError, OSError):
+            pass
 
     async def _send_set(self, cmd: str) -> bool:
         """Send SET command. Read until RPRT."""
