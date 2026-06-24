@@ -228,6 +228,13 @@ PTT_EVERY    = 1   # Every cycle
 METER_EVERY  = 1   # Every cycle
 CONTROL_EVERY = 10  # Every 10 cycles (~5s)
 
+# Sanity bounds for the frequency reading — wide enough to cover this
+# rig's full general-coverage receive range (HF/6m/2m/70cm) with margin,
+# narrow enough to catch an implausible value like "1 Hz" that can only
+# mean the reply stream has drifted out of alignment (see _poll_state).
+FREQ_SANITY_MIN_HZ = 10_000
+FREQ_SANITY_MAX_HZ = 500_000_000
+
 
 class RigctldClient:
 
@@ -481,17 +488,25 @@ class RigctldClient:
     # ------------------------------------------------------------------
 
     async def _poll_loop(self):
-        while self._running and self.state.connected:
-            try:
-                changed = await self._poll_state()
-                if changed:
-                    await self._fire_callbacks()
-                await asyncio.sleep(self.poll_interval)
-            except Exception as e:
-                logger.error(f"Poll error: {e}")
-                self.state.connected = False
-                await self._disconnect()
-                return
+        # _disconnect() always runs on the way out, however the loop ends —
+        # whether via this try/except (an exception mid-cycle) or via the
+        # while-condition itself going false (connected was set False by a
+        # GET/SET's own ConnectionResetError/OSError handler, which returns
+        # normally rather than raising). Either way the socket needs
+        # closing before _run() tries to reconnect, not left dangling.
+        try:
+            while self._running and self.state.connected:
+                try:
+                    changed = await self._poll_state()
+                    if changed:
+                        await self._fire_callbacks()
+                    await asyncio.sleep(self.poll_interval)
+                except Exception as e:
+                    logger.error(f"Poll error: {e}")
+                    self.state.connected = False
+                    return
+        finally:
+            await self._disconnect()
 
     async def _poll_state(self) -> bool:
         self._cycle += 1
@@ -501,6 +516,18 @@ class RigctldClient:
         val = await self._get_float("f\n", n_lines=1)
         if val is not None:
             freq = int(val)
+            if not (FREQ_SANITY_MIN_HZ <= freq <= FREQ_SANITY_MAX_HZ):
+                # An implausible reading (e.g. a stray single-digit value)
+                # means a reply meant for a different command — most
+                # likely a late one _drain_stale_reply() failed to fully
+                # mop up — landed here instead, and every read after it
+                # would stay silently shifted by the same offset forever.
+                # Frequency is queried every cycle, so it's the fastest
+                # canary for this; force a clean reconnect rather than
+                # keep broadcasting (and acting on) garbage indefinitely.
+                raise RuntimeError(
+                    f"Implausible frequency reading ({freq} Hz) — "
+                    f"rig reply stream likely desynced")
             if freq != self.state.freq_hz:
                 self.state.freq_hz = freq
                 changed = True
@@ -716,13 +743,17 @@ class RigctldClient:
                 return None
 
     async def _drain_stale_reply(self):
-        """Swallow a reply that arrives just after we gave up on it, so it
+        """Swallow any reply that arrives just after we gave up on it, so it
         doesn't get mistaken for the response to the next command sent on
-        this connection."""
-        try:
-            await asyncio.wait_for(self._reader.readline(), timeout=0.5)
-        except (asyncio.TimeoutError, ConnectionResetError, OSError):
-            pass
+        this connection. Loops rather than reading once: a single multi-
+        line command (e.g. mode's 2-line reply) can leave more than one
+        line backed up if it was the one that ran long. Stops as soon as
+        a read itself times out — that means nothing more is coming."""
+        for _ in range(3):
+            try:
+                await asyncio.wait_for(self._reader.readline(), timeout=1.0)
+            except (asyncio.TimeoutError, ConnectionResetError, OSError):
+                break
 
     async def _send_set(self, cmd: str) -> bool:
         """Send SET command. Read until RPRT."""
