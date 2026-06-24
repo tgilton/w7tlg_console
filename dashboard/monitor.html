@@ -89,6 +89,17 @@
   }
   .conn-dot.on { background: #4caf50; }
   .conn-dot.off { background: #f44336; }
+
+  .nav-link {
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: #00e5ff;
+    text-decoration: none;
+    border: 1px solid #00576b;
+    border-radius: 4px;
+    padding: 3px 10px;
+  }
+  .nav-link:hover { background: #00576b; }
 </style>
 </head>
 <body>
@@ -96,6 +107,7 @@
 <!-- Status Bar -->
 <div class="status-bar">
   <span class="title">W7TLG MONITOR</span>
+  <a class="nav-link" href="/" target="_blank" rel="noopener">← Console</a>
   <span class="sep">|</span>
   <span><span class="conn-dot off" id="ws-dot"></span><span id="ws-status">Connecting…</span></span>
   <span class="sep">|</span>

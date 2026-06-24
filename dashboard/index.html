@@ -82,6 +82,27 @@ html, body {
   font-family: var(--mono);
 }
 
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-link {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--cyan);
+  text-decoration: none;
+  border: 1px solid var(--cyan-dim);
+  border-radius: 4px;
+  padding: 3px 10px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.nav-link:hover {
+  background: var(--cyan-dim);
+  border-color: var(--cyan);
+}
+
 .conn-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
@@ -766,6 +787,10 @@ input[type=range]::-webkit-slider-thumb:active {
     <span class="callsign">
       <span class="conn-dot" id="conn-dot"></span>W7TLG STATION CONSOLE
     </span>
+    <nav class="nav-links">
+      <a class="nav-link" href="/panadapter" target="_blank" rel="noopener">Panadapter ↗</a>
+      <a class="nav-link" href="/monitor" target="_blank" rel="noopener">Monitor ↗</a>
+    </nav>
     <div class="header-status">
       <span id="hdr-band">—</span>
       <span id="hdr-time">—</span>

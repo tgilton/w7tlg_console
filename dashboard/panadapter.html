@@ -84,6 +84,21 @@ html, body {
 .sdr-badge.tx { color: var(--amber); background: var(--amber-dim); }
 .sdr-badge.unavailable { color: var(--red); background: #4a0000; }
 
+.nav-link {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--cyan);
+  text-decoration: none;
+  border: 1px solid var(--cyan-dim);
+  border-radius: 4px;
+  padding: 3px 10px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.nav-link:hover {
+  background: var(--cyan-dim);
+  border-color: var(--cyan);
+}
+
 .controls {
   display: flex;
   align-items: center;
@@ -223,6 +238,7 @@ html, body {
     <span class="conn-dot" id="conn-dot"></span>W7TLG PANADAPTER
   </span>
   <div class="header-status">
+    <a class="nav-link" href="/" target="_blank" rel="noopener">← Console</a>
     <span class="sdr-badge unavailable" id="sdr-badge">SDR —</span>
     <span id="hdr-time">—</span>
   </div>
