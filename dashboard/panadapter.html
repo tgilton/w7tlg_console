@@ -444,16 +444,14 @@ function connectSpectrumWs() {
       // rigPtt directly rather than trust that timing blindly: a real
       // (leakage) signal during TX is not a legitimate reading either way.
       latestFineFrame = frame;
-      if (rigIsDigital) {
-        if (rigPtt) pushWaterfallTxRow();
-        else pushWaterfallRow(frame);
-      }
+      // Freeze the waterfall during TX (same as WSJT-X) — don't push rows
+      // at all rather than scrolling through a solid TX-colored block.
+      if (rigIsDigital && !rigPtt) pushWaterfallRow(frame);
     } else if (rigPtt) {
       // SDR Switch disconnects the antenna from the SDR during TX — this
       // IQ is meaningless (disconnected input), not a real band picture.
-      // Mark the waterfall distinctly and freeze the spectrum line rather
-      // than painting it as if it were a real reading.
-      pushWaterfallTxRow();
+      // Freeze the waterfall and spectrum line rather than painting it as
+      // if it were a real reading, or scrolling through it.
     } else if (pendingRetuneHz !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz) > 1000) {
       // Waiting for an explicit retune we requested to land — its capture
       // window is stale relative to where the view now expects to be.
@@ -1103,18 +1101,6 @@ function pushWaterfallRow(frame) {
     row.data[x * 4 + 1] = g;
     row.data[x * 4 + 2] = b;
     row.data[x * 4 + 3] = 255;
-  }
-  wfCtx.putImageData(row, 0, 0);
-}
-
-function pushWaterfallTxRow() {
-  const { w, h } = ensureWfCanvasSize();
-  if (h < 2) return;
-  const img = wfCtx.getImageData(0, 0, w, h - 1);
-  wfCtx.putImageData(img, 0, 1);
-  const row = wfCtx.createImageData(w, 1);
-  for (let x = 0; x < w; x++) {
-    row.data[x * 4 + 0] = 90; row.data[x * 4 + 1] = 50; row.data[x * 4 + 2] = 0; row.data[x * 4 + 3] = 255;
   }
   wfCtx.putImageData(row, 0, 0);
 }

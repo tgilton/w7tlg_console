@@ -11,10 +11,13 @@ Frame structure:
   Verify: SUM(all bytes including checksum) == 0 (mod 256)
 """
 
+import logging
 import struct
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +544,10 @@ def parse_fault_codes(data: bytes) -> FaultStatus:
 # Frame reader (state machine for async serial reading)
 # ---------------------------------------------------------------------------
 
+MIN_FRAME_LEN = 4    # start + address + length + checksum, zero data bytes
+MAX_FRAME_LEN = 96   # largest real frame is FULL_TELEMETRY at 72 bytes
+
+
 class FrameReader:
     """
     Stateful frame reader for serial input.
@@ -550,6 +557,19 @@ class FrameReader:
         self._buf = bytearray()
         self._expecting = 0   # bytes remaining in current frame
         self.frames: list[bytes] = []
+
+    def _resync(self, reason: str):
+        """Drop the in-progress frame and go back to hunting for a start
+        byte. Without this, a single corrupted length byte (e.g. < 3, from
+        a noise hit on the serial line) sends _expecting negative — and
+        counting down by 1 from a negative number never lands back on
+        exactly 0, so the old code would never reset and would swallow
+        every byte for the rest of the process's life."""
+        logger.warning(
+            f"ACOM frame resync: {reason} "
+            f"(buf={bytes(self._buf).hex(' ').upper()})")
+        self._buf = bytearray()
+        self._expecting = 0
 
     def feed(self, data: bytes):
         for byte in data:
@@ -563,15 +583,30 @@ class FrameReader:
             elif len(self._buf) == 2:
                 # Got length — now we know total frame size
                 length = byte
+                if length < MIN_FRAME_LEN or length > MAX_FRAME_LEN:
+                    self._resync(f"bad length byte 0x{length:02X}")
+                    # This byte might itself be a start byte of the next
+                    # real frame — give it a chance rather than discarding it.
+                    if byte == START_BYTE:
+                        self._buf.append(byte)
+                    continue
                 self._buf.append(byte)
                 self._expecting = length - 3  # already have 3 bytes
             else:
                 self._buf.append(byte)
                 self._expecting -= 1
-                if self._expecting == 0:
+                if len(self._buf) > MAX_FRAME_LEN:
+                    # Backstop in case of any other path that fails to
+                    # converge — never accumulate unbounded garbage.
+                    self._resync("frame exceeded max length")
+                elif self._expecting == 0:
                     frame = bytes(self._buf)
                     if verify_frame(frame):
                         self.frames.append(frame)
+                    else:
+                        logger.warning(
+                            f"ACOM checksum failed, discarding frame: "
+                            f"{frame.hex(' ').upper()}")
                     # Reset regardless — discard corrupt frames
                     self._buf = bytearray()
                     self._expecting = 0
