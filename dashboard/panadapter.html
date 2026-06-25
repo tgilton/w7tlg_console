@@ -386,7 +386,11 @@ function connectWs() {
       rigBand = rig.band ?? rigBand;
       rigMode = rig.near_digital_freq ? 'PKTUSB' : (rig.mode || rigMode);
       rigPassbandHz = rig.passband_hz ?? rigPassbandHz;
-      rigIsDigital = !!rig.is_digital;
+      // Don't update rigIsDigital during TX: the rig can report CW for the
+      // TX VFO-B in split mode, which would switch frame selection from
+      // latestFineFrame (high-resolution narrow view) to the wideband
+      // latestFrame, making the spectrum look blocky for the whole transmission.
+      if (!rigPtt) rigIsDigital = !!rig.is_digital;
 
       // Default view is the whole band — manual scroll-to-zoom/drag-to-pan
       // is how you select what to look at; mode changes no longer hijack

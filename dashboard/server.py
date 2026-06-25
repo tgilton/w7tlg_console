@@ -205,6 +205,11 @@ async def on_rig_state_for_audio_mode(rig_state: RigState):
     global _last_is_digital
     if sdr is None or not sdr.available:
         return
+    # Belt-and-suspenders guard: mode is already frozen during TX in
+    # rigctld_client, but the first poll cycle where PTT goes active can
+    # still race. Never switch the audio chain based on a mid-TX mode reading.
+    if rig_state.ptt:
+        return
     is_digital = bool(rig_state.is_digital)
     if is_digital and not _last_is_digital:
         sdr.audio.enter_digital_mode()

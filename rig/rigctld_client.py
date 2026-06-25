@@ -222,8 +222,9 @@ class RigState:
 StateCallback = Callable[[RigState], Coroutine]
 
 # How often to poll each group (in poll cycles, each cycle = poll_interval)
-FREQ_EVERY   = 1   # Every cycle
-MODE_EVERY   = 2   # Every 2 cycles
+# PTT is always first; freq and mode are skipped during TX (see _poll_state).
+FREQ_EVERY   = 1   # Every cycle (RX only)
+MODE_EVERY   = 2   # Every 2 cycles (RX only)
 PTT_EVERY    = 1   # Every cycle
 METER_EVERY  = 1   # Every cycle
 CONTROL_EVERY = 10  # Every 10 cycles (~5s)
@@ -512,28 +513,48 @@ class RigctldClient:
         self._cycle += 1
         changed = False
 
-        # Frequency — every cycle
-        val = await self._get_float("f\n", n_lines=1)
+        # PTT — polled first every cycle so that the frequency and mode
+        # freezes below can gate on the current state of PTT without waiting
+        # for the next cycle.
+        val = await self._get_float("t\n", n_lines=1)
         if val is not None:
-            freq = int(val)
-            if not (FREQ_SANITY_MIN_HZ <= freq <= FREQ_SANITY_MAX_HZ):
-                # An implausible reading (e.g. a stray single-digit value)
-                # means a reply meant for a different command — most
-                # likely a late one _drain_stale_reply() failed to fully
-                # mop up — landed here instead, and every read after it
-                # would stay silently shifted by the same offset forever.
-                # Frequency is queried every cycle, so it's the fastest
-                # canary for this; force a clean reconnect rather than
-                # keep broadcasting (and acting on) garbage indefinitely.
-                raise RuntimeError(
-                    f"Implausible frequency reading ({freq} Hz) — "
-                    f"rig reply stream likely desynced")
-            if freq != self.state.freq_hz:
-                self.state.freq_hz = freq
+            ptt = bool(int(val))
+            if ptt != self.state.ptt:
+                self.state.ptt = ptt
                 changed = True
 
-        # Mode — every other cycle
-        if self._cycle % MODE_EVERY == 0:
+        # Frequency — frozen during TX.
+        # In WSJT-X split mode, the TX VFO-B can be on a different frequency
+        # (and even a different band) than the RX VFO-A.  Broadcasting VFO-B
+        # during TX would update the console display, trigger a SDR retune,
+        # and — most critically — trigger an amp band-select command to the
+        # wrong band while RF is live.  Hold the last known RX frequency.
+        if not self.state.ptt:
+            val = await self._get_float("f\n", n_lines=1)
+            if val is not None:
+                freq = int(val)
+                if not (FREQ_SANITY_MIN_HZ <= freq <= FREQ_SANITY_MAX_HZ):
+                    # An implausible reading (e.g. a stray single-digit value)
+                    # means a reply meant for a different command — most
+                    # likely a late one _drain_stale_reply() failed to fully
+                    # mop up — landed here instead, and every read after it
+                    # would stay silently shifted by the same offset forever.
+                    # Force a clean reconnect rather than keep broadcasting
+                    # (and acting on) garbage indefinitely.
+                    raise RuntimeError(
+                        f"Implausible frequency reading ({freq} Hz) — "
+                        f"rig reply stream likely desynced")
+                if freq != self.state.freq_hz:
+                    self.state.freq_hz = freq
+                    changed = True
+
+        # Mode and split — every other cycle; frozen during TX.
+        # The FT-991A reports a spurious mode (often CW for VFO-B) while
+        # PTT is active in WSJT-X split operation.  If we let that through,
+        # is_digital flips False, the audio chain exits digital mode, and
+        # the panadapter drops to low-resolution wideband rendering for the
+        # whole transmission.  Hold the last known pre-TX values instead.
+        if self._cycle % MODE_EVERY == 0 and not self.state.ptt:
             lines = await self._send_get("m\n", 2)
             if lines and len(lines) >= 2:
                 try:
@@ -546,13 +567,15 @@ class RigctldClient:
                 except (ValueError, IndexError):
                     pass
 
-        # PTT — every cycle
-        val = await self._get_float("t\n", n_lines=1)
-        if val is not None:
-            ptt = bool(int(val))
-            if ptt != self.state.ptt:
-                self.state.ptt = ptt
-                changed = True
+            lines = await self._send_get("s\n", 2)
+            if lines:
+                try:
+                    split = bool(int(lines[0]))
+                    if split != self.state.split:
+                        self.state.split = split
+                        changed = True
+                except (ValueError, IndexError):
+                    pass
 
         # Meters — every cycle
         # S-meter during RX, ALC/SWR during TX
@@ -624,13 +647,19 @@ class RigctldClient:
                 self.state.if_shift_hz = if_hz
                 changed = True
 
-        # NB, NR, COMP, MICGAIN
+        # NB, NR — always applicable.
+        # COMP, MICGAIN — voice-mode controls; skip in digital mode: the
+        # FT-991A doesn't respond to MICGAIN queries in PKTUSB/DATA-U and
+        # times out every poll, wasting ~2s of serial-link time and blocking
+        # the PTT poll behind it.
         for attr, level_name in [
             ('nb_level', 'NB'),
             ('nr_level', 'NR'),
             ('comp_level', 'COMP'),
             ('mic_gain', 'MICGAIN'),
         ]:
+            if level_name in ('COMP', 'MICGAIN') and self.state.is_digital:
+                continue
             val = await self._get_level(level_name)
             if val is not None and abs(val - getattr(self.state, attr)) > 0.01:
                 setattr(self.state, attr, val)

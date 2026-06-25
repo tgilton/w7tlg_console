@@ -334,7 +334,11 @@ class AcomBridge:
     async def _on_rig_state(self, rig: RigState):
         self.station.rig = rig.to_dict()
 
-        if rig.freq_hz != self._last_freq_hz and rig.freq_hz > 0:
+        # Frequency is frozen in rigctld_client during TX, so this guard is
+        # belt-and-suspenders — but an explicit PTT check prevents an amp
+        # band-select command from going out while RF is live under any
+        # circumstance (e.g. a rapid freq change right at TX start).
+        if not rig.ptt and rig.freq_hz != self._last_freq_hz and rig.freq_hz > 0:
             self._last_freq_hz = rig.freq_hz
             await self._handle_freq_change(rig.freq_hz, rig.band)
 

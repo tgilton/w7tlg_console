@@ -200,6 +200,7 @@ html, body {
 .badge-digital { background: #1a2a1a; color: #4f8; font-size: 0.6rem; }
 .badge-digital-audio-active { background: #1a2a1a; color: #4f8; font-size: 0.6rem; }
 .badge-digital-audio-inactive { background: #2a1a1a; color: #f88; font-size: 0.6rem; }
+.badge-split { background: #3a2a00; color: #f90; font-size: 0.6rem; animation: pulse-tx 1.2s infinite; }
 
 @keyframes pulse-tx {
   0%, 100% { opacity: 1; }
@@ -807,6 +808,7 @@ input[type=range]::-webkit-slider-thumb:active {
         <span class="badge badge-band" id="badge-band">??</span>
         <span class="badge badge-mode" id="badge-mode">—</span>
         <span class="badge badge-ptt-rx" id="badge-ptt">RX</span>
+        <span class="badge badge-split" id="badge-split" style="display:none">⚠ SPLIT</span>
         <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
         <span class="badge badge-digital-audio-inactive" id="badge-digital-audio" style="display:none">DIGI AUDIO</span>
       </div>
@@ -1363,6 +1365,9 @@ function updateUI(s) {
   const pttBadge = document.getElementById('badge-ptt');
   pttBadge.textContent = rig.ptt ? 'TX' : 'RX';
   pttBadge.className = rig.ptt ? 'badge badge-ptt-tx' : 'badge badge-ptt-rx';
+
+  const splitBadge = document.getElementById('badge-split');
+  splitBadge.style.display = rig.split ? 'inline-block' : 'none';
 
   const digBadge = document.getElementById('badge-digital');
   digBadge.style.display = rig.near_digital_freq ? 'inline-block' : 'none';
