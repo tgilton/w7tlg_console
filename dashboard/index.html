@@ -151,11 +151,13 @@ html, body {
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--yellow);
   padding-bottom: 6px;
 
   margin-bottom: 8px;
 }
+.amp-meter-value.stale { color: #a06820 !important; font-style: italic; }
+.amp-stale { color: #a06820; font-style: italic; }
 
 /* ── VFO display ─────────────────────────────────────────── */
 .vfo-section { }
@@ -164,7 +166,7 @@ html, body {
   font-family: var(--mono);
   font-size: 3rem;
   font-weight: 700;
-  color: var(--cyan);
+  color: var(--green);
   letter-spacing: 0.04em;
   line-height: 1;
   text-shadow: 0 0 20px rgba(0, 212, 255, 0.35);
@@ -1251,10 +1253,29 @@ input[type=range]::-webkit-slider-thumb:active {
 <div class="toast-stack" id="toast-stack"></div>
 
 <script>
+'use strict';
 var _rfPwrDragging = false;
 var _widthDragging = false;
 var _swrWarningShown = false;
-'use strict';
+
+// Last TX amp readings — shown in stale amber after TX ends, cleared on next TX.
+let _lastTxAmp = null;
+let _ampWasTx = false;
+
+// Wire mouse-wheel adjustment to a range input. Dispatches 'input' so all
+// existing oninput handlers fire without needing to duplicate send logic here.
+function addWheelToSlider(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('wheel', e => {
+    e.preventDefault();
+    const step = parseFloat(el.step) || 1;
+    const dir  = e.deltaY < 0 ? 1 : -1;
+    el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
+                        parseFloat(el.value) + step * dir));
+    el.dispatchEvent(new Event('input'));
+  }, { passive: false });
+}
 
 // ── WebSocket ─────────────────────────────────────────────
 let ws = null;
@@ -1306,6 +1327,12 @@ function send(obj) {
 }
 
 connectWs();
+
+// Wire mouse-wheel to every slider on the page.
+['width-slider','nr-slider','rx-vol-slider',
+ 'eq-bass-slider','eq-mid-slider','eq-treble-slider',
+ 'rf-power-slider','mic-gain-slider','comp-slider','dt-gain-slider',
+].forEach(addWheelToSlider);
 
 // ── Modal / Toast ─────────────────────────────────────────
 function showModal(title, bodyHtml, { confirmLabel = 'Proceed', onConfirm = null, requireChecks = false } = {}) {
@@ -1563,23 +1590,45 @@ function updateAmp(s) {
   const atuBadge = document.getElementById('amp-atu-badge');
   atuBadge.style.display = s.amp_atu_tuned ? 'inline-block' : 'none';
 
-  // Forward power — informational, but very high power approaching the
-  // 1200S's rated max is worth flagging.
-  const fwd = s.amp_fwd_w ?? 0;
-  document.getElementById('amp-fwd-val').textContent = fwd.toFixed(0);
-  setBar('amp-fwd-bar', Math.min(100, (fwd / 1500) * 100));
-  setMeterStatus('amp-fwd-bar', fwd, 1000, 1300);
-  colorValue('amp-fwd-val', fwd, 1000, 1300, true);
+  // Track TX→RX transitions to persist last readings in stale amber.
+  const isTxAmp = !!s.amp_ptt_active;
+  if (isTxAmp && !_ampWasTx) {
+    _lastTxAmp = null;   // new TX starting — clear previous stale values
+  } else if (!isTxAmp && _ampWasTx && (s.amp_fwd_w ?? 0) > 0) {
+    // TX just ended and we have real readings — snapshot them
+    _lastTxAmp = {
+      fwd:     s.amp_fwd_w,
+      swr:     s.amp_swr,
+      temp:    s.amp_temp_c,
+      drive:   s.amp_drive_w,
+      hv:      s.amp_hv_v,
+      current: s.amp_current_ma,
+      refl:    s.amp_refl_w,
+    };
+  }
+  _ampWasTx = isTxAmp;
 
-  // SWR — safety-relevant
-  const swr = s.amp_swr ?? 0;
+  // Use live values during TX; stale snapshot in RX (if available).
+  const src = isTxAmp ? s : (_lastTxAmp ?? s);
+  const isStale = !isTxAmp && _lastTxAmp !== null;
+  const staleClass = isStale ? ' stale' : '';
+
+  // Forward power
+  const fwd = src.amp_fwd_w ?? 0;
+  document.getElementById('amp-fwd-val').textContent = fwd.toFixed(0);
+  setBar('amp-fwd-bar', isStale ? 0 : Math.min(100, (fwd / 1500) * 100));
+  if (!isStale) { setMeterStatus('amp-fwd-bar', fwd, 1000, 1300); colorValue('amp-fwd-val', fwd, 1000, 1300, true); }
+  else document.getElementById('amp-fwd-val').className = 'amp-meter-value' + staleClass;
+
+  // SWR
+  const swr = src.amp_swr ?? 0;
   const swrEl = document.getElementById('amp-swr-val');
   swrEl.textContent = swr > 0 ? swr.toFixed(2) : '—';
-  setBar('amp-swr-bar', Math.max(0, Math.min(100, ((swr - 1) / 4) * 100)));
-  setMeterStatus('amp-swr-bar', swr, 2.5, 3.0);
-  swrEl.className = 'amp-meter-value ' + (swr > 3 ? 'alert' : swr > 2.5 ? 'warn' : 'good');
+  setBar('amp-swr-bar', isStale ? 0 : Math.max(0, Math.min(100, ((swr - 1) / 4) * 100)));
+  if (!isStale) { setMeterStatus('amp-swr-bar', swr, 2.5, 3.0); swrEl.className = 'amp-meter-value ' + (swr > 3 ? 'alert' : swr > 2.5 ? 'warn' : 'good'); }
+  else swrEl.className = 'amp-meter-value' + staleClass;
 
-  // Temperature — safety-relevant
+  // Temperature (always live — safety)
   const temp = s.amp_temp_c ?? 0;
   const tempEl = document.getElementById('amp-temp-val');
   tempEl.textContent = temp > 0 ? temp.toFixed(1) : '—';
@@ -1587,21 +1636,25 @@ function updateAmp(s) {
   setMeterStatus('amp-temp-bar', temp, 55, 65);
   tempEl.className = 'amp-meter-value ' + (temp > 65 ? 'alert' : temp > 55 ? 'warn' : '');
 
-  // Drive — safety-relevant relative to current mode's drive limit
-  const drive = s.amp_drive_w ?? 0;
+  // Drive
+  const drive = src.amp_drive_w ?? 0;
   const limit = s.drive_limit_w ?? 100;
   document.getElementById('amp-drive-val').textContent = drive > 0 ? drive.toFixed(1) : '—';
-  setBar('amp-drive-bar', Math.min(100, (drive / limit) * 100));
-  setMeterStatus('amp-drive-bar', drive, limit * 0.75, limit * 0.95);
-  colorValue('amp-drive-val', drive, limit * 0.75, limit * 0.95, false);
+  setBar('amp-drive-bar', isStale ? 0 : Math.min(100, (drive / limit) * 100));
+  if (!isStale) { setMeterStatus('amp-drive-bar', drive, limit * 0.75, limit * 0.95); colorValue('amp-drive-val', drive, limit * 0.75, limit * 0.95, false); }
+  else document.getElementById('amp-drive-val').className = 'amp-meter-value' + staleClass;
 
-  // Misc
-  document.getElementById('amp-hv-val').textContent =
-    s.amp_hv_v > 0 ? s.amp_hv_v.toFixed(1) : '—';
-  document.getElementById('amp-current-val').textContent =
-    s.amp_current_ma > 0 ? (s.amp_current_ma / 1000).toFixed(1) : '—';
-  document.getElementById('amp-refl-val').textContent =
-    s.amp_refl_w != null ? s.amp_refl_w.toFixed(0) : '—';
+  // HV / Drain / Refl
+  const hvEl  = document.getElementById('amp-hv-val');
+  const curEl = document.getElementById('amp-current-val');
+  const reflEl= document.getElementById('amp-refl-val');
+  const hv  = (isStale ? src.amp_hv_v      : s.amp_hv_v)      ?? 0;
+  const cur = (isStale ? src.amp_current_ma : s.amp_current_ma) ?? 0;
+  const refl= (isStale ? src.amp_refl_w    : s.amp_refl_w)    ?? null;
+  hvEl.textContent   = hv   > 0    ? hv.toFixed(1)            : '—';
+  curEl.textContent  = cur  > 0    ? (cur / 1000).toFixed(1)  : '—';
+  reflEl.textContent = refl != null ? refl.toFixed(0)          : '—';
+  hvEl.className = curEl.className = reflEl.className = isStale ? 'amp-stale' : '';
 
   // Faults
   const sevEl = document.getElementById('fault-severity');

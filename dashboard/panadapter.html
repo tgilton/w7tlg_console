@@ -119,13 +119,14 @@ html, body {
 
 #freq-input {
   font-family: var(--mono);
-  font-size: 0.9rem;
+  font-size: 1.15rem;
+  font-weight: 700;
   background: #0a0d11;
   border: 1px solid var(--border2);
-  color: var(--cyan);
+  color: var(--green);
   padding: 5px 8px;
   border-radius: 3px;
-  width: 130px;
+  width: 140px;
 }
 
 .btn {
@@ -245,7 +246,7 @@ html, body {
 </header>
 
 <div class="controls">
-  <span class="control-label">Center Freq</span>
+  <span class="control-label">Freq</span>
   <input type="text" id="freq-input" value="14.074000" placeholder="MHz">
   <button class="btn" onclick="tuneToInput()">Tune</button>
 
@@ -1129,6 +1130,21 @@ connectWs();
 connectSpectrumWs();
 updateSpanLabel();
 requestAnimationFrame(drawSpectrum);
+
+// Mouse-wheel adjustment for panadapter sliders.
+['span-slider', 'floor-slider', 'gain-slider'].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('wheel', e => {
+    e.preventDefault();
+    if (el.disabled) return;
+    const step = parseFloat(el.step) || 1;
+    const dir  = e.deltaY < 0 ? 1 : -1;
+    el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
+                        parseFloat(el.value) + step * dir));
+    el.dispatchEvent(new Event('input'));
+  }, { passive: false });
+});
 </script>
 </body>
 </html>
