@@ -915,9 +915,9 @@ input[type=range]::-webkit-slider-thumb:active {
           <input type="range" min="200" max="3000" step="50" value="1800" id="width-slider"
             oninput="onWidthSlider(this.value)"
             onmousedown="_widthDragging=true"
-            onmouseup="_widthDragging=false; setWidth(this.value)"
+            onmouseup="_sliderRelease('_widthDragging', ()=>setWidth(this.value))"
             ontouchstart="_widthDragging=true"
-            ontouchend="_widthDragging=false; setWidth(this.value)">
+            ontouchend="_sliderRelease('_widthDragging', ()=>setWidth(this.value))">
           <span class="power-value" id="width-val">1800Hz</span>
         </div>
       </div>
@@ -941,9 +941,9 @@ input[type=range]::-webkit-slider-thumb:active {
                  style="width:80px; accent-color:var(--cyan); cursor:pointer;"
                  oninput="onNRChange(this.value)"
                  onmousedown="_nrDragging=true"
-                 onmouseup="_nrDragging=false; setNR(this.value)"
+                 onmouseup="_sliderRelease('_nrDragging', ()=>setNR(this.value))"
                  ontouchstart="_nrDragging=true"
-                 ontouchend="_nrDragging=false; setNR(this.value)">
+                 ontouchend="_sliderRelease('_nrDragging', ()=>setNR(this.value))">
           <span class="dsp-val" id="nr-val" style="min-width:16px; font-size:0.75rem; color:var(--muted);">8</span>
         </div>
 
@@ -971,9 +971,9 @@ input[type=range]::-webkit-slider-thumb:active {
                  style="width:80px; accent-color:var(--cyan); cursor:pointer;"
                  oninput="document.getElementById('rx-vol-val').textContent = this.value + '%'"
                  onmousedown="_rxVolDragging=true"
-                 onmouseup="_rxVolDragging=false; setRxVolume(this.value)"
+                 onmouseup="_sliderRelease('_rxVolDragging', ()=>setRxVolume(this.value))"
                  ontouchstart="_rxVolDragging=true"
-                 ontouchend="_rxVolDragging=false; setRxVolume(this.value)">
+                 ontouchend="_sliderRelease('_rxVolDragging', ()=>setRxVolume(this.value))">
           <span class="dsp-val" id="rx-vol-val" style="min-width:36px; font-size:0.75rem; color:var(--muted);">400%</span>
         </div>
 
@@ -989,9 +989,9 @@ input[type=range]::-webkit-slider-thumb:active {
                  style="width:60px; accent-color:var(--cyan); cursor:pointer;"
                  oninput="document.getElementById('eq-bass-val').textContent = this.value"
                  onmousedown="_eqDragging=true"
-                 onmouseup="_eqDragging=false; setEQ()"
+                 onmouseup="_sliderRelease('_eqDragging', setEQ)"
                  ontouchstart="_eqDragging=true"
-                 ontouchend="_eqDragging=false; setEQ()">
+                 ontouchend="_sliderRelease('_eqDragging', setEQ)">
           <span class="dsp-val" id="eq-bass-val" style="min-width:18px; font-size:0.75rem; color:var(--muted);">0</span>
 
           <span class="dsp-func-label" style="font-size:0.65rem; color:var(--muted);">MID</span>
@@ -999,9 +999,9 @@ input[type=range]::-webkit-slider-thumb:active {
                  style="width:60px; accent-color:var(--cyan); cursor:pointer;"
                  oninput="document.getElementById('eq-mid-val').textContent = this.value"
                  onmousedown="_eqDragging=true"
-                 onmouseup="_eqDragging=false; setEQ()"
+                 onmouseup="_sliderRelease('_eqDragging', setEQ)"
                  ontouchstart="_eqDragging=true"
-                 ontouchend="_eqDragging=false; setEQ()">
+                 ontouchend="_sliderRelease('_eqDragging', setEQ)">
           <span class="dsp-val" id="eq-mid-val" style="min-width:18px; font-size:0.75rem; color:var(--muted);">0</span>
 
           <span class="dsp-func-label" style="font-size:0.65rem; color:var(--muted);">TREB</span>
@@ -1009,9 +1009,9 @@ input[type=range]::-webkit-slider-thumb:active {
                  style="width:60px; accent-color:var(--cyan); cursor:pointer;"
                  oninput="document.getElementById('eq-treble-val').textContent = this.value"
                  onmousedown="_eqDragging=true"
-                 onmouseup="_eqDragging=false; setEQ()"
+                 onmouseup="_sliderRelease('_eqDragging', setEQ)"
                  ontouchstart="_eqDragging=true"
-                 ontouchend="_eqDragging=false; setEQ()">
+                 ontouchend="_sliderRelease('_eqDragging', setEQ)">
           <span class="dsp-val" id="eq-treble-val" style="min-width:18px; font-size:0.75rem; color:var(--muted);">0</span>
         </div>
       </div>
@@ -1029,9 +1029,9 @@ input[type=range]::-webkit-slider-thumb:active {
           <input type="range" min="5" max="100" value="50" id="rf-power-slider"
             oninput="onPowerSlider(this.value)"
             onmousedown="_rfPwrDragging=true"
-            onmouseup="_rfPwrDragging=false; setPower(this.value)"
+            onmouseup="_sliderRelease('_rfPwrDragging', ()=>setPower(this.value))"
             ontouchstart="_rfPwrDragging=true"
-            ontouchend="_rfPwrDragging=false; setPower(this.value)">
+            ontouchend="_sliderRelease('_rfPwrDragging', ()=>setPower(this.value))">
           <span class="power-value" id="rf-power-val">50W</span>
         </div>
       </div>
@@ -1160,9 +1160,9 @@ input[type=range]::-webkit-slider-thumb:active {
           <input type="range" min="0" max="100" value="50" id="mic-gain-slider"
             oninput="document.getElementById('mic-gain-val').textContent = this.value + '%'"
             onmousedown="_micGainDragging=true"
-            onmouseup="_micGainDragging=false; setMicGain(this.value)"
+            onmouseup="_sliderRelease('_micGainDragging', ()=>setMicGain(this.value))"
             ontouchstart="_micGainDragging=true"
-            ontouchend="_micGainDragging=false; setMicGain(this.value)">
+            ontouchend="_sliderRelease('_micGainDragging', ()=>setMicGain(this.value))">
           <span class="power-value" id="mic-gain-val">50%</span>
         </div>
       </div>
@@ -1172,9 +1172,9 @@ input[type=range]::-webkit-slider-thumb:active {
           <input type="range" min="0" max="100" value="0" id="comp-slider"
             oninput="document.getElementById('comp-val').textContent = this.value + '%'"
             onmousedown="_compDragging=true"
-            onmouseup="_compDragging=false; setComp(this.value)"
+            onmouseup="_sliderRelease('_compDragging', ()=>setComp(this.value))"
             ontouchstart="_compDragging=true"
-            ontouchend="_compDragging=false; setComp(this.value)">
+            ontouchend="_sliderRelease('_compDragging', ()=>setComp(this.value))">
           <span class="power-value" id="comp-val">0%</span>
         </div>
       </div>
@@ -1182,8 +1182,8 @@ input[type=range]::-webkit-slider-thumb:active {
 
     <!-- Digital Audio (DATA-U etc.) — DT GAIN is CAT menu 073 "DATA OUT
          LEVEL", the digital-mode TX audio drive from USB/DATA into the
-         modulator. Mic Gain/Comp don't apply here (no mic input in this
-         mode), so this swaps in for them rather than sitting alongside. -->
+         modulator. COMP (speech compression) is exposed here too since it
+         affects the TX audio path even in digital mode. -->
     <div id="digital-tx-controls" style="display:none">
       <div class="section-label">Digital Audio</div>
       <div class="control-row">
@@ -1192,10 +1192,22 @@ input[type=range]::-webkit-slider-thumb:active {
           <input type="range" min="0" max="100" value="15" id="dt-gain-slider"
             oninput="document.getElementById('dt-gain-val').textContent = this.value"
             onmousedown="_dtGainDragging=true"
-            onmouseup="_dtGainDragging=false; setDtGain(this.value)"
+            onmouseup="_sliderRelease('_dtGainDragging', ()=>setDtGain(this.value))"
             ontouchstart="_dtGainDragging=true"
-            ontouchend="_dtGainDragging=false; setDtGain(this.value)">
+            ontouchend="_sliderRelease('_dtGainDragging', ()=>setDtGain(this.value))">
           <span class="power-value" id="dt-gain-val">15</span>
+        </div>
+      </div>
+      <div class="control-row" style="margin-top:6px">
+        <span class="control-label">COMP</span>
+        <div class="power-slider-wrap">
+          <input type="range" min="0" max="100" value="0" id="dt-comp-slider"
+            oninput="document.getElementById('dt-comp-val').textContent = this.value + '%'"
+            onmousedown="_dtCompDragging=true"
+            onmouseup="_sliderRelease('_dtCompDragging', ()=>setComp(this.value/100))"
+            ontouchstart="_dtCompDragging=true"
+            ontouchend="_sliderRelease('_dtCompDragging', ()=>setComp(this.value/100))">
+          <span class="power-value" id="dt-comp-val">0%</span>
         </div>
       </div>
     </div>
@@ -1262,9 +1274,18 @@ var _swrWarningShown = false;
 let _lastTxAmp = null;
 let _ampWasTx = false;
 
-// Wire mouse-wheel adjustment to a range input. Dispatches 'input' so all
-// existing oninput handlers fire without needing to duplicate send logic here.
-function addWheelToSlider(id) {
+// Clears a dragging guard after a short delay so in-flight state broadcasts
+// (echoed back from the server before it processes the command) can't yank
+// the slider back to its pre-command value right after mouseup.
+function _sliderRelease(flagName, sendFn) {
+  sendFn();
+  setTimeout(() => { window[flagName] = false; }, 350);
+}
+
+// Wire mouse-wheel to a slider. sendFn receives the new value string and
+// sends the command; flagName is the dragging guard to hold during the
+// server round-trip so the state echo doesn't fight the wheel.
+function addWheelToSlider(id, sendFn, flagName) {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('wheel', e => {
@@ -1273,7 +1294,13 @@ function addWheelToSlider(id) {
     const dir  = e.deltaY < 0 ? 1 : -1;
     el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
                         parseFloat(el.value) + step * dir));
-    el.dispatchEvent(new Event('input'));
+    el.dispatchEvent(new Event('input'));   // update display labels
+    if (flagName) window[flagName] = true;
+    if (sendFn) {
+      sendFn(el.value);
+      clearTimeout(el._wheelTimer);
+      el._wheelTimer = setTimeout(() => { if (flagName) window[flagName] = false; }, 350);
+    }
   }, { passive: false });
 }
 
@@ -1328,11 +1355,19 @@ function send(obj) {
 
 connectWs();
 
-// Wire mouse-wheel to every slider on the page.
-['width-slider','nr-slider','rx-vol-slider',
- 'eq-bass-slider','eq-mid-slider','eq-treble-slider',
- 'rf-power-slider','mic-gain-slider','comp-slider','dt-gain-slider',
-].forEach(addWheelToSlider);
+// Wire mouse-wheel to every slider, with the matching send function and
+// dragging guard so wheel events go all the way to the server.
+addWheelToSlider('width-slider',    v => setWidth(v),      '_widthDragging');
+addWheelToSlider('nr-slider',       v => setNR(v),         '_nrDragging');
+addWheelToSlider('rx-vol-slider',   v => setRxVolume(v),   '_rxVolDragging');
+addWheelToSlider('eq-bass-slider',  () => setEQ(),         '_eqDragging');
+addWheelToSlider('eq-mid-slider',   () => setEQ(),         '_eqDragging');
+addWheelToSlider('eq-treble-slider',() => setEQ(),         '_eqDragging');
+addWheelToSlider('rf-power-slider', v => setPower(v),      '_rfPwrDragging');
+addWheelToSlider('mic-gain-slider', v => setMicGain(v),    '_micGainDragging');
+addWheelToSlider('comp-slider',     v => setComp(v),            '_compDragging');
+addWheelToSlider('dt-gain-slider',  v => setDtGain(v),          '_dtGainDragging');
+addWheelToSlider('dt-comp-slider',  v => setComp(v/100),        '_dtCompDragging');
 
 // ── Modal / Toast ─────────────────────────────────────────
 function showModal(title, bodyHtml, { confirmLabel = 'Proceed', onConfirm = null, requireChecks = false } = {}) {
@@ -1518,6 +1553,11 @@ function updateUI(s) {
     const compPct = Math.round((rig.comp_level ?? 0) * 100);
     document.getElementById('comp-slider').value = compPct;
     document.getElementById('comp-val').textContent = compPct + '%';
+  }
+  if (!_dtCompDragging) {
+    const compPct = Math.round((rig.comp_level ?? 0) * 100);
+    document.getElementById('dt-comp-slider').value = compPct;
+    document.getElementById('dt-comp-val').textContent = compPct + '%';
   }
   if (!_rxVolDragging && rig.sdr_rx_volume !== undefined) {
     const volPct = Math.round(rig.sdr_rx_volume * 100);
@@ -1879,6 +1919,7 @@ var _micGainDragging = false;
 var _compDragging = false;
 var _rxVolDragging = false;
 var _dtGainDragging = false;
+var _dtCompDragging = false;
 
 function toggleNB() {
   _nbOn = !_nbOn;
