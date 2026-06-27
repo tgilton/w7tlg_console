@@ -319,6 +319,15 @@ async def next_antenna():
     return {"status": "ok", "message": msg}
 
 
+@app.post("/api/amp/settings")
+async def amp_request_settings():
+    if bridge is None:
+        raise HTTPException(503, "Bridge not initialized")
+    from amplifier.acom_protocol import cmd_request_message, AmpMsg
+    await bridge.amp.send(cmd_request_message(AmpMsg.SETTINGS))
+    return {"status": "ok", "message": "SETTINGS request sent — watch log for 0x12 snapshot"}
+
+
 @app.post("/api/amp/atac")
 async def amp_atac():
     if bridge is None:

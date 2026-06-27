@@ -453,12 +453,10 @@ class AcomBridge:
                 await self.amp.send(cmd_select_band(self._current_acom_band))
                 logger.info(
                     f"Deferred band sync: sent band select {self._current_acom_band.name}")
-            # Request fault codes and settings immediately at startup.
-            # Settings (0x12) gives us the CAT configuration bytes — needed to
-            # learn what byte values to send to automate the CAT toggle that
-            # wakes the ATU. Raw bytes are logged by the raw-frame handler below.
+            # Request fault codes immediately so ATU status shows in the log.
+            # SETTINGS (0x12) is requested unconditionally at the serial layer
+            # (acom_serial._connect) so it fires even when telemetry doesn't flow.
             await self.amp.send(cmd_request_message(AmpMsg.ERROR_CODES))
-            await self.amp.send(cmd_request_message(AmpMsg.SETTINGS))
 
         self.station.amp_mode       = t.mode_name
         self.station.amp_fwd_w      = t.fwd_power_w

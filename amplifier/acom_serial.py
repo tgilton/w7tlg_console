@@ -23,7 +23,7 @@ from .acom_protocol import (
     AmpMsg, CmdMsg,
     FrameReader, parse_frame,
     parse_full_telemetry, parse_fault_codes,
-    cmd_ack, cmd_enable_telemetry,
+    cmd_ack, cmd_enable_telemetry, cmd_request_message,
     AmpTelemetry, FaultStatus,
 )
 
@@ -202,6 +202,10 @@ class AcomSerial:
             await asyncio.sleep(5.0)
             await self.send(cmd_enable_telemetry())
             logger.info("Telemetry enabled")
+            # Request SETTINGS unconditionally — captures CAT config bytes even
+            # when the amp is in a fault state and won't stream telemetry.
+            # Needed to learn the byte values for automating the CAT toggle.
+            await self.send(cmd_request_message(AmpMsg.SETTINGS))
             return True
 
         except serial.SerialException as e:
