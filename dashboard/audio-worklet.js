@@ -15,6 +15,13 @@ class PcmStreamProcessor extends AudioWorkletProcessor {
     this.readPos = 0;     // fractional read index into ring, source-sample units
 
     this.port.onmessage = (evt) => {
+      // Control commands arrive as plain objects; PCM arrives as Float32Array.
+      if (evt.data && evt.data.cmd === 'flush') {
+        // TX started — drop all buffered audio instantly so the ring doesn't
+        // drain 1-3s of pre-TX noise into the speaker after the server gates.
+        this.available = 0;
+        return;
+      }
       const samples = evt.data;
       for (let i = 0; i < samples.length; i++) {
         this.ring[this.writeIdx] = samples[i];

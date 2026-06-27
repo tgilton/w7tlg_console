@@ -240,7 +240,11 @@ async def _fast_ptt_monitor():
                 # Rising edge — gate immediately
                 if sdr is not None and sdr.available:
                     sdr.audio.gate_tx()
-                    logger.debug("Fast PTT: TX gate opened")
+                # Tell the browser to flush its audio ring buffer now —
+                # pre-TX audio already queued there would otherwise drain
+                # as a loud blast for up to 3 seconds.
+                await manager.broadcast({"type": "tx_mute"})
+                logger.debug("Fast PTT: TX gate opened, tx_mute broadcast sent")
             elif not ptt and last_ptt:
                 # Falling edge — brief hold for relay settle + pipeline drain
                 await asyncio.sleep(_POST_TX_HOLD_S)

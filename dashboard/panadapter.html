@@ -393,6 +393,12 @@ function connectWs() {
   };
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
+    if (msg.type === 'tx_mute') {
+      // Fast PTT gate fired on the server — flush the audio ring buffer
+      // immediately so buffered pre-TX audio doesn't play as a loud blast.
+      if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+      return;
+    }
     if (msg.type === 'state') {
       const rig = msg.data.rig || {};
       rigPtt = !!rig.ptt;
