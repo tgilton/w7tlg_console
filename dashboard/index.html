@@ -1271,7 +1271,10 @@ var _widthDragging = false;
 var _swrWarningShown = false;
 
 // Last TX amp readings — shown in stale amber after TX ends, cleared on next TX.
+// _liveTxAmp tracks readings continuously during TX so the snapshot at TX→RX
+// end uses real TX-era values, not the post-TX state (which already reads ~0).
 let _lastTxAmp = null;
+let _liveTxAmp = null;
 let _ampWasTx = false;
 
 // Clears a dragging guard after a short delay so in-flight state broadcasts
@@ -1441,7 +1444,7 @@ function updateUI(s) {
   const isDigitalMode = !!rig.is_digital;
   document.getElementById('voice-tx-controls').style.display = isDigitalMode ? 'none' : '';
   document.getElementById('digital-tx-controls').style.display = isDigitalMode ? '' : 'none';
-  if (isDigitalMode && !_dtGainDragging && rig.dt_gain !== undefined) {
+  if (isDigitalMode && !_dtGainDragging && rig.dt_gain != null) {
     document.getElementById('dt-gain-slider').value = rig.dt_gain;
     document.getElementById('dt-gain-val').textContent = rig.dt_gain;
   }
@@ -1631,20 +1634,27 @@ function updateAmp(s) {
   atuBadge.style.display = s.amp_atu_tuned ? 'inline-block' : 'none';
 
   // Track TX→RX transitions to persist last readings in stale amber.
+  // _liveTxAmp is updated every poll during TX so the snapshot taken at
+  // TX→RX uses real TX-era values — by the time the first RX state arrives
+  // the amp has already stopped and amp_fwd_w is already ~0.
   const isTxAmp = !!s.amp_ptt_active;
-  if (isTxAmp && !_ampWasTx) {
-    _lastTxAmp = null;   // new TX starting — clear previous stale values
-  } else if (!isTxAmp && _ampWasTx && (s.amp_fwd_w ?? 0) > 0) {
-    // TX just ended and we have real readings — snapshot them
-    _lastTxAmp = {
-      fwd:     s.amp_fwd_w,
-      swr:     s.amp_swr,
-      temp:    s.amp_temp_c,
-      drive:   s.amp_drive_w,
-      hv:      s.amp_hv_v,
-      current: s.amp_current_ma,
-      refl:    s.amp_refl_w,
-    };
+  if (isTxAmp) {
+    if (!_ampWasTx) _lastTxAmp = null;  // new TX starting — clear stale
+    if ((s.amp_fwd_w ?? 0) > 0) {
+      _liveTxAmp = {
+        amp_fwd_w:    s.amp_fwd_w,
+        amp_swr:      s.amp_swr,
+        amp_temp_c:   s.amp_temp_c,
+        amp_drive_w:  s.amp_drive_w,
+        amp_hv_v:     s.amp_hv_v,
+        amp_current_ma: s.amp_current_ma,
+        amp_refl_w:   s.amp_refl_w,
+      };
+    }
+  } else if (_ampWasTx && _liveTxAmp) {
+    // TX just ended — snapshot the last live TX readings
+    _lastTxAmp = _liveTxAmp;
+    _liveTxAmp = null;
   }
   _ampWasTx = isTxAmp;
 

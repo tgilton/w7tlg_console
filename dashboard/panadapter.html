@@ -273,11 +273,24 @@ html, body {
          oninput="onGainSlider(this.value)">
   <span class="span-val" id="gain-val">80 dB range</span>
 
+  <span class="control-label" style="margin-left:16px">Avg</span>
+  <input type="range" id="avg-slider" min="0" max="100" value="30"
+         oninput="onAvgSlider(this.value)">
+  <span class="span-val" id="avg-val">30%</span>
+
   <span class="control-label" style="margin-left:16px">Palette</span>
   <select id="palette-select" onchange="onPaletteSelect(this.value)">
     <option value="default">Default</option>
-    <option value="linrad">Linrad (approx)</option>
+    <option value="linrad">Linrad</option>
+    <option value="grayscale">Grayscale</option>
+    <option value="hot">Hot</option>
+    <option value="gqrx">GQRX</option>
   </select>
+
+  <span class="control-label" style="margin-left:16px">Contrast</span>
+  <input type="range" id="contrast-slider" min="3" max="40" value="15"
+         oninput="onContrastSlider(this.value)">
+  <span class="span-val" id="contrast-val">1.5×</span>
 
   <span class="control-label" style="margin-left:16px">Signal</span>
   <div class="smeter-mini-wrap"><div class="smeter-mini-bar" id="smeter-mini-bar"></div></div>
@@ -971,17 +984,17 @@ function drawSpectrum() {
     updateFreqInputDisplay();
 
     const points = cropToView(frame, Math.round(w));
-    // Calibrate from what's actually visible right now, not the full ~2MHz
-    // capture — a quieter spot elsewhere in the capture would otherwise drag
-    // the floor below what's relevant to the current zoomed-in view.
+    // Calibrate from raw (unsmoothed) data — the range must track real noise
+    // floor / peak conditions, not a time-lagged version of them.
     if (autoScale) updateDbRange(points);
     const [floor, ceil] = effectiveFloorCeil();
 
-    const xs = new Float32Array(points.length);
-    const ys = new Float32Array(points.length);
-    for (let i = 0; i < points.length; i++) {
-      xs[i] = (i / (points.length - 1)) * w;
-      const pct = Math.max(0, Math.min(1, (points[i] - floor) / (ceil - floor)));
+    const drawPoints = applySpectrumSmoothing(points);
+    const xs = new Float32Array(drawPoints.length);
+    const ys = new Float32Array(drawPoints.length);
+    for (let i = 0; i < drawPoints.length; i++) {
+      xs[i] = (i / (drawPoints.length - 1)) * w;
+      const pct = Math.max(0, Math.min(1, (drawPoints[i] - floor) / (ceil - floor)));
       ys[i] = h - pct * h;
     }
 
@@ -990,8 +1003,8 @@ function drawSpectrum() {
     // trace was easy to lose against the background.
     ctx.beginPath();
     ctx.moveTo(xs[0], ys[0]);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(xs[i], ys[i]);
-    ctx.lineTo(xs[points.length - 1], h);
+    for (let i = 1; i < drawPoints.length; i++) ctx.lineTo(xs[i], ys[i]);
+    ctx.lineTo(xs[drawPoints.length - 1], h);
     ctx.lineTo(xs[0], h);
     ctx.closePath();
     ctx.fillStyle = 'rgba(0, 212, 255, 0.25)';
@@ -999,7 +1012,7 @@ function drawSpectrum() {
 
     ctx.beginPath();
     ctx.moveTo(xs[0], ys[0]);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(xs[i], ys[i]);
+    for (let i = 1; i < drawPoints.length; i++) ctx.lineTo(xs[i], ys[i]);
     ctx.strokeStyle = '#00d4ff';
     ctx.lineWidth = 1.5 * dpr;
     ctx.stroke();
@@ -1039,30 +1052,84 @@ const wfCanvas = document.getElementById('waterfall-canvas');
 const wfCtx = wfCanvas.getContext('2d');
 
 const PALETTES = {
-  default: [   // black -> blue -> cyan -> green -> yellow -> red
-    [0.00, 0, 0, 0],
-    [0.20, 0, 0, 130],
-    [0.40, 0, 180, 200],
-    [0.60, 0, 220, 60],
-    [0.80, 255, 220, 0],
-    [1.00, 255, 30, 30],
+  default: [   // black → blue → cyan → green → yellow → red
+    [0.00,   0,   0,   0],
+    [0.20,   0,   0, 130],
+    [0.40,   0, 180, 200],
+    [0.60,   0, 220,  60],
+    [0.80, 255, 220,   0],
+    [1.00, 255,  30,  30],
   ],
-  linrad: [   // approximation only — not verified against real Linrad output
-    [0.00, 0, 0, 0],
-    [0.15, 0, 0, 80],
-    [0.35, 0, 0, 255],
-    [0.55, 0, 255, 255],
-    [0.70, 0, 255, 0],
-    [0.85, 255, 255, 0],
-    [0.95, 255, 0, 0],
+  linrad: [   // approximation — not verified against real Linrad output
+    [0.00,   0,   0,   0],
+    [0.15,   0,   0,  80],
+    [0.35,   0,   0, 255],
+    [0.55,   0, 255, 255],
+    [0.70,   0, 255,   0],
+    [0.85, 255, 255,   0],
+    [0.95, 255,   0,   0],
     [1.00, 255, 255, 255],
+  ],
+  grayscale: [
+    [0.00,   0,   0,   0],
+    [1.00, 255, 255, 255],
+  ],
+  hot: [       // thermal heat — black → dark red → orange → yellow → white
+    [0.00,   0,   0,   0],
+    [0.40, 200,   0,   0],
+    [0.70, 255, 160,   0],
+    [0.85, 255, 240,   0],
+    [1.00, 255, 255, 255],
+  ],
+  gqrx: [     // GQRX-style: deep blue floor, cyan/yellow signals
+    [0.00,   0,   0,  32],
+    [0.25,   0,  40, 120],
+    [0.50,   0, 150, 200],
+    [0.70, 100, 210, 100],
+    [0.85, 240, 220,   0],
+    [1.00, 255,  80,  30],
   ],
 };
 let currentPalette = 'default';
 function onPaletteSelect(v) { currentPalette = v; }
 
+// Waterfall contrast — gamma applied to the normalized [0,1] value before
+// palette lookup. >1 compresses the dark end (quieter noise floor, signals
+// pop); <1 spreads darks out (lighter background). Default 1.5 gives a
+// pleasantly dark floor without hiding weak signals.
+let wfContrast = 1.5;
+function onContrastSlider(v) {
+  wfContrast = parseFloat(v) / 10;
+  document.getElementById('contrast-val').textContent = wfContrast.toFixed(1) + '×';
+}
+
+// Spectrum line temporal smoothing — EMA across frames; keeps the noise
+// floor visually quiet without affecting the audio path at all.
+// specAvgAlpha is the "old data" weight: 0 = instant (no smoothing),
+// 0.95 = heavy (slow to respond). Calibration (auto-range) runs on the raw
+// data so it tracks real conditions, not the smoothed display.
+let smoothedSpectrum = null;
+let specAvgAlpha = 0.30;
+function onAvgSlider(v) {
+  specAvgAlpha = parseFloat(v) / 100 * 0.95;
+  document.getElementById('avg-val').textContent = parseFloat(v).toFixed(0) + '%';
+}
+function applySpectrumSmoothing(points) {
+  if (specAvgAlpha < 0.01) return points;
+  if (!smoothedSpectrum || smoothedSpectrum.length !== points.length) {
+    smoothedSpectrum = new Float32Array(points);
+    return smoothedSpectrum;
+  }
+  const fresh = 1 - specAvgAlpha;
+  for (let i = 0; i < points.length; i++) {
+    smoothedSpectrum[i] = fresh * points[i] + specAvgAlpha * smoothedSpectrum[i];
+  }
+  return smoothedSpectrum;
+}
+
 function dbToColor(db, floor, ceil) {
-  const pct = Math.max(0, Math.min(1, (db - floor) / (ceil - floor)));
+  let pct = Math.max(0, Math.min(1, (db - floor) / (ceil - floor)));
+  pct = Math.pow(pct, wfContrast);
   const stops = PALETTES[currentPalette] || PALETTES.default;
   for (let i = 1; i < stops.length; i++) {
     if (pct <= stops[i][0]) {
@@ -1132,7 +1199,7 @@ updateSpanLabel();
 requestAnimationFrame(drawSpectrum);
 
 // Mouse-wheel adjustment for panadapter sliders.
-['span-slider', 'floor-slider', 'gain-slider'].forEach(id => {
+['span-slider', 'floor-slider', 'gain-slider', 'avg-slider', 'contrast-slider'].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('wheel', e => {

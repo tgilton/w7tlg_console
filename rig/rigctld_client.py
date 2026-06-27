@@ -156,7 +156,7 @@ class RigState:
     nb_on: bool         = False   # NB func on/off
     nr_on: bool         = False   # NR func on/off
     dnf_on: bool        = False   # ANF (auto-notch) on/off
-    dt_gain: int        = 0       # DATA OUT LEVEL (CAT menu 073), 0-100, digital modes only
+    dt_gain: Optional[int] = None  # DATA OUT LEVEL (CAT menu 073), 0-100; None until first poll
 
     # Derived
     is_digital: bool        = False
@@ -432,17 +432,16 @@ class RigctldClient:
         return None
 
     async def set_dt_gain(self, value: int) -> bool:
-        """Set DT GAIN (CAT menu 073, "DATA OUT LEVEL"), 0-100."""
+        """Set DT GAIN (CAT menu 073, "DATA OUT LEVEL"), 0-100.
+        Uses _send_set (reads until RPRT) so the shared-connection buffer
+        is always left clean — send_raw_cmd/_send_get with n_lines=1 leaves
+        the trailing RPRT 0 in the buffer and desyncs the next poll."""
         value = max(0, min(100, int(value)))
-        reply = await self.send_raw_cmd(f"EX073{value:03d};")
-        if reply and reply.startswith("EX073"):
-            try:
-                self.state.dt_gain = int(reply[5:8])
-                await self._fire_callbacks()
-                return True
-            except ValueError:
-                pass
-        return False
+        ok = await self._send_set(f"w EX073{value:03d};\n")
+        if ok:
+            self.state.dt_gain = value
+            await self._fire_callbacks()
+        return ok
 
     # ------------------------------------------------------------------
     # Internal: run / connect / disconnect

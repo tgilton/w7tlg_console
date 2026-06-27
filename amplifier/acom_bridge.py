@@ -31,9 +31,9 @@ from enum import Enum
 from typing import Optional, Callable, Coroutine
 
 from amplifier.acom_protocol import (
-    AmpTelemetry, FaultStatus,
+    AmpMsg, AmpTelemetry, FaultStatus,
     cmd_next_antenna, cmd_select_band, cmd_tx_prohibit, cmd_tx_allow,
-    cmd_standby, cmd_operate, cmd_clear_soft_faults,
+    cmd_standby, cmd_operate, cmd_clear_soft_faults, cmd_request_message, cmd_atac,
     freq_to_band as acom_freq_to_band, Band as AcomBand,
 )
 from amplifier.acom_serial import AcomSerial
@@ -247,6 +247,8 @@ class AcomBridge:
         self._last_freq_hz: int = 0
         self._dummy_tx_start: Optional[float] = None
         self._tx_was_active: bool = False
+        self._amp_ready: bool = False   # True after first telemetry — gate for band-select
+        self._last_fault_set: frozenset = frozenset()   # edge-trigger fault logging
         self._state_callbacks: list[StationStateCallback] = []
 
         self.rig.on_state_change(self._on_rig_state)
@@ -254,6 +256,7 @@ class AcomBridge:
         self.amp.on_fault(self._on_fault)
         self.amp.on_antenna_change(self._on_antenna_change)
         self.amp.on_connection_change(self._on_amp_connection)
+        self.amp.on_raw_frame(self._on_raw_frame)
 
     def on_state_change(self, cb: StationStateCallback):
         self._state_callbacks.append(cb)
@@ -308,6 +311,18 @@ class AcomBridge:
         logger.info("Sent NEXT ANTENNA (front-panel ANT button equivalent)")
         return True, "Antenna cycle requested"
 
+    async def run_atac(self) -> tuple[bool, str]:
+        """
+        Initiate ATU Tune / Antenna Change (ATAC) cycle.
+        Exercises all ATU relays through a full sequence — use this to clear
+        ATU POWER SWITCH ALARM faults caused by cold-start relay sticking.
+        Amp must be in OPERATE mode; if it's in STANDBY this is a no-op on
+        the amp side (command is sent but amp will not run the cycle).
+        """
+        await self.amp.send(cmd_atac())
+        logger.info("Sent ATAC (ATU Tune / Antenna Change)")
+        return True, "ATAC cycle initiated"
+
     async def inhibit_tx(self, reason: str):
         if not self._tx_inhibited:
             self._tx_inhibited = True
@@ -357,6 +372,15 @@ class AcomBridge:
         self._current_acom_band = new_band
         if new_band is None:
             logger.warning(f"Frequency {freq_hz} Hz out of ACOM band range")
+            return
+        # Don't send band select until the amp has fully initialized (first
+        # telemetry received). An early ANT_BAND_SELECT command while the ATU
+        # is still in its power-on sequence causes it to request a new tune
+        # assignment that can't complete without RF → "ATU Unassigned" every
+        # cold start. _on_telemetry will push the band sync once amp is ready.
+        if not self._amp_ready:
+            logger.info(
+                f"Band → {band_name}: deferring band select until amp ready")
             return
         # Keeps the amp's band/LPF tracking the radio even while in
         # STANDBY (no drive RF for the amp's own F-counter to detect band
@@ -422,6 +446,20 @@ class AcomBridge:
         }
 
     async def _on_telemetry(self, t: AmpTelemetry):
+        if not self._amp_ready:
+            self._amp_ready = True
+            logger.info("Amp ready — syncing band to radio")
+            if self._current_acom_band is not None and not self.rig.state.ptt:
+                await self.amp.send(cmd_select_band(self._current_acom_band))
+                logger.info(
+                    f"Deferred band sync: sent band select {self._current_acom_band.name}")
+            # Request fault codes and settings immediately at startup.
+            # Settings (0x12) gives us the CAT configuration bytes — needed to
+            # learn what byte values to send to automate the CAT toggle that
+            # wakes the ATU. Raw bytes are logged by the raw-frame handler below.
+            await self.amp.send(cmd_request_message(AmpMsg.ERROR_CODES))
+            await self.amp.send(cmd_request_message(AmpMsg.SETTINGS))
+
         self.station.amp_mode       = t.mode_name
         self.station.amp_fwd_w      = t.fwd_power_w
         self.station.amp_refl_w     = t.refl_power_w
@@ -474,6 +512,29 @@ class AcomBridge:
         self.station.fault_soft     = faults.soft_faults
         self.station.fault_warnings = faults.warnings
 
+        # Build a flat set of all active messages for edge detection.
+        # Only log when something actually changes — the amp streams 0x21
+        # frequently and we don't want per-poll noise.
+        current_set = frozenset(
+            faults.hard_faults + faults.soft_faults + faults.warnings)
+        if current_set != self._last_fault_set:
+            cleared = self._last_fault_set - current_set
+            added   = current_set - self._last_fault_set
+            for msg in faults.hard_faults:
+                if msg in added:
+                    logger.error(f"ACOM HARD FAULT: {msg}")
+            for msg in faults.soft_faults:
+                if msg in added:
+                    logger.warning(f"ACOM SOFT FAULT: {msg}")
+            for msg in faults.warnings:
+                if msg in added:
+                    logger.warning(f"ACOM WARNING: {msg}")
+            for msg in cleared:
+                logger.info(f"ACOM cleared: {msg}")
+            if not current_set and self._last_fault_set:
+                logger.info("ACOM fault status: OK — all clear")
+            self._last_fault_set = current_set
+
         if faults.has_hard_fault:
             await self.inhibit_tx(
                 f"ACOM HARD FAULT: {', '.join(faults.hard_faults)}")
@@ -494,9 +555,17 @@ class AcomBridge:
         self._selected_antenna = ant_num + 1
         await self._publish()
 
+    async def _on_raw_frame(self, address: int, data: bytes):
+        if address == AmpMsg.SETTINGS:
+            logger.info(
+                f"ACOM SETTINGS (0x12): {data.hex(' ').upper()} "
+                f"({len(data)} bytes) — CAT/ATU config snapshot")
+
     async def _on_amp_connection(self, connected: bool):
         self.station.amp_connected = connected
         if not connected:
+            self._amp_ready = False
+            self._last_fault_set = frozenset()
             await self.inhibit_tx("ACOM serial connection lost")
         else:
             await self.set_operating_mode(

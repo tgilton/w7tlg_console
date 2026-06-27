@@ -319,6 +319,16 @@ async def next_antenna():
     return {"status": "ok", "message": msg}
 
 
+@app.post("/api/amp/atac")
+async def amp_atac():
+    if bridge is None:
+        raise HTTPException(503, "Bridge not initialized")
+    ok, msg = await bridge.run_atac()
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"status": "ok", "message": msg}
+
+
 @app.post("/api/tx")
 async def tx_control(req: TxRequest):
     if bridge is None:
@@ -530,6 +540,11 @@ async def handle_ws_command(text: str, ws: WebSocket):
 # ---------------------------------------------------------------------------
 # Dashboard HTML
 # ---------------------------------------------------------------------------
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
