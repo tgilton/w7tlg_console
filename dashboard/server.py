@@ -192,10 +192,76 @@ async def on_spectrum_frame(frame: dict):
 
 
 async def on_audio_frame(audio_bytes: bytes):
+    # Gate: drop audio frames while TX is active so no pre-TX IQ that slipped
+    # past the fast PTT monitor reaches the browser.
+    if sdr is not None and sdr.audio.tx_active:
+        return
     await audio_manager.broadcast_audio(audio_bytes)
 
 
 _last_is_digital = False
+
+# How often the fast PTT watchdog polls rigctld (ms).  20ms gives ~10ms
+# average detection lag vs the main poll cycle's ~50ms — enough to gate
+# the SDR audio before the TX blast reaches the browser on SSB voice.
+_FAST_PTT_POLL_MS  = 20
+# How long to hold the TX mute after PTT drops — covers the antenna relay
+# bounce and any IQ still draining through the pipeline on TX→RX return.
+_POST_TX_HOLD_S    = 0.15
+
+
+async def _fast_ptt_monitor():
+    """Dedicated low-latency PTT watchdog.
+
+    Maintains its own persistent rigctld TCP connection and polls PTT every
+    _FAST_PTT_POLL_MS.  On PTT rising edge it calls sdr.audio.gate_tx()
+    immediately — flushing the IQ queue and resetting AGC gain — rather than
+    waiting for the main 100ms bridge poll to propagate the change.  The main
+    poll's on_station_state still sets tx_active too, acting as a safety net.
+    """
+    reader = writer = None
+    last_ptt = False
+
+    while True:
+        try:
+            if writer is None:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(RIGCTLD_HOST, RIGCTLD_PORT),
+                    timeout=2.0)
+
+            writer.write(b't\n')
+            await writer.drain()
+            val_line  = await asyncio.wait_for(reader.readline(), timeout=0.5)
+            _rprt     = await asyncio.wait_for(reader.readline(), timeout=0.5)  # consume RPRT
+
+            ptt = val_line.decode(errors='replace').strip() == '1'
+
+            if ptt and not last_ptt:
+                # Rising edge — gate immediately
+                if sdr is not None and sdr.available:
+                    sdr.audio.gate_tx()
+                    logger.debug("Fast PTT: TX gate opened")
+            elif not ptt and last_ptt:
+                # Falling edge — brief hold for relay settle + pipeline drain
+                await asyncio.sleep(_POST_TX_HOLD_S)
+                if sdr is not None and sdr.available and not (sdr.audio.tx_active and
+                        bridge is not None and bridge.station.rig.get("ptt", False)):
+                    sdr.audio.tx_active = False
+                    logger.debug("Fast PTT: TX gate closed")
+
+            last_ptt = ptt
+
+        except Exception:
+            if writer is not None:
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+            reader = writer = None
+            await asyncio.sleep(1.0)
+            continue
+
+        await asyncio.sleep(_FAST_PTT_POLL_MS / 1000)
 
 
 async def on_rig_state_for_audio_mode(rig_state: RigState):
@@ -260,6 +326,7 @@ async def lifespan(app: FastAPI):
     if not sdr.available:
         logger.warning("SDR unavailable — panadapter features disabled.")
     rig.on_state_change(on_rig_state_for_audio_mode)
+    asyncio.create_task(_fast_ptt_monitor())
 
     logger.info("W7TLG Console running")
 

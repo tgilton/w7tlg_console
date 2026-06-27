@@ -288,6 +288,23 @@ class AudioDemodulator:
         self._thread = threading.Thread(target=self._run, name="sdr-audio", daemon=True)
         self._thread.start()
 
+    def gate_tx(self):
+        """Call immediately on PTT rising edge (before the main poll cycle catches
+        up). Sets tx_active, flushes the IQ queue to drop any pre-TX samples
+        already buffered, and resets AGC gain so the high-gain state built up
+        listening to weak signals doesn't produce a loud blast on TX→RX return."""
+        self.tx_active = True
+        dropped = 0
+        while True:
+            try:
+                self._q.get_nowait()
+                dropped += 1
+            except queue.Empty:
+                break
+        self.agc_gain = 1.0
+        if dropped:
+            logger.debug(f"TX gate: flushed {dropped} IQ chunks")
+
     def stop(self):
         self._stop_event.set()
         if self._thread:
