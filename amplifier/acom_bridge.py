@@ -250,6 +250,11 @@ class AcomBridge:
         self._tx_was_active: bool = False
         self._amp_ready: bool = False   # True after first telemetry — gate for band-select
         self._last_fault_set: frozenset = frozenset()   # edge-trigger fault logging
+        # Mode-sync hysteresis counters: require N consecutive telemetry frames
+        # showing the same mode class before changing _mode, to filter transient
+        # sub-states (e.g. 0x51 during the OPR/RX→OPR/TX relay sequence).
+        self._amp_opr_frames: int = 0
+        self._amp_stdby_frames: int = 0
         self._state_callbacks: list[StationStateCallback] = []
 
         self.rig.on_state_change(self._on_rig_state)
@@ -460,12 +465,17 @@ class AcomBridge:
             # (acom_serial._connect) so it fires even when telemetry doesn't flow.
             await self.amp.send(cmd_request_message(AmpMsg.ERROR_CODES))
 
-        # Sync operating mode from what the amp is actually doing.
-        # The front-panel OPR/STB button changes the amp's state without going
-        # through the console — detect it here and follow.
+        # Sync operating mode from what the amp is actually doing so the console
+        # follows front-panel OPR/STB presses. The ACOM passes through transient
+        # sub-states during relay switching (e.g. 0x51 for ~1 frame during the
+        # OPR/RX→OPR/TX transition at TX start), so require 3 consecutive frames
+        # of the same mode class before acting — filters spurious flips without
+        # adding meaningful delay for genuine front-panel changes (~300ms at 10Hz).
         amp_mode_class = t.mode & 0xF0
-        if amp_mode_class in (0x60, 0x70):  # OPR/RX or OPR/TX
-            if self._mode != OperatingMode.AMP_ON:
+        if amp_mode_class in (0x60, 0x70):   # OPR/RX or OPR/TX
+            self._amp_opr_frames   = min(self._amp_opr_frames + 1, 10)
+            self._amp_stdby_frames = 0
+            if self._amp_opr_frames >= 3 and self._mode != OperatingMode.AMP_ON:
                 logger.info(
                     f"Amp mode sync → AMP_ON (detected 0x{t.mode:02X} from telemetry)")
                 self._mode = OperatingMode.AMP_ON
@@ -473,11 +483,17 @@ class AcomBridge:
                 new_limit = MODE_DRIVE_LIMITS[OperatingMode.AMP_ON]
                 if self.rig.state.rf_power_pct > new_limit:
                     await self.rig.set_rf_power(new_limit)
-        elif amp_mode_class == 0x50:  # Standby
-            if self._mode != OperatingMode.AMP_OFF:
+        elif amp_mode_class == 0x50:           # Standby
+            self._amp_stdby_frames = min(self._amp_stdby_frames + 1, 10)
+            self._amp_opr_frames   = 0
+            if self._amp_stdby_frames >= 3 and self._mode != OperatingMode.AMP_OFF:
                 logger.info(
                     f"Amp mode sync → AMP_OFF (detected 0x{t.mode:02X} from telemetry)")
                 self._mode = OperatingMode.AMP_OFF
+        else:
+            # Other modes (ATAC, Init, Menu…) — neither OPR nor STB, reset both
+            self._amp_opr_frames   = 0
+            self._amp_stdby_frames = 0
 
         self.station.amp_mode       = t.mode_name
         self.station.amp_fwd_w      = t.fwd_power_w
