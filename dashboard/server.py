@@ -328,6 +328,16 @@ async def amp_request_settings():
     return {"status": "ok", "message": "SETTINGS request sent — watch log for 0x12 snapshot"}
 
 
+@app.post("/api/amp/relink-telemetry")
+async def amp_relink_telemetry():
+    """Re-send ENABLE_TELEMETRY to recover a stalled telemetry stream."""
+    if bridge is None:
+        raise HTTPException(503, "Bridge not initialized")
+    from amplifier.acom_protocol import cmd_enable_telemetry
+    await bridge.amp.send(cmd_enable_telemetry())
+    return {"status": "ok", "message": "ENABLE_TELEMETRY sent"}
+
+
 @app.post("/api/amp/atac")
 async def amp_atac():
     if bridge is None:

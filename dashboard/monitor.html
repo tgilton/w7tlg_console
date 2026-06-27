@@ -411,6 +411,15 @@ function handleTrendData(msg) {
       row[fi.is_tx] === 1
     );
   }
+
+  // The server pushes a live state message before we can request trend data,
+  // so the initial live point lands in the array before the historical samples.
+  // Sort once here to put everything in chronological order; subsequent live
+  // state points arrive with monotonically increasing timestamps and append
+  // correctly via push().
+  for (const key in charts) {
+    charts[key].data.sort((a, b) => a.ts - b.ts);
+  }
 }
 
 function addChartPoint(ts, fwd, refl, swr, temp, drive, currentA, isTx) {

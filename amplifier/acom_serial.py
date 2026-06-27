@@ -16,6 +16,9 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Optional, Any
 
+# If no 0x2F telemetry arrives within this window, re-send the enable command.
+TELEMETRY_WATCHDOG_S = 30.0
+
 import serial
 import serial.tools.list_ports
 
@@ -73,6 +76,7 @@ class AcomSerial:
     _connected: bool = field(default=False, init=False, repr=False)
     _send_lock: Optional[asyncio.Lock] = field(default=None, init=False, repr=False)
     _last_send_time: float = field(default=0.0, init=False, repr=False)
+    _last_telemetry_time: float = field(default=0.0, init=False, repr=False)
 
     # Callbacks
     _telemetry_callbacks: list[TelemetryCallback] = field(
@@ -201,11 +205,13 @@ class AcomSerial:
             logger.info("Waiting for ACOM to stabilize...")
             await asyncio.sleep(5.0)
             await self.send(cmd_enable_telemetry())
+            self._last_telemetry_time = time.monotonic()  # watchdog baseline
             logger.info("Telemetry enabled")
             # Request SETTINGS unconditionally — captures CAT config bytes even
             # when the amp is in a fault state and won't stream telemetry.
             # Needed to learn the byte values for automating the CAT toggle.
             await self.send(cmd_request_message(AmpMsg.SETTINGS))
+            asyncio.create_task(self._telemetry_watchdog())
             return True
 
         except serial.SerialException as e:
@@ -290,6 +296,7 @@ class AcomSerial:
 
         # Dispatch to typed callbacks
         if address == AmpMsg.FULL_TELEMETRY:
+            self._last_telemetry_time = time.monotonic()
             telemetry = parse_full_telemetry(data)
             if telemetry:
                 for cb in self._telemetry_callbacks:
@@ -321,6 +328,20 @@ class AcomSerial:
     # ------------------------------------------------------------------
     # Internal: connection callbacks
     # ------------------------------------------------------------------
+
+    async def _telemetry_watchdog(self):
+        """Re-send enable_telemetry if no 0x2F frames arrive within the watchdog window.
+        The amp may stop streaming after a STANDBY→OPERATE transition or after a
+        front-panel interaction; re-enabling recovers the stream without a reconnect."""
+        while self._running and self._connected:
+            await asyncio.sleep(TELEMETRY_WATCHDOG_S)
+            if not (self._running and self._connected):
+                break
+            elapsed = time.monotonic() - self._last_telemetry_time
+            if elapsed >= TELEMETRY_WATCHDOG_S:
+                logger.warning(
+                    f"No telemetry for {elapsed:.0f}s — re-enabling telemetry stream")
+                await self.send(cmd_enable_telemetry())
 
     async def _fire_connection_callbacks(self, connected: bool):
         for cb in self._connection_callbacks:

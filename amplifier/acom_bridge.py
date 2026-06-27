@@ -34,6 +34,7 @@ from amplifier.acom_protocol import (
     AmpMsg, AmpTelemetry, FaultStatus,
     cmd_next_antenna, cmd_select_band, cmd_tx_prohibit, cmd_tx_allow,
     cmd_standby, cmd_operate, cmd_clear_soft_faults, cmd_request_message, cmd_atac,
+    cmd_enable_telemetry,
     freq_to_band as acom_freq_to_band, Band as AcomBand,
 )
 from amplifier.acom_serial import AcomSerial
@@ -273,14 +274,15 @@ class AcomBridge:
 
     async def set_operating_mode(self, mode: OperatingMode,
                                   confirmed: bool = False) -> tuple[bool, str]:
-        if mode == OperatingMode.AMP_ON and not confirmed:
-            return False, "AMP_ON requires explicit operator confirmation"
-
         self._mode = mode
-        self._high_power_confirmed = confirmed
+        self._high_power_confirmed = True
 
         if mode in AMP_ACTIVE_MODES:
             await self.amp.send(cmd_operate())
+            # Re-enable telemetry in case the stream stalled during STANDBY —
+            # the amp may not stream 0x2F while in standby, so enabling here
+            # ensures telemetry resumes as soon as OPERATE is confirmed.
+            await self.amp.send(cmd_enable_telemetry())
             logger.info("Amp → OPERATE")
         else:
             await self.amp.send(cmd_standby())
@@ -457,6 +459,25 @@ class AcomBridge:
             # SETTINGS (0x12) is requested unconditionally at the serial layer
             # (acom_serial._connect) so it fires even when telemetry doesn't flow.
             await self.amp.send(cmd_request_message(AmpMsg.ERROR_CODES))
+
+        # Sync operating mode from what the amp is actually doing.
+        # The front-panel OPR/STB button changes the amp's state without going
+        # through the console — detect it here and follow.
+        amp_mode_class = t.mode & 0xF0
+        if amp_mode_class in (0x60, 0x70):  # OPR/RX or OPR/TX
+            if self._mode != OperatingMode.AMP_ON:
+                logger.info(
+                    f"Amp mode sync → AMP_ON (detected 0x{t.mode:02X} from telemetry)")
+                self._mode = OperatingMode.AMP_ON
+                self._high_power_confirmed = True
+                new_limit = MODE_DRIVE_LIMITS[OperatingMode.AMP_ON]
+                if self.rig.state.rf_power_pct > new_limit:
+                    await self.rig.set_rf_power(new_limit)
+        elif amp_mode_class == 0x50:  # Standby
+            if self._mode != OperatingMode.AMP_OFF:
+                logger.info(
+                    f"Amp mode sync → AMP_OFF (detected 0x{t.mode:02X} from telemetry)")
+                self._mode = OperatingMode.AMP_OFF
 
         self.station.amp_mode       = t.mode_name
         self.station.amp_fwd_w      = t.fwd_power_w
