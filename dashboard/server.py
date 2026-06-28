@@ -144,6 +144,20 @@ class AudioConnectionManager:
             if ws in self.active:
                 self.active.remove(ws)
 
+    async def broadcast_flush(self):
+        """Send a text "flush" command on the audio channel.
+
+        Sending on the SAME WebSocket as audio frames guarantees the browser
+        processes this in order — after any audio frames already in-flight
+        before the TX gate closed, but before any new frames.  Sending it on
+        /ws (the state channel) instead lets out-of-order delivery refill the
+        ring after the flush, causing the echo/feedback crash pattern."""
+        for ws in list(self.active):
+            try:
+                await ws.send_text("flush")
+            except Exception:
+                pass
+
 
 manager = ConnectionManager()
 spectrum_manager = SpectrumConnectionManager()
@@ -240,11 +254,13 @@ async def _fast_ptt_monitor():
                 # Rising edge — gate immediately
                 if sdr is not None and sdr.available:
                     sdr.audio.gate_tx()
-                # Tell the browser to flush its audio ring buffer now —
-                # pre-TX audio already queued there would otherwise drain
-                # as a loud blast for up to 3 seconds.
-                await manager.broadcast({"type": "tx_mute"})
-                logger.debug("Fast PTT: TX gate opened, tx_mute broadcast sent")
+                # Flush the browser ring buffer on the audio channel so the
+                # command is ordered AFTER any audio frames already in-flight.
+                # A flush on /ws (main state channel) races with audio frames
+                # on /ws/audio and can arrive first, letting queued audio
+                # refill the ring afterward — producing the echo/crash pattern.
+                await audio_manager.broadcast_flush()
+                logger.debug("Fast PTT: TX gate opened, audio flush sent")
             elif not ptt and last_ptt:
                 # Falling edge — brief hold for relay settle + pipeline drain
                 await asyncio.sleep(_POST_TX_HOLD_S)

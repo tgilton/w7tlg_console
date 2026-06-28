@@ -726,6 +726,16 @@ function ensureAudioWs() {
   // unmuted, matching the pattern used elsewhere in this file.
   audioWs.onclose = () => { if (!audioMuted) setTimeout(ensureAudioWs, 1000); };
   audioWs.onmessage = evt => {
+    // Text frames are control commands; binary frames are PCM audio.
+    if (typeof evt.data === 'string') {
+      if (evt.data === 'flush' && audioWorkletNode) {
+        // TX gate fired on the server — flush the ring buffer on THIS channel
+        // so the command is processed in-order after any audio already queued,
+        // preventing the echo/crash pattern caused by cross-channel reordering.
+        audioWorkletNode.port.postMessage({ cmd: 'flush' });
+      }
+      return;
+    }
     if (!audioWorkletNode) return;
     const pcm16 = new Int16Array(evt.data);
     const f32 = new Float32Array(pcm16.length);
