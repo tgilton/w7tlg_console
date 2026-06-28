@@ -438,22 +438,18 @@ function txSilenceStart() {
   if (_txSilenced) return;
   _txSilenced = true;
   if (_txUnmuteTimer) { clearTimeout(_txUnmuteTimer); _txUnmuteTimer = null; }
-  // Zero the GainNode — AudioContext render-level, faster than any WS message
-  if (gainNode && audioCtx) gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-  // Also flush the ring so queued audio doesn't play when gain restores
+  // Flush the ring — it goes empty, worklet outputs zeros, speakers go silent.
   if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
 }
 
 function txSilenceEnd() {
   if (!_txSilenced) return;
-  // Hold mute for 500ms so the radio is fully back in RX and any residual
-  // RF has decayed before audio resumes
+  // Hold 500ms so the radio is fully back in RX before audio resumes.
   if (_txUnmuteTimer) clearTimeout(_txUnmuteTimer);
   _txUnmuteTimer = setTimeout(() => {
     _txSilenced = false;
     _txUnmuteTimer = null;
     if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
-    if (gainNode && audioCtx) gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
   }, 500);
 }
 
@@ -713,7 +709,6 @@ let audioCtx = null;
 let audioWs = null;
 let audioWorkletNode = null;
 let audioWorkletReady = null;   // Promise, set once addModule() has been kicked off
-let gainNode = null;            // GainNode between worklet and destination — zeroed on TX
 let audioMuted = true;
 let _txSilenced = false;        // true while TX mute is active
 let _txUnmuteTimer = null;
@@ -744,15 +739,7 @@ function ensureAudioWorklet() {
   if (!audioWorkletReady) {
     audioWorkletReady = audioCtx.audioWorklet.addModule('/audio-worklet.js').then(() => {
       audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
-      // GainNode sits between the worklet and the speakers. Setting gain to 0
-      // is instantaneous at the AudioContext render level — faster than any
-      // WebSocket message or ring-buffer flush — and stops audio from reaching
-      // the Mac Multi-Output Device (and thus VB-Cable → FT-991A USB audio)
-      // the moment PTT fires.
-      gainNode = audioCtx.createGain();
-      gainNode.gain.value = _audioPttActive ? 0 : 1;
-      audioWorkletNode.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
+      audioWorkletNode.connect(audioCtx.destination);
     });
   }
   return audioWorkletReady;
