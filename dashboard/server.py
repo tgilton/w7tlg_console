@@ -208,12 +208,11 @@ async def on_audio_frame(audio_bytes: bytes):
 
 _last_is_digital = False
 
-# How often the fast PTT watchdog polls rigctld (ms).  20ms gives ~10ms
-# average detection lag vs the main poll cycle's ~50ms — enough to gate
-# the SDR audio before the TX blast reaches the browser on SSB voice.
-_FAST_PTT_POLL_MS  = 20
-# How long to hold the TX mute after PTT drops — covers the antenna relay
-# bounce and any IQ still draining through the pipeline on TX→RX return.
+# How often the fast PTT watchdog polls rigctld (ms).  5ms gives ~2.5ms
+# average detection lag, comfortably ahead of the bridge's 100ms ACOM poll.
+_FAST_PTT_POLL_MS  = 5
+# How long to hold the TX gate after PTT drops — covers antenna relay
+# bounce and IQ pipeline drain on TX→RX return.
 _POST_TX_HOLD_S    = 0.15
 
 
@@ -267,11 +266,31 @@ async def _fast_ptt_monitor():
                 await manager.broadcast({"type": "tx_mute"})
                 logger.info("Fast PTT: TX gate opened, tx_mute sent")
             elif not ptt and last_ptt:
-                # Falling edge — brief hold for relay settle + pipeline drain
-                await asyncio.sleep(_POST_TX_HOLD_S)
-                if sdr is not None and sdr.available and not (sdr.audio.tx_active and
-                        bridge is not None and bridge.station.rig.get("ptt", False)):
-                    sdr.audio.tx_active = False
+                # Falling edge — keep polling through the hold so a rapid
+                # re-TX isn't missed while sleeping.  A bare asyncio.sleep
+                # here would black out polling for the full hold duration,
+                # causing the bridge's 100ms state path to win the race on
+                # any re-TX that starts before the sleep ends.
+                hold_deadline = asyncio.get_event_loop().time() + _POST_TX_HOLD_S
+                while asyncio.get_event_loop().time() < hold_deadline:
+                    await asyncio.sleep(_FAST_PTT_POLL_MS / 1000)
+                    writer.write(b't\n')
+                    await writer.drain()
+                    hline = await asyncio.wait_for(reader.readline(), timeout=0.5)
+                    hdec  = hline.decode(errors='replace').strip()
+                    if not hdec or hdec.startswith('RPRT'):
+                        continue
+                    new_ptt = hdec == '1'
+                    if new_ptt and not ptt:
+                        # Re-TX during hold — gate immediately
+                        if sdr is not None and sdr.available:
+                            sdr.gate_tx()
+                        await manager.broadcast({"type": "tx_mute"})
+                        logger.info("Fast PTT: re-TX during hold, tx_mute sent")
+                    ptt = new_ptt
+                if not ptt:
+                    if sdr is not None and sdr.available:
+                        sdr.audio.tx_active = False
                     logger.debug("Fast PTT: TX gate closed")
 
             last_ptt = ptt
