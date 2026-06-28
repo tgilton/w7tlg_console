@@ -440,9 +440,15 @@ function connectWs() {
 
 function txSilenceStart() {
   console.log('[TX] txSilenceStart at', performance.now().toFixed(1), 'ms  already silenced:', _txSilenced);
+  // Cancel any pending unmute timer BEFORE the early-return check.  A stale
+  // ptt=False state from the bridge's last poll cycle can arrive right after
+  // tx_mute, triggering txSilenceEnd and scheduling the 500ms unmute while
+  // the radio is still TX.  Subsequent txSilenceStart (already silenced:true)
+  // calls were returning early without cancelling it — letting it fire mid-TX
+  // and re-open audio exactly when the user re-keys.
+  if (_txUnmuteTimer) { clearTimeout(_txUnmuteTimer); _txUnmuteTimer = null; }
   if (_txSilenced) return;
   _txSilenced = true;
-  if (_txUnmuteTimer) { clearTimeout(_txUnmuteTimer); _txUnmuteTimer = null; }
   // Nuclear option: close the audio WebSocket entirely. No connection means
   // no buffered frames can arrive after the flush. onclose will not
   // auto-reconnect while _txSilenced is true.
