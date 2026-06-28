@@ -438,19 +438,24 @@ function txSilenceStart() {
   if (_txSilenced) return;
   _txSilenced = true;
   if (_txUnmuteTimer) { clearTimeout(_txUnmuteTimer); _txUnmuteTimer = null; }
-  // Flush the ring — it goes empty, worklet outputs zeros, speakers go silent.
+  // Nuclear option: close the audio WebSocket entirely. No connection means
+  // no buffered frames can arrive after the flush. onclose will not
+  // auto-reconnect while _txSilenced is true.
+  if (audioWs) { audioWs.close(); audioWs = null; }
+  // Also flush whatever the worklet already has in its ring buffer.
   if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
 }
 
 function txSilenceEnd() {
   if (!_txSilenced || _txUnmuteTimer) return;
-  // Hold 500ms so the radio is fully back in RX before audio resumes.
+  // Hold 500ms so the radio is fully back in RX, then reopen audio.
   // Don't cancel/reset on each call — state updates arrive every 100ms and
   // would keep resetting the timer forever, so it would never fire.
   _txUnmuteTimer = setTimeout(() => {
     _txSilenced = false;
     _txUnmuteTimer = null;
     if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+    if (!audioMuted) ensureAudioWs();
   }, 500);
 }
 
@@ -753,7 +758,7 @@ function ensureAudioWs() {
   // Unlike /ws and /ws/spectrum, nothing else re-establishes this socket if
   // it drops mid-session — reconnect automatically as long as we're still
   // unmuted, matching the pattern used elsewhere in this file.
-  audioWs.onclose = () => { if (!audioMuted) setTimeout(ensureAudioWs, 1000); };
+  audioWs.onclose = () => { if (!audioMuted && !_txSilenced) setTimeout(ensureAudioWs, 1000); };
   audioWs.onmessage = evt => {
     // Text frames are control commands; binary frames are PCM audio.
     if (typeof evt.data === 'string') {
