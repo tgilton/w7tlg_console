@@ -447,13 +447,16 @@ function txSilenceStart() {
   // calls were returning early without cancelling it — letting it fire mid-TX
   // and re-open audio exactly when the user re-keys.
   if (_txUnmuteTimer) { clearTimeout(_txUnmuteTimer); _txUnmuteTimer = null; }
+  // Zero the GainNode on the audio rendering thread — takes effect at the
+  // very next render quantum (~3ms), bypassing all JS message queues.  This
+  // is what the operator was doing manually ("turn it down, key the mic"):
+  // silence the output synchronously before any TX audio can reach the DAC.
+  if (muteGain) muteGain.gain.value = 0;
   if (_txSilenced) return;
   _txSilenced = true;
-  // Nuclear option: close the audio WebSocket entirely. No connection means
-  // no buffered frames can arrive after the flush. onclose will not
-  // auto-reconnect while _txSilenced is true.
+  // Close the audio WebSocket so no new frames arrive after the gain cut.
   if (audioWs) { console.log('[TX] closing audioWs'); audioWs.close(); audioWs = null; }
-  // Also flush whatever the worklet already has in its ring buffer.
+  // Belt-and-suspenders: also flush the worklet ring buffer.
   if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
 }
 
@@ -467,6 +470,7 @@ function txSilenceEnd() {
     console.log('[TX] unmuting audio');
     _txSilenced = false;
     _txUnmuteTimer = null;
+    if (muteGain) muteGain.gain.value = 1;
     if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
     if (!audioMuted) ensureAudioWs();
   }, 500);
@@ -727,6 +731,7 @@ attachHoverCrosshair(document.getElementById('waterfall-wrap'));
 let audioCtx = null;
 let audioWs = null;
 let audioWorkletNode = null;
+let muteGain = null;            // GainNode between worklet and destination
 let audioWorkletReady = null;   // Promise, set once addModule() has been kicked off
 let audioMuted = true;
 let _txSilenced = false;        // true while TX mute is active
@@ -758,7 +763,10 @@ function ensureAudioWorklet() {
   if (!audioWorkletReady) {
     audioWorkletReady = audioCtx.audioWorklet.addModule('/audio-worklet.js').then(() => {
       audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
-      audioWorkletNode.connect(audioCtx.destination);
+      muteGain = audioCtx.createGain();
+      muteGain.gain.value = 1;
+      audioWorkletNode.connect(muteGain);
+      muteGain.connect(audioCtx.destination);
     });
   }
   return audioWorkletReady;
