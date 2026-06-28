@@ -212,7 +212,7 @@ class SdrClient:
                   "GetDeviceParams")
             dp = dp_ptr.contents
             dp.devParams.contents.fsHz = self.sample_rate_hz
-            dp.devParams.contents.rspDxParams.antennaSel = capi.RspDx_ANTENNA_A
+            dp.devParams.contents.rspDxParams.antennaSel = capi.RspDx_ANTENNA_C
             ch_a = dp.rxChannelA.contents
             ch_a.tunerParams.rfFreq.rfHz = self.rf_freq_hz
             ch_a.tunerParams.bwType = capi.BW_1_536
