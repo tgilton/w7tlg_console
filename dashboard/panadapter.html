@@ -443,9 +443,10 @@ function txSilenceStart() {
 }
 
 function txSilenceEnd() {
-  if (!_txSilenced) return;
+  if (!_txSilenced || _txUnmuteTimer) return;
   // Hold 500ms so the radio is fully back in RX before audio resumes.
-  if (_txUnmuteTimer) clearTimeout(_txUnmuteTimer);
+  // Don't cancel/reset on each call — state updates arrive every 100ms and
+  // would keep resetting the timer forever, so it would never fire.
   _txUnmuteTimer = setTimeout(() => {
     _txSilenced = false;
     _txUnmuteTimer = null;
