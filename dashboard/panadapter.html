@@ -435,23 +435,26 @@ function connectWs() {
 // holding it muted for 500ms after TX ends breaks the loop.
 
 function txSilenceStart() {
+  console.log('[TX] txSilenceStart at', performance.now().toFixed(1), 'ms  already silenced:', _txSilenced);
   if (_txSilenced) return;
   _txSilenced = true;
   if (_txUnmuteTimer) { clearTimeout(_txUnmuteTimer); _txUnmuteTimer = null; }
   // Nuclear option: close the audio WebSocket entirely. No connection means
   // no buffered frames can arrive after the flush. onclose will not
   // auto-reconnect while _txSilenced is true.
-  if (audioWs) { audioWs.close(); audioWs = null; }
+  if (audioWs) { console.log('[TX] closing audioWs'); audioWs.close(); audioWs = null; }
   // Also flush whatever the worklet already has in its ring buffer.
   if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
 }
 
 function txSilenceEnd() {
   if (!_txSilenced || _txUnmuteTimer) return;
+  console.log('[TX] txSilenceEnd — scheduling unmute in 500ms');
   // Hold 500ms so the radio is fully back in RX, then reopen audio.
   // Don't cancel/reset on each call — state updates arrive every 100ms and
   // would keep resetting the timer forever, so it would never fire.
   _txUnmuteTimer = setTimeout(() => {
+    console.log('[TX] unmuting audio');
     _txSilenced = false;
     _txUnmuteTimer = null;
     if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
@@ -763,10 +766,7 @@ function ensureAudioWs() {
     // Text frames are control commands; binary frames are PCM audio.
     if (typeof evt.data === 'string') {
       if (evt.data === 'flush') {
-        // Fast PTT monitor fired on the server (~20ms after PTT key-down).
-        // This is the earliest possible software notification — trigger the
-        // full nuclear mute immediately rather than waiting for the state
-        // update (~100ms). txSilenceStart closes this WS and flushes the ring.
+        console.log('[TX] fast-path flush received on /ws/audio at', performance.now().toFixed(1), 'ms');
         txSilenceStart();
       }
       return;
