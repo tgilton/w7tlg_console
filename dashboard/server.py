@@ -144,19 +144,6 @@ class AudioConnectionManager:
             if ws in self.active:
                 self.active.remove(ws)
 
-    async def broadcast_flush(self):
-        """Send a text "flush" command on the audio channel.
-
-        Sending on the SAME WebSocket as audio frames guarantees the browser
-        processes this in order — after any audio frames already in-flight
-        before the TX gate closed, but before any new frames.  Sending it on
-        /ws (the state channel) instead lets out-of-order delivery refill the
-        ring after the flush, causing the echo/feedback crash pattern."""
-        for ws in list(self.active):
-            try:
-                await ws.send_text("flush")
-            except Exception:
-                pass
 
 
 manager = ConnectionManager()
@@ -257,16 +244,20 @@ async def _fast_ptt_monitor():
             ptt = val_line.decode(errors='replace').strip() == '1'
 
             if ptt and not last_ptt:
-                # Rising edge — gate immediately
+                # Rising edge ��� gate immediately
                 if sdr is not None and sdr.available:
                     sdr.gate_tx()   # flushes IQ queue AND BlackHole queue
-                # Flush the browser ring buffer on the audio channel so the
-                # command is ordered AFTER any audio frames already in-flight.
-                # A flush on /ws (main state channel) races with audio frames
-                # on /ws/audio and can arrive first, letting queued audio
-                # refill the ring afterward — producing the echo/crash pattern.
-                await audio_manager.broadcast_flush()
-                logger.debug("Fast PTT: TX gate opened, audio flush sent")
+                # Signal the browser via the STATE channel (/ws), not the
+                # audio channel (/ws/audio).  The audio WS carries a continuous
+                # stream of binary frames; a text flush injected into that stream
+                # sits behind the pending audio backlog and always loses the race
+                # to the state message — confirmed by browser console showing the
+                # state path firing txSilenceStart before the flush ever arrives.
+                # Sending tx_mute on /ws reaches the browser immediately (no
+                # backlog), which calls txSilenceStart() → closes audioWs →
+                # dropping the pending audio frames before they can play.
+                await manager.broadcast({"type": "tx_mute"})
+                logger.debug("Fast PTT: TX gate opened, tx_mute sent")
             elif not ptt and last_ptt:
                 # Falling edge — brief hold for relay settle + pipeline drain
                 await asyncio.sleep(_POST_TX_HOLD_S)

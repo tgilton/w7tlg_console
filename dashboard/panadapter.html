@@ -394,9 +394,13 @@ function connectWs() {
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'tx_mute') {
-      // Fast PTT gate fired on the server — flush the audio ring buffer
-      // immediately so buffered pre-TX audio doesn't play as a loud blast.
-      if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+      // Fast PTT gate fired on the server. Call txSilenceStart() (not just a
+      // ring flush) so audioWs is closed — that drops the pending binary audio
+      // frames still in the /ws/audio receive queue before they can play.
+      // A flush injected into /ws/audio itself always arrives late because it
+      // sits behind the audio frame backlog; /ws has no such queue.
+      console.log('[TX] tx_mute received on /ws at', performance.now().toFixed(1), 'ms');
+      txSilenceStart();
       return;
     }
     if (msg.type === 'state') {
@@ -763,14 +767,6 @@ function ensureAudioWs() {
   // unmuted, matching the pattern used elsewhere in this file.
   audioWs.onclose = () => { if (!audioMuted && !_txSilenced) setTimeout(ensureAudioWs, 1000); };
   audioWs.onmessage = evt => {
-    // Text frames are control commands; binary frames are PCM audio.
-    if (typeof evt.data === 'string') {
-      if (evt.data === 'flush') {
-        console.log('[TX] fast-path flush received on /ws/audio at', performance.now().toFixed(1), 'ms');
-        txSilenceStart();
-      }
-      return;
-    }
     if (!audioWorkletNode || _txSilenced) return;
     const pcm16 = new Int16Array(evt.data);
     const f32 = new Float32Array(pcm16.length);
