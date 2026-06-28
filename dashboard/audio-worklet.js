@@ -42,13 +42,17 @@ class PcmStreamProcessor extends AudioWorkletProcessor {
     const output = outputs[0][0];
     if (!output) return true;
 
-    // Source is 16kHz; the context runs at its own native rate (usually
-    // 44.1/48kHz). Nearest-neighbor resampling on read — plenty for
-    // monitoring SSB/CW, and keeps this dependency-free.
+    // Source is 16kHz; context runs at the hardware rate (48kHz on the M2,
+    // 44.1kHz elsewhere).  Linear interpolation handles the non-integer ratio
+    // cleanly — nearest-neighbor produced audible warbly artifacts at 44.1kHz
+    // (step ≈ 0.363) but linear is inaudible and costs almost nothing.
     const step = this.sourceRate / sampleRate;
     for (let i = 0; i < output.length; i++) {
       if (this.available >= 1) {
-        output[i] = this.ring[Math.floor(this.readPos) % this.ringSize];
+        const idx  = Math.floor(this.readPos) % this.ringSize;
+        const next = (idx + 1) % this.ringSize;
+        const frac = this.readPos - Math.floor(this.readPos);
+        output[i] = this.ring[idx] * (1 - frac) + this.ring[next] * frac;
         this.readPos += step;
         this.available -= step;
       } else {

@@ -752,14 +752,14 @@ function sidebandForRigMode(mode) {
 // many messages/sec there were. The worklet is immune to that: it just
 // reads continuously, regardless of when data shows up.
 function ensureAudioWorklet() {
-  // Pin the context to our actual source rate (16kHz) rather than letting
-  // it default to the system's hardware rate (commonly 44100 or 48000).
-  // The worklet's own resampling is crude sample-repetition — fine for an
-  // exact integer ratio, but produces an irregular (audible, warbly)
-  // repeat pattern at a non-integer one. Matching rates means zero
-  // resampling happens in our code at all; the browser's own native
-  // resampler handles the hop to hardware output instead.
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  // Run the AudioContext at the hardware's native rate (typically 48kHz on
+  // the M2 interface) rather than pinning it to 16kHz.  At 16kHz the render
+  // quantum is 128/16000 = 8ms — long enough for a speaker burst to reach
+  // the mic and seed RF feedback before the GainNode zeros.  At 48kHz the
+  // quantum shrinks to 128/48000 ≈ 2.7ms, cutting the pre-TX audio window
+  // by 3×.  The worklet now uses linear interpolation to handle the 16→48kHz
+  // (or 16→44.1kHz) resampling cleanly without the old warbly artifacts.
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (!audioWorkletReady) {
     audioWorkletReady = audioCtx.audioWorklet.addModule('/audio-worklet.js').then(() => {
       audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
