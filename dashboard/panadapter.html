@@ -401,25 +401,8 @@ function connectWs() {
     }
     if (msg.type === 'state') {
       const rig = msg.data.rig || {};
-      const newPtt = !!rig.ptt;
-      if (newPtt !== _audioPttActive) {
-        _audioPttActive = newPtt;
-        if (gainNode) {
-          if (newPtt) {
-            // TX started — zero gain immediately, flush ring so no pre-TX
-            // audio drains through VB-Cable into the FT-991A USB audio.
-            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-            if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
-          } else {
-            // TX ended — flush stale TX-era audio from ring, then restore
-            // gain after a brief hold for the radio to return to RX.
-            if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
-            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-            gainNode.gain.setValueAtTime(1, audioCtx.currentTime + 0.15);
-          }
-        }
-      }
-      rigPtt = newPtt;
+      rigPtt = !!rig.ptt;
+      if (rigPtt) txSilenceStart(); else txSilenceEnd();
       rigFreqHz = rig.freq_hz ?? rigFreqHz;
       rigBand = rig.band ?? rigBand;
       rigMode = rig.near_digital_freq ? 'PKTUSB' : (rig.mode || rigMode);
@@ -443,6 +426,35 @@ function connectWs() {
       updateSdrBadge();
     }
   };
+}
+
+// ── TX audio mute ──────────────────────────────────────────────────────────
+// Silence the panadapter audio the instant PTT is detected. The physical mic
+// on the FT-991A can pick up whatever the speakers are playing and transmit
+// it as SSB — creating a feedback loop. Cutting the audio immediately and
+// holding it muted for 500ms after TX ends breaks the loop.
+
+function txSilenceStart() {
+  if (_txSilenced) return;
+  _txSilenced = true;
+  if (_txUnmuteTimer) { clearTimeout(_txUnmuteTimer); _txUnmuteTimer = null; }
+  // Zero the GainNode — AudioContext render-level, faster than any WS message
+  if (gainNode && audioCtx) gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+  // Also flush the ring so queued audio doesn't play when gain restores
+  if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+}
+
+function txSilenceEnd() {
+  if (!_txSilenced) return;
+  // Hold mute for 500ms so the radio is fully back in RX and any residual
+  // RF has decayed before audio resumes
+  if (_txUnmuteTimer) clearTimeout(_txUnmuteTimer);
+  _txUnmuteTimer = setTimeout(() => {
+    _txSilenced = false;
+    _txUnmuteTimer = null;
+    if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+    if (gainNode && audioCtx) gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
+  }, 500);
 }
 
 function send(obj) {
@@ -703,7 +715,8 @@ let audioWorkletNode = null;
 let audioWorkletReady = null;   // Promise, set once addModule() has been kicked off
 let gainNode = null;            // GainNode between worklet and destination — zeroed on TX
 let audioMuted = true;
-let _audioPttActive = false;    // client-side PTT gate state
+let _txSilenced = false;        // true while TX mute is active
+let _txUnmuteTimer = null;
 let lastAudioFreqHz = null;
 let lastAudioMode = null;
 let lastAudioBandwidthHz = null;
@@ -764,7 +777,7 @@ function ensureAudioWs() {
       }
       return;
     }
-    if (!audioWorkletNode) return;
+    if (!audioWorkletNode || _txSilenced) return;
     const pcm16 = new Int16Array(evt.data);
     const f32 = new Float32Array(pcm16.length);
     for (let i = 0; i < pcm16.length; i++) f32[i] = pcm16[i] / 32768;
