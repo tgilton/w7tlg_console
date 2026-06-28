@@ -65,6 +65,15 @@ class DigitalAudioOutput:
             target=self._run, name="digital-audio-out", daemon=True)
         self._thread.start()
 
+    def flush(self):
+        """Drain the output queue immediately — call on TX start so pre-TX
+        audio already buffered here doesn't keep playing to the speaker."""
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+
     def stop(self):
         self._stop_event.set()
         if self._thread:

@@ -675,5 +675,10 @@ class AudioDemodulator:
         return pcm16.tobytes()
 
     async def _publish(self, audio_bytes: bytes):
+        # Gate ALL audio output during TX — catches both the browser WebSocket
+        # path and the BlackHole/digital-audio path, which has its own queue
+        # that would otherwise drain for seconds after the IQ gate closes.
+        if self.tx_active:
+            return
         for cb in self._audio_callbacks:
             await cb(audio_bytes)

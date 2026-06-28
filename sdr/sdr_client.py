@@ -123,6 +123,13 @@ class SdrClient:
     def on_spectrum(self, cb: SpectrumCallback):
         self._spectrum_callbacks.append(cb)
 
+    def gate_tx(self):
+        """Gate all audio output for TX start: flush the IQ queue, the
+        BlackHole/digital-audio queue, and reset AGC.  Call this instead of
+        audio.gate_tx() directly so every audio output path is covered."""
+        self.audio.gate_tx()
+        self.digital_audio.flush()
+
     async def start(self):
         self._loop = asyncio.get_running_loop()
         try:

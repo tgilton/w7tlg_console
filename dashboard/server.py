@@ -197,7 +197,13 @@ def build_state_payload(state: StationState) -> dict:
 
 async def on_station_state(state: StationState):
     if sdr is not None and sdr.available:
-        sdr.audio.tx_active = bool(state.rig.get("ptt", False))
+        ptt = bool(state.rig.get("ptt", False))
+        if ptt and not sdr.audio.tx_active:
+            # Rising edge on the slow path (100ms poll) — flush both queues
+            # in case the fast PTT monitor missed it or hasn't connected yet.
+            sdr.gate_tx()
+        elif not ptt:
+            sdr.audio.tx_active = False
     await manager.broadcast({"type": "state", "data": build_state_payload(state)})
 
 
@@ -253,7 +259,7 @@ async def _fast_ptt_monitor():
             if ptt and not last_ptt:
                 # Rising edge — gate immediately
                 if sdr is not None and sdr.available:
-                    sdr.audio.gate_tx()
+                    sdr.gate_tx()   # flushes IQ queue AND BlackHole queue
                 # Flush the browser ring buffer on the audio channel so the
                 # command is ordered AFTER any audio frames already in-flight.
                 # A flush on /ws (main state channel) races with audio frames
