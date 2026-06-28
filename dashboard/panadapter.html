@@ -401,7 +401,25 @@ function connectWs() {
     }
     if (msg.type === 'state') {
       const rig = msg.data.rig || {};
-      rigPtt = !!rig.ptt;
+      const newPtt = !!rig.ptt;
+      if (newPtt !== _audioPttActive) {
+        _audioPttActive = newPtt;
+        if (gainNode) {
+          if (newPtt) {
+            // TX started — zero gain immediately, flush ring so no pre-TX
+            // audio drains through VB-Cable into the FT-991A USB audio.
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+            if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+          } else {
+            // TX ended — flush stale TX-era audio from ring, then restore
+            // gain after a brief hold for the radio to return to RX.
+            if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+            gainNode.gain.setValueAtTime(1, audioCtx.currentTime + 0.15);
+          }
+        }
+      }
+      rigPtt = newPtt;
       rigFreqHz = rig.freq_hz ?? rigFreqHz;
       rigBand = rig.band ?? rigBand;
       rigMode = rig.near_digital_freq ? 'PKTUSB' : (rig.mode || rigMode);
@@ -683,7 +701,9 @@ let audioCtx = null;
 let audioWs = null;
 let audioWorkletNode = null;
 let audioWorkletReady = null;   // Promise, set once addModule() has been kicked off
+let gainNode = null;            // GainNode between worklet and destination — zeroed on TX
 let audioMuted = true;
+let _audioPttActive = false;    // client-side PTT gate state
 let lastAudioFreqHz = null;
 let lastAudioMode = null;
 let lastAudioBandwidthHz = null;
@@ -711,7 +731,15 @@ function ensureAudioWorklet() {
   if (!audioWorkletReady) {
     audioWorkletReady = audioCtx.audioWorklet.addModule('/audio-worklet.js').then(() => {
       audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
-      audioWorkletNode.connect(audioCtx.destination);
+      // GainNode sits between the worklet and the speakers. Setting gain to 0
+      // is instantaneous at the AudioContext render level — faster than any
+      // WebSocket message or ring-buffer flush — and stops audio from reaching
+      // the Mac Multi-Output Device (and thus VB-Cable → FT-991A USB audio)
+      // the moment PTT fires.
+      gainNode = audioCtx.createGain();
+      gainNode.gain.value = _audioPttActive ? 0 : 1;
+      audioWorkletNode.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
     });
   }
   return audioWorkletReady;
