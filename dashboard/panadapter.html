@@ -361,7 +361,7 @@ let wholeBandApplied = false;
 const DIGITAL_VIEW_SPAN_HZ = 3000;
 
 function handleDigitalViewMode() {
-  if (!rigIsDigital) return;
+  if (!rigIsDigital && rigMode !== 'PKTUSB') return;
   setViewSpan(DIGITAL_VIEW_SPAN_HZ);
   // Frozen during TX (no center update) so it doesn't chase WSJT-X's
   // small dial wobble around each transmission.
@@ -685,7 +685,7 @@ function followRigFrequency() {
   // span, dial pinned to the left edge) — the generic centered-recenter
   // below would immediately fight it, since "pinned at the left edge" is,
   // by definition, far enough from center to cross this threshold.
-  if (rigIsDigital) return;
+  if (rigIsDigital || rigMode === 'PKTUSB') return;
 
   if (viewCenterHz !== null) {
     const halfSpan = viewSpanHz / 2;
