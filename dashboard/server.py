@@ -238,10 +238,18 @@ async def _fast_ptt_monitor():
 
             writer.write(b't\n')
             await writer.drain()
-            val_line  = await asyncio.wait_for(reader.readline(), timeout=0.5)
-            _rprt     = await asyncio.wait_for(reader.readline(), timeout=0.5)  # consume RPRT
+            val_line = await asyncio.wait_for(reader.readline(), timeout=0.5)
+            decoded  = val_line.decode(errors='replace').strip()
+            # Simple rigctld protocol returns just the value ("0" or "1") with
+            # no RPRT terminator.  Reading a second line would block 0.5s on
+            # every poll cycle, timing out and crashing the monitor back to its
+            # 1.0s error-retry loop — making it effectively dead.
+            if not decoded or decoded.startswith('RPRT'):
+                last_ptt = last_ptt   # no valid reading; skip this cycle
+                await asyncio.sleep(_FAST_PTT_POLL_MS / 1000)
+                continue
 
-            ptt = val_line.decode(errors='replace').strip() == '1'
+            ptt = decoded == '1'
 
             if ptt and not last_ptt:
                 # Rising edge ��� gate immediately
@@ -257,7 +265,7 @@ async def _fast_ptt_monitor():
                 # backlog), which calls txSilenceStart() → closes audioWs →
                 # dropping the pending audio frames before they can play.
                 await manager.broadcast({"type": "tx_mute"})
-                logger.debug("Fast PTT: TX gate opened, tx_mute sent")
+                logger.info("Fast PTT: TX gate opened, tx_mute sent")
             elif not ptt and last_ptt:
                 # Falling edge — brief hold for relay settle + pipeline drain
                 await asyncio.sleep(_POST_TX_HOLD_S)
