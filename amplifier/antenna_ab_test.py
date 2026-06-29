@@ -99,6 +99,7 @@ class AntennaAbTest:
         self.status = "idle"   # idle | running | done | error | stopped
         self.error_message = ""
         self.results: list[StepResult] = []
+        self.summary: Optional[list[dict]] = None
         self.csv_path: Optional[Path] = None
         self.current_round = 0
         self.total_rounds = 0
@@ -128,6 +129,7 @@ class AntennaAbTest:
             "current_antenna": self.current_antenna,
             "current_active_channels": self.current_active_channels,
             "results": [r.to_dict() for r in self.results],
+            "summary": self.summary,
             "csv_path": str(self.csv_path) if self.csv_path else None,
         }
 
@@ -164,6 +166,7 @@ class AntennaAbTest:
         self.status = "running"
         self.error_message = ""
         self.results = []
+        self.summary = None
         self.current_round = 0
         self.total_rounds = rounds
         self.current_antenna = None
@@ -200,6 +203,8 @@ class AntennaAbTest:
                         logger.warning(f"AB test aborted: {msg}")
                         return
             self.status = "stopped" if self._stop_requested else "done"
+            self.summary = self._compute_summary(antennas)
+            self._write_summary_csv()
         except Exception as e:
             logger.exception("AB test crashed")
             self.status = "error"
@@ -304,6 +309,74 @@ class AntennaAbTest:
             if p - m >= ACTIVE_CHANNEL_THRESHOLD_DB:
                 active.append((float(f), float(p), float(m), len(history)))
         return active, overall_floor_db, None
+
+    def _compute_summary(self, antennas: list[int]) -> list[dict]:
+        """
+        Matches channels round-by-round: within a single round, the same
+        channel grid is used for every antenna, so a channel that showed up
+        as active on two antennas in the *same* round is a genuine
+        apples-to-apples comparison (whatever station was live on that
+        channel during that ~10-30s window, heard by both antennas in
+        immediate succession). Averaging that delta across every round —
+        rather than trusting any single round — is what answers "which
+        antenna is actually better" instead of "which antenna got lucky
+        this round".
+        """
+        by_round: dict[int, dict[int, dict[float, StepResult]]] = {}
+        for r in self.results:
+            if r.freq_hz == 0.0:
+                continue   # placeholder row for "no active channel this antenna/round"
+            by_round.setdefault(r.round, {}).setdefault(r.antenna, {})[r.freq_hz] = r
+
+        ref = antennas[0]
+        summaries = []
+        for other in antennas[1:]:
+            sig_diffs, floor_diffs, snr_diffs = [], [], []
+            for by_ant in by_round.values():
+                ref_map = by_ant.get(ref, {})
+                other_map = by_ant.get(other, {})
+                for f in set(ref_map) & set(other_map):
+                    a, b = ref_map[f], other_map[f]
+                    sig_diffs.append(a.signal_db_p90 - b.signal_db_p90)
+                    floor_diffs.append(a.floor_db - b.floor_db)
+                    snr_diffs.append(a.snr_db - b.snr_db)
+
+            if not sig_diffs:
+                summaries.append({
+                    "ref_antenna": ref, "compare_antenna": other, "n_matched": 0,
+                    "note": "No channel was active on both antennas in the same round — "
+                            "inconclusive, try more rounds or a longer profile duration",
+                })
+                continue
+            summaries.append({
+                "ref_antenna": ref, "compare_antenna": other,
+                "n_matched": len(sig_diffs),
+                "mean_signal_diff_db": round(float(np.mean(sig_diffs)), 2),
+                "signal_diff_stdev_db": round(float(np.std(sig_diffs)), 2),
+                "mean_floor_diff_db": round(float(np.mean(floor_diffs)), 2),
+                "mean_snr_diff_db": round(float(np.mean(snr_diffs)), 2),
+            })
+        return summaries
+
+    def _write_summary_csv(self):
+        if self.csv_path is None or not self.summary:
+            return
+        summary_path = self.csv_path.with_name(self.csv_path.stem + "_summary.csv")
+        try:
+            with open(summary_path, "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["ref_antenna", "compare_antenna", "n_matched",
+                            "mean_signal_diff_db", "signal_diff_stdev_db",
+                            "mean_floor_diff_db", "mean_snr_diff_db", "note"])
+                for s in self.summary:
+                    w.writerow([
+                        s.get("ref_antenna"), s.get("compare_antenna"), s.get("n_matched"),
+                        s.get("mean_signal_diff_db", ""), s.get("signal_diff_stdev_db", ""),
+                        s.get("mean_floor_diff_db", ""), s.get("mean_snr_diff_db", ""),
+                        s.get("note", ""),
+                    ])
+        except OSError as e:
+            logger.error(f"Failed to write AB test summary CSV: {e}")
 
     def _append_csv(self, r: StepResult):
         if self.csv_path is None:

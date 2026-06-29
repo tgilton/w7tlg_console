@@ -1245,9 +1245,9 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
       <div class="control-row" style="gap:6px; margin-top:4px">
         <span class="control-label" style="width:auto">Rounds</span>
-        <input type="number" id="abt-rounds" value="5" min="1" max="100" style="width:50px">
+        <input type="number" id="abt-rounds" value="10" min="1" max="100" style="width:50px">
         <span class="control-label" style="width:auto">Profile s</span>
-        <input type="number" id="abt-dwell" value="30" min="5" max="120" step="5" style="width:50px">
+        <input type="number" id="abt-dwell" value="12" min="5" max="120" step="1" style="width:50px">
       </div>
       <div class="control-row" style="gap:6px; margin-top:4px">
         <span class="control-label" style="width:auto">Scan MHz</span>
@@ -1256,15 +1256,18 @@ input[type=range]::-webkit-slider-thumb:active {
         <input type="number" id="abt-scan-stop" value="14.3250" step="0.0001" style="width:75px">
       </div>
       <div class="muted mono" style="font-size:0.62rem; margin-top:2px">
-        Sweeps every channel in range repeatedly for the profile duration per antenna —
-        a numeric long-exposure waterfall. Any channel that rises ≥6dB above its own
-        time-median counts as a real signal; longer duration catches more (≥30s for FT8).
+        Each round profiles one antenna for the profile duration, then the next — so a
+        12s duration means ~12s per antenna before switching, repeated for N rounds.
+        A channel that rises ≥6dB above its own time-median counts as a real signal.
+        After the run, channels active on both antennas in the same round are matched
+        and averaged into a final comparison below.
       </div>
       <div class="control-row" style="gap:6px; margin-top:6px">
         <button class="btn active-green" style="flex:1" onclick="startAbTest()">▶ Start</button>
         <button class="btn danger" style="flex:1" onclick="stopAbTest()">■ Stop</button>
       </div>
       <div class="mono" style="font-size:0.7rem; margin-top:6px" id="abt-status">idle</div>
+      <div id="abt-summary" class="mono" style="font-size:0.68rem; margin-top:6px"></div>
       <div id="abt-results" style="margin-top:6px; max-height:160px; overflow-y:auto; font-size:0.68rem"></div>
     </div>
 
@@ -1413,6 +1416,23 @@ function updateAbTestUI(d) {
   if (d.status === 'error') line += ` — ${d.error}`;
   if (d.csv_path) line += ` (${d.csv_path.split('/').pop()})`;
   statusEl.textContent = line;
+
+  const summaryEl = document.getElementById('abt-summary');
+  if (d.summary && d.summary.length) {
+    summaryEl.innerHTML = d.summary.map(s => {
+      if (!s.n_matched) {
+        return `<div style="color:#ffc107">A${s.ref_antenna} vs A${s.compare_antenna}: ${s.note}</div>`;
+      }
+      const sign = s.mean_signal_diff_db >= 0 ? 'stronger' : 'weaker';
+      return `<div style="color:#00e5ff">A${s.ref_antenna} vs A${s.compare_antenna} ` +
+        `(${s.n_matched} matched channels): A${s.ref_antenna} signal ` +
+        `${Math.abs(s.mean_signal_diff_db).toFixed(1)} dB ${sign} (±${s.signal_diff_stdev_db.toFixed(1)}), ` +
+        `floor ${s.mean_floor_diff_db >= 0 ? '+' : ''}${s.mean_floor_diff_db.toFixed(1)} dB, ` +
+        `SNR diff ${s.mean_snr_diff_db >= 0 ? '+' : ''}${s.mean_snr_diff_db.toFixed(1)} dB</div>`;
+    }).join('');
+  } else {
+    summaryEl.innerHTML = '';
+  }
 
   const resultsEl = document.getElementById('abt-results');
   if (!d.results || !d.results.length) { resultsEl.innerHTML = ''; return; }
