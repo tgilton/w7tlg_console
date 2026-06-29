@@ -38,6 +38,15 @@ In digital modes (DATA-U), the view locks to a 3kHz window pinned to the dial fr
 ### /monitor - Trending and Health
 Six rolling 10-minute strip charts (Forward Power, Reflected Power, SWR, PA Temperature, Drive Power, Drain Current), TX duty cycle gauge, TX cycle counter, and ACOM fault/warning display. Designed to run in a second browser window during long operating sessions, especially FT8.
 
+While `/monitor` is open it also persists every trend sample to CSV under `data/trend_logs/` (heartbeat-gated — logging starts/stops with the page being open, not tied to a specific WebSocket connection, since `/monitor` shares `/ws` with the dashboard). See `amplifier/trend_csv_logger.py`.
+
+### Antenna A/B Test (dashboard panel)
+A receive-only tool for comparing antennas rigorously instead of by ear. Manually switching antennas and eyeballing a single frequency doesn't hold up on a busy band — any one signal can go quiet between rounds, and there's no way to be sure a "noise" reference frequency isn't actually someone else's QSO. Voice/CW/FT8 also have no flat signal level to begin with (they all spend part of their time "off"), so a single instantaneous reading is unreliable regardless.
+
+Instead, for each antenna in turn, the test repeatedly sweeps every channel across a configurable frequency range against the SDR's already-computed spectrum, building a time history per channel — numerically the same information a long-exposure waterfall shows visually. Any channel whose 90th-percentile level rises ≥6dB above its own time-median counts as a real signal (catches the "on" portion of an intermittent transmission rather than averaging it away). This repeats for several rounds, switching antennas each time; afterward, channels that were active on **both** antennas in the **same round** are matched and averaged into a final signal/floor/SNR comparison — an actual apples-to-apples answer instead of a guess.
+
+Antenna switching goes through `AcomBridge.goto_antenna()`, which cycles forward (the only direction the amp supports) with telemetry-confirmed retries, and aborts the whole test cleanly on TX start, an amp fault, or a dropped serial connection. Results stream live to the dashboard panel and log incrementally to `data/ab_tests/` (one CSV per run, plus a `_summary.csv`) so a stopped or crashed run doesn't lose completed rounds. See `amplifier/antenna_ab_test.py`.
+
 All three views connect to the same backend via WebSocket and can run simultaneously in separate browser tabs or windows.
 
 ## Setup
@@ -146,6 +155,8 @@ These applications share the FT-991A via rigctld and communicate with each other
     |   +-- acom_bridge.py       Ties rig + amp, safety interlocks, trending
     |   +-- acom_protocol.py     ACOM binary protocol: frames, commands, telemetry
     |   +-- acom_serial.py       Async serial port manager for ACOM 1200S
+    |   +-- antenna_ab_test.py   Band-profiling antenna A/B test (see "Antenna A/B Test" above)
+    |   +-- trend_csv_logger.py  Persists trend samples to CSV while /monitor is open
     +-- dashboard/
     |   +-- server.py            FastAPI app, WebSocket handlers, routes
     |   +-- index.html           Operating console UI
@@ -160,6 +171,7 @@ These applications share the FT-991A via rigctld and communicate with each other
     +-- bridge/
     +-- config/
     +-- tests/
+    +-- data/                    Generated CSV output (ab_tests/, trend_logs/) — gitignored
     +-- README.md
     +-- ARCHITECTURE.md
 
