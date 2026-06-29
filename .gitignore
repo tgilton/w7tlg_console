@@ -12,3 +12,6 @@ RPRT*
 RPRT*
 /tmp/
 *.patch
+
+# Antenna A/B test CSVs and trend logs — generated output, not source
+/data/

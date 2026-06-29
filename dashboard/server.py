@@ -16,6 +16,7 @@ Endpoints:
 import asyncio
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,8 @@ from pydantic import BaseModel
 
 from amplifier.acom_bridge import AcomBridge, OperatingMode, StationState
 from amplifier.acom_serial import AcomSerial, find_acom_port
+from amplifier.antenna_ab_test import AntennaAbTest
+from amplifier.trend_csv_logger import TrendCsvLogger
 from rig.rigctld_client import RigctldClient, RigState
 from sdr.sdr_client import SdrClient
 
@@ -151,6 +154,28 @@ spectrum_manager = SpectrumConnectionManager()
 audio_manager = AudioConnectionManager()
 bridge: Optional[AcomBridge] = None
 sdr: Optional[SdrClient] = None
+ab_test: Optional[AntennaAbTest] = None
+trend_csv = TrendCsvLogger()
+
+# Monitor-page liveness, used to gate trend CSV logging. Heartbeat-based
+# (not tied to a specific WebSocket) because /monitor shares /ws with the
+# dashboard — see trend_csv_logger.py docstring.
+_MONITOR_HEARTBEAT_TIMEOUT_S = 10.0
+_last_monitor_heartbeat: float = 0.0
+
+
+async def _monitor_liveness_watcher():
+    while True:
+        await asyncio.sleep(2.0)
+        alive = (time.time() - _last_monitor_heartbeat) < _MONITOR_HEARTBEAT_TIMEOUT_S
+        if alive and not trend_csv.active:
+            trend_csv.start()
+        elif not alive and trend_csv.active:
+            trend_csv.stop()
+
+
+async def on_ab_test_status(status: dict):
+    await manager.broadcast({"type": "ab_test_status", "data": status})
 
 
 def build_state_payload(state: StationState) -> dict:
@@ -334,7 +359,7 @@ async def on_rig_state_for_audio_mode(rig_state: RigState):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bridge, sdr
+    global bridge, sdr, ab_test
     logger.info("Starting W7TLG Console...")
 
     # Tighter than the original 0.5s — the panadapter's rig-frequency marker
@@ -350,6 +375,7 @@ async def lifespan(app: FastAPI):
     amp = AcomSerial(port=acom_port, baud=ACOM_BAUD)
     bridge = AcomBridge(rig=rig, amp=amp)
     bridge.on_state_change(on_station_state)
+    bridge.on_trend_sample(trend_csv.log)
     await bridge.start()
 
     # Wait briefly for rigctld to report the radio's actual current
@@ -371,12 +397,17 @@ async def lifespan(app: FastAPI):
         logger.warning("SDR unavailable — panadapter features disabled.")
     rig.on_state_change(on_rig_state_for_audio_mode)
     asyncio.create_task(_fast_ptt_monitor())
+    asyncio.create_task(_monitor_liveness_watcher())
+
+    ab_test = AntennaAbTest(bridge=bridge, sdr=sdr)
+    ab_test.on_status(on_ab_test_status)
 
     logger.info("W7TLG Console running")
 
     yield
 
     logger.info("Shutting down...")
+    trend_csv.stop()
     await sdr.stop()
     await bridge.stop()
 
@@ -657,6 +688,36 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "monitor_heartbeat":
+            global _last_monitor_heartbeat
+            _last_monitor_heartbeat = time.time()
+
+        elif cmd == "ab_test_start":
+            ok, reply = False, "AB test not initialized"
+            if ab_test is not None:
+                ok, reply = await ab_test.start(
+                    antennas=[int(a) for a in msg["antennas"]],
+                    rounds=int(msg.get("rounds", 5)),
+                    scan_start_hz=float(msg["scan_start_hz"]),
+                    scan_stop_hz=float(msg["scan_stop_hz"]),
+                    bandwidth_hz=float(msg.get("bandwidth_hz", 2400.0)),
+                    profile_duration_s=float(msg.get("profile_duration_s", 30.0)),
+                )
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "ab_test_stop":
+            ok, reply = False, "AB test not initialized"
+            if ab_test is not None:
+                ok, reply = await ab_test.stop()
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "ab_test_status":
+            if ab_test is not None:
+                await ws.send_text(json.dumps({
+                    "type": "ab_test_status", "data": ab_test.get_status()}))
 
         else:
             await ws.send_text(json.dumps({

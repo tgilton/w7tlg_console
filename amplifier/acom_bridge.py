@@ -256,6 +256,7 @@ class AcomBridge:
         self._amp_opr_frames: int = 0
         self._amp_stdby_frames: int = 0
         self._state_callbacks: list[StationStateCallback] = []
+        self._trend_sample_callbacks: list[Callable[[TrendSample], None]] = []
 
         self.rig.on_state_change(self._on_rig_state)
         self.amp.on_telemetry(self._on_telemetry)
@@ -266,6 +267,13 @@ class AcomBridge:
 
     def on_state_change(self, cb: StationStateCallback):
         self._state_callbacks.append(cb)
+
+    def on_trend_sample(self, cb: Callable[[TrendSample], None]):
+        """Register a sync callback fired with each new TrendSample, e.g.
+        for incremental CSV logging — kept separate from on_state_change
+        since that fires once per telemetry frame regardless of whether
+        anything trend-worthy changed, and callers here want the raw sample."""
+        self._trend_sample_callbacks.append(cb)
 
     async def start(self):
         await self.rig.start()
@@ -317,6 +325,56 @@ class AcomBridge:
         await self.amp.send(cmd_next_antenna())
         logger.info("Sent NEXT ANTENNA (front-panel ANT button equivalent)")
         return True, "Antenna cycle requested"
+
+    async def goto_antenna(self, target: int,
+                            confirm_timeout_s: float = 5.0,
+                            max_attempts_per_hop: int = 3) -> tuple[bool, str]:
+        """
+        Cycle forward (the only direction the amp supports) until telemetry
+        confirms the antenna landed on `target`. Used by automated callers
+        (e.g. the antenna A/B test) that need a specific antenna rather than
+        just "next" — re-sends NEXT_ANTENNA if the 0x27 confirmation doesn't
+        arrive in time (e.g. a missed/garbled telemetry frame), and bails
+        out cleanly on TX, amp faults, or a dropped serial link rather than
+        racing blindly past the target.
+        """
+        if target not in ANTENNAS:
+            return False, f"Invalid antenna number: {target}"
+
+        for _hop in range(4):  # at most 4 hops to reach any antenna from any start
+            if self._selected_antenna == target:
+                return True, f"At antenna {ANTENNAS[target].port}"
+
+            if self.rig.state.ptt or self._tx_was_active:
+                return False, "Cannot switch antenna while TX is active"
+            if not self.station.amp_connected:
+                return False, "Amp serial connection lost — antenna switch aborted"
+            if self.station.fault_severity not in ("OK", ""):
+                return False, (f"Amp fault active ({self.station.fault_severity}) — "
+                                f"antenna switch aborted")
+
+            before = self._selected_antenna
+            confirmed = False
+            for attempt in range(max_attempts_per_hop):
+                await self.amp.send(cmd_next_antenna())
+                deadline = time.monotonic() + confirm_timeout_s
+                while time.monotonic() < deadline:
+                    if self._selected_antenna != before:
+                        confirmed = True
+                        break
+                    if not self.station.amp_connected:
+                        return False, "Amp serial connection lost — antenna switch aborted"
+                    await asyncio.sleep(0.1)
+                if confirmed:
+                    break
+                logger.warning(
+                    f"goto_antenna: no telemetry confirmation on attempt "
+                    f"{attempt + 1}/{max_attempts_per_hop}, retrying NEXT_ANTENNA")
+            if not confirmed:
+                return False, ("Amp did not confirm antenna change after "
+                                f"{max_attempts_per_hop} attempts — check ACOM connection")
+
+        return False, f"Failed to reach antenna {target} after 4 hops"
 
     async def run_atac(self) -> tuple[bool, str]:
         """
@@ -532,6 +590,11 @@ class AcomBridge:
         )
         self._trend_buffer.append(sample)
         self._duty_samples.append((now, is_tx))
+        for cb in self._trend_sample_callbacks:
+            try:
+                cb(sample)
+            except Exception as e:
+                logger.error(f"Trend sample callback error: {e}")
         # TX cycle counting
         if is_tx and not self._tx_was_trending:
             self._tx_cycle_count += 1

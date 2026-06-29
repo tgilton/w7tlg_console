@@ -1233,6 +1233,41 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
+    <div class="divider"></div>
+
+    <!-- Antenna A/B Test -->
+    <div>
+      <div class="section-label">Antenna A/B Test</div>
+      <div class="control-row" style="gap:6px; flex-wrap:wrap">
+        <label class="mono" style="font-size:0.7rem"><input type="checkbox" id="abt-ant-1" checked> A1F</label>
+        <label class="mono" style="font-size:0.7rem"><input type="checkbox" id="abt-ant-3" checked> A3R</label>
+        <label class="mono" style="font-size:0.7rem"><input type="checkbox" id="abt-ant-4"> A4R</label>
+      </div>
+      <div class="control-row" style="gap:6px; margin-top:4px">
+        <span class="control-label" style="width:auto">Rounds</span>
+        <input type="number" id="abt-rounds" value="5" min="1" max="100" style="width:50px">
+        <span class="control-label" style="width:auto">Profile s</span>
+        <input type="number" id="abt-dwell" value="30" min="5" max="120" step="5" style="width:50px">
+      </div>
+      <div class="control-row" style="gap:6px; margin-top:4px">
+        <span class="control-label" style="width:auto">Scan MHz</span>
+        <input type="number" id="abt-scan-start" value="14.2000" step="0.0001" style="width:75px">
+        <span class="control-label" style="width:auto">to</span>
+        <input type="number" id="abt-scan-stop" value="14.3250" step="0.0001" style="width:75px">
+      </div>
+      <div class="muted mono" style="font-size:0.62rem; margin-top:2px">
+        Sweeps every channel in range repeatedly for the profile duration per antenna —
+        a numeric long-exposure waterfall. Any channel that rises ≥6dB above its own
+        time-median counts as a real signal; longer duration catches more (≥30s for FT8).
+      </div>
+      <div class="control-row" style="gap:6px; margin-top:6px">
+        <button class="btn active-green" style="flex:1" onclick="startAbTest()">▶ Start</button>
+        <button class="btn danger" style="flex:1" onclick="stopAbTest()">■ Stop</button>
+      </div>
+      <div class="mono" style="font-size:0.7rem; margin-top:6px" id="abt-status">idle</div>
+      <div id="abt-results" style="margin-top:6px; max-height:160px; overflow-y:auto; font-size:0.68rem"></div>
+    </div>
+
   </section>
 
   <!-- ── Safety panel  <!-- ── Safety panel ────────────────────────────────────── -->
@@ -1349,7 +1384,47 @@ function connectWs() {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'state') { state = msg.data; updateUI(state); }
     else if (msg.type === 'cmd_response' && !msg.ok) showToast('Error: ' + msg.message, 'error');
+    else if (msg.type === 'ab_test_status') updateAbTestUI(msg.data);
   };
+}
+
+function startAbTest() {
+  const antennas = [1, 3, 4].filter(n => document.getElementById(`abt-ant-${n}`).checked);
+  if (antennas.length < 2) { showToast('Select at least two antennas', 'error'); return; }
+  send({
+    cmd: 'ab_test_start',
+    antennas,
+    rounds: parseInt(document.getElementById('abt-rounds').value, 10),
+    profile_duration_s: parseFloat(document.getElementById('abt-dwell').value),
+    scan_start_hz: parseFloat(document.getElementById('abt-scan-start').value) * 1e6,
+    scan_stop_hz: parseFloat(document.getElementById('abt-scan-stop').value) * 1e6,
+  });
+}
+
+function stopAbTest() { send({ cmd: 'ab_test_stop' }); }
+
+function updateAbTestUI(d) {
+  const statusEl = document.getElementById('abt-status');
+  let line = `${d.status}`;
+  if (d.status === 'running') {
+    line += ` — round ${d.current_round}/${d.total_rounds}, antenna A${d.current_antenna}`;
+    line += ` (${d.current_active_channels} active channels so far)`;
+  }
+  if (d.status === 'error') line += ` — ${d.error}`;
+  if (d.csv_path) line += ` (${d.csv_path.split('/').pop()})`;
+  statusEl.textContent = line;
+
+  const resultsEl = document.getElementById('abt-results');
+  if (!d.results || !d.results.length) { resultsEl.innerHTML = ''; return; }
+  let rows = d.results.map(r =>
+    `<tr><td>${r.round}</td><td>A${r.antenna}</td>` +
+    `<td>${r.freq_hz ? (r.freq_hz / 1e6).toFixed(4) : '—'}</td>` +
+    `<td>${r.signal_db_p90.toFixed(1)}</td>` +
+    `<td>${r.floor_db.toFixed(1)}</td><td>${r.snr_db.toFixed(1)}</td></tr>`
+  ).join('');
+  resultsEl.innerHTML =
+    `<table style="width:100%; border-collapse:collapse"><tr style="color:#888">` +
+    `<th>Rnd</th><th>Ant</th><th>MHz</th><th>Sig p90</th><th>Floor</th><th>SNR</th></tr>${rows}</table>`;
 }
 
 function send(obj) {

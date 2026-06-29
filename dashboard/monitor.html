@@ -336,6 +336,10 @@ function connect() {
     document.getElementById('ws-status').textContent = 'Connected';
     // Request historical trend data
     ws.send(JSON.stringify({ cmd: 'get_trend', since: 0 }));
+    // Tells the server this Monitor view is open, so it persists trend
+    // samples to CSV for as long as heartbeats keep arriving — see
+    // amplifier/trend_csv_logger.py.
+    ws.send(JSON.stringify({ cmd: 'monitor_heartbeat' }));
   };
 
   ws.onclose = () => {
@@ -465,6 +469,14 @@ function renderLoop() {
 
 connect();
 requestAnimationFrame(renderLoop);
+
+// Keeps the server-side trend CSV logger alive (10s timeout server-side)
+// for as long as this page stays open.
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ cmd: 'monitor_heartbeat' }));
+  }
+}, 4000);
 </script>
 </body>
 </html>
