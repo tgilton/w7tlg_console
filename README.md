@@ -23,22 +23,44 @@ An SDR Switch keeps the antenna on the RSPdx-R2 for RX, handing it to the TX cha
 - Custom ACOM 1200S serial protocol (binary telemetry and command framing)
 - SDRplay API (RSPdx-R2 IQ capture), numpy/scipy (demodulation, EQ, AGC)
 - DeepFilterNet3 (real-time noise reduction), `sounddevice`/BlackHole (digital-mode virtual audio cable)
+- WSJT-X's own UDP multicast protocol (own QDataStream binary parser, `wsjtx/protocol.py`) — live rig/decode/QSO-logged events, no config changes to WSJT-X
+- `sqlite3` (stdlib) — reads RUMLogNG's own logbook database directly, read-only
+- `httpx` — PSKReporter, NOAA space weather, POTA, HamQTH/QRZ XML APIs
+- `anthropic` — AI band advisor (Claude), streaming chat with optional auto-QSY tool-calling
+- Raw asyncio telnet sockets — Reverse Beacon Network (CW) and a DXSpider cluster node (SSB + everything else), for live spotting outside digital modes
 - Vanilla HTML/JS/CSS browser frontend (no build step)
 
 ## Views
 
-### /dashboard - Operating Console
+### /console - Unified Operating Console (primary way to operate)
+A single browser window: the panadapter in a persistent, resizable left pane (drag the handle to resize), and a tabbed right pane — Dashboard, Monitor, Propagation, Spot/Seek, AI Advisor. Built from iframes pointing at the standalone pages below rather than one merged page — each tab keeps running (WebSocket connections, trend logging, etc.) even while a different tab is visually active, since the iframe is hidden, not unmounted. See `dashboard/console.html`'s own docstring and [ARCHITECTURE.md](ARCHITECTURE.md) for why.
+
+All of `/`, `/panadapter`, `/monitor`, `/propagation`, `/spotseek`, `/advisor` also still work standalone in their own browser tab/window if you'd rather not use the unified shell — `/console` is additive, nothing was removed.
+
+#### Dashboard tab (/)
 Primary operating interface with VFO display, band/mode selection, S-meter, TX meters, RF power slider, preamp selector, DSP controls (NB, DNR/NR, DNF, AGC, 3-band EQ), SSB audio controls (Mic Gain, Compression) which swap for a DT GAIN control in digital modes, ACOM telemetry panels, AMP ON/OFF with safety interlock, and antenna selection.
 
-### /panadapter - SDR Spectrum/Waterfall
+#### Panadapter (left pane, or /panadapter standalone)
 Real-time spectrum and waterfall display from the RSPdx-R2, click-to-tune, and RX audio playback in-browser. This is the actual receive path for both voice and digital modes — see "Receive Audio Architecture" below.
 
-In digital modes (DATA-U), the view locks to a 3kHz window pinned to the dial frequency at the left edge — not centered, and not user-adjustable while in this mode — fed by a separate, much finer-resolution FFT (~3.9Hz/bin vs ~30Hz/bin on the normal wideband view) so individual FT8 signals are actually resolved instead of blurring into a handful of bins. Outside digital modes the view is unaffected: scroll-to-zoom/drag-to-pan, no auto-centering.
+In digital modes (DATA-U), the view locks to a 3kHz window pinned to the dial frequency at the left edge once the fine-resolution spectrum data is actually flowing (which requires audio to have been enabled at least once — the panadapter defaults to **Audio: Live** on page load for exactly this reason, accepting a possible unmuted-startup sound as the tradeoff; see `panadapter.html`'s `enableAudio()` comment) — not centered, and not user-adjustable while in this mode — fed by a separate, much finer-resolution FFT (~3.9Hz/bin vs ~30Hz/bin on the normal wideband view) so individual FT8 signals are actually resolved instead of blurring into a handful of bins. Outside digital modes the view is unaffected: scroll-to-zoom/drag-to-pan, no auto-centering. Click-to-tune is disabled while in digital mode — the narrow view means any click would otherwise nudge the actual rig VFO by a few hundred Hz, which is disruptive to FT8/digital timing.
 
-### /monitor - Trending and Health
-Six rolling 10-minute strip charts (Forward Power, Reflected Power, SWR, PA Temperature, Drive Power, Drain Current), TX duty cycle gauge, TX cycle counter, and ACOM fault/warning display. Designed to run in a second browser window during long operating sessions, especially FT8.
+#### Monitor tab (/monitor)
+Six rolling 10-minute strip charts (Forward Power, Reflected Power, SWR, PA Temperature, Drive Power, Drain Current), TX duty cycle gauge, TX cycle counter, and ACOM fault/warning display.
 
-While `/monitor` is open it also persists every trend sample to CSV under `data/trend_logs/` (heartbeat-gated — logging starts/stops with the page being open, not tied to a specific WebSocket connection, since `/monitor` shares `/ws` with the dashboard). See `amplifier/trend_csv_logger.py`.
+Trend-CSV logging (`data/trend_logs/`) runs for as long as the `/console` shell (or a standalone `/monitor` tab) is open, gated by a heartbeat the page sends every 4s — see `amplifier/trend_csv_logger.py`.
+
+#### Propagation tab (/propagation)
+Live FT8 band activity (spot counts, avg SNR, DXCC entities heard per band) from PSKReporter, current solar indices (SFI/Kp) from NOAA, a feed of automatic band-opening/closing/Kp-spike alerts with a one-line Claude-generated explanation for each, and the **QTH toggle** (La Quinta CA / Boise ID) — switching it re-targets the PSKReporter queries at the new grid square automatically. See "QTH Profile" and "AI Advisor" below.
+
+#### Spot/Seek tab (/spotseek)
+- **Manual callsign lookup** (HamQTH, with QRZ as a fallback if configured) — for SSB/CW, where there's no automated decode feed the way WSJT-X provides for digital; type a callsign you just heard and get name/grid/state/country plus whether it's on your watch list or already worked.
+- **Watch list** — callsigns you always want to know about the moment they're heard, across *all* spotting sources (WSJT-X decodes, RBN, DX cluster).
+- **Live alerts feed** — watch-list matches, a grid-boundary heuristic for "possible Idaho station" (US callsign prefixes don't map to states, so this checks decoded/spotted grid squares against Idaho's approximate bounding box — real border is irregular, so treat it as "worth a look," not certain), and live POTA activations.
+- **Award tracking** — Worked All States by band, and DXCC entities worked, both sourced from RUMLogNG's own database (see "RUMLogNG Integration" below).
+
+#### AI Advisor tab (/advisor)
+A streaming chat interface (Claude) with live rig state and propagation data as automatic context — ask a question or click "Recommend Now" for an immediate band/strategy assessment. **Auto-QSY** is an explicit, session-level, off-by-default toggle (visibly red/pulsing when on) — when enabled, Claude may actually retune the radio via tool-calling rather than just describing what to do. This is the one place in the console where an LLM can command the radio directly.
 
 ### Antenna A/B Test (dashboard panel)
 A receive-only tool for comparing antennas rigorously instead of by ear. Manually switching antennas and eyeballing a single frequency doesn't hold up on a busy band — any one signal can go quiet between rounds, and there's no way to be sure a "noise" reference frequency isn't actually someone else's QSO. Voice/CW/FT8 also have no flat signal level to begin with (they all spend part of their time "off"), so a single instantaneous reading is unreliable regardless.
@@ -47,7 +69,44 @@ Instead, for each antenna in turn, the test repeatedly sweeps every channel acro
 
 Antenna switching goes through `AcomBridge.goto_antenna()`, which cycles forward (the only direction the amp supports) with telemetry-confirmed retries, and aborts the whole test cleanly on TX start, an amp fault, or a dropped serial connection. Results stream live to the dashboard panel and log incrementally to `data/ab_tests/` (one CSV per run, plus a `_summary.csv`) so a stopped or crashed run doesn't lose completed rounds. See `amplifier/antenna_ab_test.py`.
 
-All three views connect to the same backend via WebSocket and can run simultaneously in separate browser tabs or windows.
+All views connect to the same FastAPI backend via WebSocket and can run simultaneously, whether inside the `/console` shell's tabs or as separate standalone browser tabs/windows.
+
+## QTH Profile
+
+Two saved station profiles — La Quinta, CA (winter) and Boise, ID (rest of year) — switchable from a toggle on the Propagation tab. This is a manual toggle, not auto-detected: a wrong auto-detection (e.g. from IP geolocation) would silently corrupt data that matters for QSO confirmations and awards, which is worse than requiring one click. Switching QTH re-targets propagation queries (PSKReporter's `senderGrid`) and the AI advisor's location context at the new grid square automatically. See `config/station_profile.py`.
+
+**RUMLogNG's own QTH/grid setting is separate and external** — it does not sync from this toggle and must still be changed there by hand when your QTH changes.
+
+## WSJT-X Integration
+
+The console joins WSJT-X's own UDP multicast group (`224.0.0.1:2237` on `lo0`, per this station's `~/Library/Preferences/WSJT-X.ini`) as a passive third listener — the same group RUMLogNG and GridTracker2 already use. Zero WSJT-X configuration changes, zero effect on those other listeners; this only ever reads, never sends anything back to WSJT-X. See `wsjtx/protocol.py` (the binary QDataStream parser, built directly from WSJT-X's own `NetworkMessage.hpp` source) and `wsjtx/udp_listener.py`.
+
+This feed drives: live rig/DX-call status broadcast to the console (`Status` messages), the QSO performance telemetry logger (`LoggedAdif` messages, below), and the Spot/Seek watch-list/Idaho alerts (`Decode` messages, for FT8/digital — see "DX Cluster / RBN Integration" for how SSB/CW are covered instead).
+
+## QSO Performance Telemetry
+
+A continuous ~1Hz rolling buffer of station telemetry (forward/reflected power, SWR, PA temp, drive, HV, drain current, frequency, band, mode, antenna, S-meter) — separate from `/monitor`'s trend CSVs, and running independently of whether any particular browser tab is open. When WSJT-X logs a QSO, the buffer is sliced to that QSO's exact time window and summarized (min/avg/max per field) into one JSON record appended to `data/qso_performance_log.jsonl` — a diagnostic record of station/rig/band performance per contact, not a logbook (RUMLogNG remains the authoritative log). JSONL rather than CSV specifically so the field list can keep growing without needing to migrate old records.
+
+Convert to CSV for spreadsheet analysis with `python3 tools/qso_log_to_csv.py` — flattens the nested JSON into dotted column names and takes the union of every column seen across the file as the header, so older records just get blank cells for fields that didn't exist yet when they were logged. See `wsjtx/qso_logger.py`.
+
+## RUMLogNG Integration (award tracking)
+
+The Spot/Seek tab's Worked-All-States and DXCC-entities-worked views read directly from RUMLogNG's own SQLite database — not an export, the actual live logbook file, found in a normal Dropbox-synced folder (`~/Library/CloudStorage/Dropbox/.../TG Log 001.rlog`), opened strictly read-only since it's RUMLogNG's own actively-open database. Falls back to WSJT-X's local ADIF log if that path is ever unreachable (less complete data, but keeps the console working). See `wsjtx/award_tracker.py`'s module docstring for the full data-source story, including which RUMLogNG fields turned out not to mean what their names suggest (its `qsl`/`lotwqsl`/`eqsl` columns don't encode per-QSO confirmed status — worked-only tracking is used instead) and which table is deliberately never queried (`prefs`, which holds the operator's actual LoTW/eQSL account credentials).
+
+## DX Cluster / RBN Integration
+
+WSJT-X's Decode feed only covers digital modes. For SSB and CW, real-time spotting comes from two other networks, both plain read-only telnet connections (login with callsign, never post spots):
+
+- **Reverse Beacon Network** (`telnet.reversebeacon.net:7000`) — automated CW/RTTY skimmers.
+- **A DXSpider cluster node** (`dxspider.co.uk:7300`) — the traditional, decades-old human-operated DX cluster network; the only real source for SSB spots, since there's no automated way to "decode" a voice signal into a spot. Carries all modes humans choose to post, including digital ones already covered by WSJT-X — mode is inferred from the spot's frequency (phone sub-band ranges) since this network has no dedicated mode column.
+
+Both feed into the same Spot/Seek watch-list and Idaho-grid-heuristic alert logic as the WSJT-X path. See `wsjtx/dx_cluster.py`.
+
+## AI Advisor
+
+Ported from an earlier, simpler project (`ft991a-panel`) and adapted to this console's actual data shapes and QTH-aware grid. Packages current rig state and live propagation data (PSKReporter band activity, NOAA SFI/Kp) into context for Claude, which responds as an HF propagation/DX strategy advisor — streamed token-by-token over SSE. A background poll (every 3 minutes, matching PSKReporter's own requested minimum interval) also runs change-detection for band openings/closings and Kp spikes, generating a one-line Claude explanation for each and broadcasting it to every connected view.
+
+**Auto-QSY** is an explicit opt-in, off by default every page load, never persisted: only when enabled does Claude's `qsy_to_band` tool actually get offered, and only then can a response result in the radio's frequency/mode actually changing. See `advisor/claude_advisor.py`.
 
 ## Setup
 
@@ -70,11 +129,21 @@ All three views connect to the same backend via WebSocket and can run simultaneo
 ### Configuration
 The ACOM serial port is hardcoded in dashboard/server.py. Update ACOM_PORT to match your FTDI adapter device path. Do not rely on find_acom_port() if multiple FTDI devices are present.
 
+**Credentials (`.env`):** copy `.env.example` to `.env` and fill in real values — never commit `.env` itself (already gitignored). Loaded automatically on startup via `load_dotenv()` in `main.py`, no manual sourcing needed.
+
+    ANTHROPIC_API_KEY=       # required for the AI Advisor tab
+    HAMQTH_USERNAME=         # optional — manual callsign lookup (free account)
+    HAMQTH_PASSWORD=
+    QRZ_USERNAME=            # optional — supplements HamQTH; needs a paid Logbook Data
+    QRZ_PASSWORD=            # subscription for full field coverage, otherwise login fails
+
+The Spot/Seek and Propagation tabs still work without any of these except the manual lookup (needs at least one of HamQTH/QRZ) and the AI Advisor (needs the Anthropic key).
+
 ### Starting
 
     ~/start_w7tlg.sh
 
-Starts rigctld if it isn't already running, starts the console, and opens the dashboard and panadapter tabs in Chrome. Load http://localhost:8000/monitor manually if you want the trending view too.
+Starts rigctld if it isn't already running, starts the console, and opens the dashboard and panadapter tabs in Chrome. Load **http://localhost:8000/console** for the unified single-window shell (all 5 tabs), or the individual standalone routes (`/`, `/panadapter`, `/monitor`, `/propagation`, `/spotseek`, `/advisor`) if you'd rather run them separately.
 
 To start the pieces individually instead:
 
@@ -146,7 +215,7 @@ The console coexists with the standard FT8 software chain:
 - GridTracker2 (grid square tracking and POTA spotting)
 - RUMLogNG (QSO logging)
 
-These applications share the FT-991A via rigctld and communicate with each other via UDP.
+These applications share the FT-991A via rigctld and communicate with each other via UDP — and this console is now also part of that picture, as a passive fourth listener on WSJT-X's UDP feed (see "WSJT-X Integration" above) and a direct read-only reader of RUMLogNG's own database (see "RUMLogNG Integration" above). It never sends anything to WSJT-X or writes anything to RUMLogNG's log — GridTracker2's own POTA-spotting role stays fully intact and independent; the console's own POTA feed (Spot/Seek tab) is a separate, additional source, not a replacement.
 
 ## Project Structure
 
@@ -159,19 +228,41 @@ These applications share the FT-991A via rigctld and communicate with each other
     |   +-- trend_csv_logger.py  Persists trend samples to CSV while /monitor is open
     +-- dashboard/
     |   +-- server.py            FastAPI app, WebSocket handlers, routes
-    |   +-- index.html           Operating console UI
-    |   +-- monitor.html         Trending/health monitoring UI
-    |   +-- panadapter.html      SDR spectrum/waterfall + RX audio UI
+    |   +-- console.html         Unified single-window shell (panadapter pane + tabs)
+    |   +-- index.html           Operating console UI (Dashboard tab)
+    |   +-- monitor.html         Trending/health monitoring UI (Monitor tab)
+    |   +-- panadapter.html      SDR spectrum/waterfall + RX audio UI (left pane)
+    |   +-- propagation.html     Solar/band-activity/alerts + QTH toggle (Propagation tab)
+    |   +-- spotseek.html        Watch list, lookup, live alerts, WAS/DXCC (Spot/Seek tab)
+    |   +-- advisor.html         AI advisor chat + auto-QSY toggle (AI Advisor tab)
     +-- rig/
     |   +-- rigctld_client.py    Async Hamlib rigctld TCP client
     +-- sdr/
     |   +-- sdr_client.py            RSPdx-R2 IQ capture + FFT pipeline
     |   +-- audio_demod.py           SSB demod, EQ, DeepFilterNet NR, AGC, voice/digital profiles
     |   +-- virtual_audio_output.py  BlackHole bridge for digital-mode software
-    +-- bridge/
+    +-- wsjtx/
+    |   +-- protocol.py          WSJT-X UDP binary (QDataStream) message parser
+    |   +-- udp_listener.py      Joins WSJT-X's multicast group, dispatches parsed messages
+    |   +-- adif.py              Minimal ADIF record parser
+    |   +-- award_tracker.py     WAS/DXCC tracking — reads RUMLogNG's SQLite DB, falls back to WSJT-X ADIF
+    |   +-- qso_logger.py        Per-QSO telemetry summary logger (JSONL)
+    |   +-- spotter.py           Watch list, Idaho-grid heuristic, POTA polling, alert dispatch
+    |   +-- callsign_lookup.py   Manual HamQTH/QRZ callsign lookup (SSB/CW)
+    |   +-- dx_cluster.py        RBN (CW) + DXSpider cluster (SSB) telnet clients
+    +-- advisor/
+    |   +-- propagation.py       PSKReporter + NOAA solar data, QTH-aware
+    |   +-- monitor.py           Band-opening/closing/Kp-spike change detection + Claude explanations
+    |   +-- claude_advisor.py    Streaming chat advisor with opt-in auto-QSY tool-calling
     +-- config/
+    |   +-- station_profile.py   QTH profile (La Quinta/Boise) config + persistence
+    +-- tools/
+    |   +-- qso_log_to_csv.py    Converts the QSO telemetry JSONL log to CSV
+    +-- bridge/
     +-- tests/
-    +-- data/                    Generated CSV output (ab_tests/, trend_logs/) — gitignored
+    +-- data/                    Generated output (ab_tests/, trend_logs/, qso_performance_log.jsonl,
+    |                            watchlist.json, station_profile.json) — gitignored
+    +-- .env / .env.example      API credentials (ANTHROPIC_API_KEY, HAMQTH_*, QRZ_*) — .env gitignored
     +-- README.md
     +-- ARCHITECTURE.md
 

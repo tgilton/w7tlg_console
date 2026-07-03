@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG Propagation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --surface:   #161b22;
+  --border:    #21262d;
+  --border2:   #30363d;
+  --cyan:      #00d4ff;
+  --cyan-dim:  #005f73;
+  --amber:     #ff8c00;
+  --amber-dim: #5a3200;
+  --green:     #00e676;
+  --green-dim: #003d1f;
+  --red:       #ff3333;
+  --red-dim:   #4a0000;
+  --yellow:    #ffd60a;
+  --muted:     #58677a;
+  --label:     #8b949e;
+  --text:      #c9d1d9;
+  --mono:      'JetBrains Mono', monospace;
+  --sans:      'Inter', system-ui, sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  overflow-y: auto;
+}
+
+.header {
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border2);
+}
+
+.title {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+}
+
+.qth-toggle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.qth-btn {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: #161b22;
+  color: var(--label);
+  cursor: pointer;
+}
+.qth-btn:hover { border-color: var(--cyan-dim); color: var(--text); }
+.qth-btn.active { background: #0d2538; border-color: var(--cyan); color: var(--cyan); }
+
+.qth-grid-note {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.section-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--yellow);
+  margin-bottom: 8px;
+}
+
+.solar-row {
+  display: flex;
+  gap: 16px;
+}
+
+.solar-card {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 14px 16px;
+}
+
+.solar-value {
+  font-family: var(--mono);
+  font-size: 2rem;
+  font-weight: 700;
+}
+.solar-value.excellent, .solar-value.quiet { color: var(--green); }
+.solar-value.good, .solar-value.unsettled { color: var(--yellow); }
+.solar-value.fair { color: var(--amber); }
+.solar-value.poor, .solar-value.storm { color: var(--red); }
+
+.solar-label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.solar-updated {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+th, td {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+}
+
+tr:last-child td { border-bottom: none; }
+
+.activity-badge {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.activity-badge.high { color: var(--green); background: var(--green-dim); }
+.activity-badge.moderate { color: var(--yellow); background: #4a3f00; }
+.activity-badge.low { color: var(--amber); background: var(--amber-dim); }
+.activity-badge.dead, .activity-badge.unknown { color: var(--muted); background: #1a1f26; }
+
+.alerts-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.alert-card {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-left: 3px solid var(--cyan);
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+.alert-card.kp_spike { border-left-color: var(--red); }
+.alert-card.closing { border-left-color: var(--amber); }
+
+.alert-msg {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.alert-explanation {
+  font-size: 0.8rem;
+  color: var(--label);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.alert-time {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.empty-note {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 12px;
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="title">PROPAGATION</span>
+  <div class="qth-toggle" id="qth-toggle">
+    <!-- populated from /api/station-profile -->
+  </div>
+</header>
+
+<div class="content">
+  <div>
+    <div class="section-label">Solar Conditions</div>
+    <div class="solar-row">
+      <div class="solar-card">
+        <div class="solar-value" id="sfi-value">—</div>
+        <div class="solar-label">Solar Flux Index (SFI)</div>
+      </div>
+      <div class="solar-card">
+        <div class="solar-value" id="kp-value">—</div>
+        <div class="solar-label">Planetary K-index (Kp)</div>
+      </div>
+      <div class="solar-card" style="display:flex; flex-direction:column; justify-content:center;">
+        <span class="qth-grid-note" id="qth-grid-note">Grid —</span>
+        <span class="solar-updated" id="solar-updated" style="margin-left:0; margin-top:4px;">Updated —</span>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-label">FT8 Band Activity (last 15 min, PSKReporter)</div>
+    <table>
+      <thead>
+        <tr><th>Band</th><th>Spots</th><th>Avg SNR</th><th>Activity</th><th>DXCC Heard</th></tr>
+      </thead>
+      <tbody id="band-table-body">
+        <tr><td colspan="5" class="empty-note">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div>
+    <div class="section-label">Recent Alerts</div>
+    <div class="alerts-feed" id="alerts-feed">
+      <div class="empty-note">No alerts yet this session — band openings/closings and Kp spikes will appear here.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m'];
+
+let ws = null;
+
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => {};
+  ws.onclose = () => setTimeout(connectWs, 2000);
+  ws.onmessage = evt => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'propagation') renderPropagation(msg.data);
+    else if (msg.type === 'propagation_alert') addAlert(msg.data);
+    else if (msg.type === 'station_profile') renderQthToggle(msg.data);
+  };
+}
+
+function sfiClass(sfi) {
+  if (sfi === null || sfi === undefined) return '';
+  if (sfi > 150) return 'excellent';
+  if (sfi >= 120) return 'good';
+  if (sfi >= 80) return 'fair';
+  return 'poor';
+}
+
+function kpClass(kp) {
+  if (kp === null || kp === undefined) return '';
+  if (kp < 2) return 'quiet';
+  if (kp < 5) return 'unsettled';
+  return 'storm';
+}
+
+function renderPropagation(state) {
+  const solar = state.solar || {};
+  const sfiEl = document.getElementById('sfi-value');
+  sfiEl.textContent = solar.sfi != null ? solar.sfi.toFixed(0) : '—';
+  sfiEl.className = 'solar-value ' + sfiClass(solar.sfi);
+
+  const kpEl = document.getElementById('kp-value');
+  kpEl.textContent = solar.kp != null ? solar.kp.toFixed(1) : '—';
+  kpEl.className = 'solar-value ' + kpClass(solar.kp);
+
+  document.getElementById('qth-grid-note').textContent = `Grid ${state.my_grid || '—'} (${state.my_call || '—'})`;
+  document.getElementById('solar-updated').textContent = 'Updated ' + (solar.updated || '—');
+
+  const bands = state.bands || {};
+  const tbody = document.getElementById('band-table-body');
+  const rows = BAND_ORDER.filter(b => bands[b]).map(band => {
+    const b = bands[band];
+    const dxcc = (b.dxcc || []).join(', ') || '—';
+    const snr = b.avg_snr != null ? (b.avg_snr > 0 ? '+' : '') + b.avg_snr.toFixed(1) + ' dB' : '—';
+    return `<tr>
+      <td>${band}</td>
+      <td>${b.count}</td>
+      <td>${snr}</td>
+      <td><span class="activity-badge ${b.activity}">${b.activity}</span></td>
+      <td>${dxcc}</td>
+    </tr>`;
+  });
+  tbody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="5" class="empty-note">No band data yet</td></tr>';
+}
+
+function addAlert(data) {
+  const feed = document.getElementById('alerts-feed');
+  const empty = feed.querySelector('.empty-note');
+  if (empty) empty.remove();
+
+  const alert = data.alert || {};
+  const card = document.createElement('div');
+  card.className = 'alert-card ' + (alert.type || '');
+  const now = new Date().toUTCString().slice(17, 25) + 'Z';
+  card.innerHTML = `
+    <div class="alert-msg">${alert.message || ''}</div>
+    <div class="alert-explanation">${data.explanation || ''}</div>
+    <div class="alert-time">${now}</div>
+  `;
+  feed.insertBefore(card, feed.firstChild);
+
+  // Keep the feed from growing unbounded over a long operating session.
+  while (feed.children.length > 20) feed.removeChild(feed.lastChild);
+}
+
+function renderQthToggle(data) {
+  const container = document.getElementById('qth-toggle');
+  const current = data.current || {};
+  container.innerHTML = (data.available || []).map(p => `
+    <button class="qth-btn ${p.id === current.id ? 'active' : ''}" data-profile-id="${p.id}">${p.name}</button>
+  `).join('');
+  container.querySelectorAll('.qth-btn').forEach(btn => {
+    btn.addEventListener('click', () => setQth(btn.dataset.profileId));
+  });
+}
+
+async function setQth(profileId) {
+  await fetch('/api/station-profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId }),
+  });
+  // Server broadcasts the change on /ws (station_profile message), which
+  // re-renders the toggle — no need to locally guess the new state here.
+}
+
+async function loadInitial() {
+  const [propResp, profileResp] = await Promise.all([
+    fetch('/api/propagation'),
+    fetch('/api/station-profile'),
+  ]);
+  renderPropagation(await propResp.json());
+  renderQthToggle(await profileResp.json());
+}
+
+connectWs();
+loadInitial();
+</script>
+</body>
+</html>

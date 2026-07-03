@@ -22,15 +22,26 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from amplifier.acom_bridge import AcomBridge, OperatingMode, StationState
 from amplifier.acom_serial import AcomSerial, find_acom_port
 from amplifier.antenna_ab_test import AntennaAbTest
 from amplifier.trend_csv_logger import TrendCsvLogger
+from config.station_profile import station_profile
 from rig.rigctld_client import RigctldClient, RigState
 from sdr.sdr_client import SdrClient
+from wsjtx.udp_listener import wsjtx_listener
+from wsjtx.protocol import Status as WsjtxStatus
+from wsjtx.qso_logger import qso_telemetry_logger
+from wsjtx.award_tracker import award_tracker
+from wsjtx.spotter import spotter, SpotAlert
+from wsjtx.dx_cluster import RbnClient, DxClusterClient
+from wsjtx.callsign_lookup import callsign_lookup
+from advisor.propagation import propagation_source
+from advisor.monitor import propagation_monitor
+from advisor.claude_advisor import ClaudeAdvisor
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +166,7 @@ audio_manager = AudioConnectionManager()
 bridge: Optional[AcomBridge] = None
 sdr: Optional[SdrClient] = None
 ab_test: Optional[AntennaAbTest] = None
+claude_advisor: Optional["ClaudeAdvisor"] = None
 trend_csv = TrendCsvLogger()
 
 # Monitor-page liveness, used to gate trend CSV logging. Heartbeat-based
@@ -176,6 +188,43 @@ async def _monitor_liveness_watcher():
 
 async def on_ab_test_status(status: dict):
     await manager.broadcast({"type": "ab_test_status", "data": status})
+
+
+async def _propagation_poll_loop():
+    """Refresh propagation data every 3 minutes (PSKReporter's own
+    requested minimum interval), broadcast it, and check for band-opening/
+    closing/Kp-spike alerts — ported from ft991a-panel's poll_propagation().
+    A slow/erroring PSKReporter or NOAA fetch must not affect rig/amp
+    polling at all; this loop is fully independent of those."""
+    await asyncio.sleep(10.0)  # let the rest of startup settle first
+    while True:
+        try:
+            state = await propagation_source.get_state()
+            await manager.broadcast({"type": "propagation", "data": state})
+
+            bands = state.get("bands", {})
+            kp = state.get("solar", {}).get("kp")
+            alerts = propagation_monitor.detect_changes(bands, kp)
+            if alerts:
+                priority = {"highband": 4, "opening": 3, "kp_spike": 2, "closing": 1}
+                primary = sorted(alerts, key=lambda a: priority.get(a["type"], 0), reverse=True)[0]
+                try:
+                    explanation = await asyncio.to_thread(
+                        propagation_monitor.explain_alert, primary, state
+                    )
+                except Exception as e:
+                    logger.warning(f"Alert explanation failed: {e}")
+                    explanation = primary["message"]
+                if len(alerts) > 1:
+                    others = [a["message"] for a in alerts if a is not primary]
+                    explanation += " Also: " + "; ".join(others) + "."
+                await manager.broadcast({
+                    "type": "propagation_alert",
+                    "data": {"alert": primary, "explanation": explanation},
+                })
+        except Exception as e:
+            logger.warning(f"Propagation poll error: {e}")
+        await asyncio.sleep(180.0)
 
 
 def build_state_payload(state: StationState) -> dict:
@@ -204,6 +253,7 @@ def build_state_payload(state: StationState) -> dict:
                 db_fs = sdr.passband_strength_db(float(freq_hz), float(bandwidth_hz))
                 if db_fs is not None:
                     data["rig"]["sdr_strength_db"] = db_fs
+    data["station_profile"] = station_profile.to_dict()
     return data
 
 
@@ -221,6 +271,37 @@ async def on_station_state(state: StationState):
 
 async def on_spectrum_frame(frame: dict):
     await spectrum_manager.broadcast_frame(frame)
+
+
+async def on_spot_alert(alert: SpotAlert):
+    await manager.broadcast({
+        "type": "spot_alert",
+        "data": {"kind": alert.kind, "call": alert.call, "detail": alert.detail},
+    })
+
+
+async def on_wsjtx_status(status: WsjtxStatus):
+    # Broadcast only — no dashboard panel consumes this yet (panels are
+    # part of the deferred layout discussion). Making the data available
+    # on /ws now means the eventual panel is just a UI change, not also a
+    # backend one. Decode/LoggedAdif aren't broadcast here since they're
+    # high-frequency/large — propagation (#9), QSO logging (#10), and
+    # spot/seek (#11) each register their own callbacks directly on
+    # wsjtx_listener rather than going through this broadcast path.
+    await manager.broadcast({
+        "type": "wsjtx_status",
+        "data": {
+            "dial_freq_hz": status.dial_freq_hz,
+            "mode": status.mode,
+            "dx_call": status.dx_call,
+            "dx_grid": status.dx_grid,
+            "de_call": status.de_call,
+            "de_grid": status.de_grid,
+            "transmitting": status.transmitting,
+            "decoding": status.decoding,
+            "tx_message": status.tx_message,
+        },
+    })
 
 
 async def on_audio_frame(audio_bytes: bytes):
@@ -359,7 +440,7 @@ async def on_rig_state_for_audio_mode(rig_state: RigState):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bridge, sdr, ab_test
+    global bridge, sdr, ab_test, claude_advisor
     logger.info("Starting W7TLG Console...")
 
     # Tighter than the original 0.5s — the panadapter's rig-frequency marker
@@ -376,6 +457,7 @@ async def lifespan(app: FastAPI):
     bridge = AcomBridge(rig=rig, amp=amp)
     bridge.on_state_change(on_station_state)
     bridge.on_trend_sample(trend_csv.log)
+    bridge.on_state_change(qso_telemetry_logger.record_sample)
     await bridge.start()
 
     # Wait briefly for rigctld to report the radio's actual current
@@ -402,12 +484,53 @@ async def lifespan(app: FastAPI):
     ab_test = AntennaAbTest(bridge=bridge, sdr=sdr)
     ab_test.on_status(on_ab_test_status)
 
+    # WSJT-X UDP listener — passive third listener on the same multicast
+    # group RUMLogNG/GridTracker2 already use (224.0.0.1:2237, lo0). See
+    # wsjtx/udp_listener.py docstring. Failure here (e.g. port already
+    # bound in a way that rejects SO_REUSEPORT) must not take down the
+    # rest of the console — it's a nice-to-have data feed, not part of
+    # rig/amp safety paths.
+    wsjtx_listener.on_status(on_wsjtx_status)
+    wsjtx_listener.on_logged_adif(qso_telemetry_logger.on_logged_adif)
+    # Award tracker reads WSJT-X's local ADIF log — re-read it after every
+    # newly logged QSO so "missing states" reflects what was just worked,
+    # not last session's snapshot.
+    wsjtx_listener.on_logged_adif(lambda _msg: asyncio.to_thread(award_tracker.reload))
+    wsjtx_listener.on_decode(spotter.on_decode)
+    try:
+        await wsjtx_listener.start()
+    except OSError as e:
+        logger.warning(f"WSJT-X UDP listener unavailable: {e}")
+
+    spotter.on_alert(on_spot_alert)
+    await spotter.start_pota_polling()
+
+    # RBN (CW) + DXSpider cluster (SSB and everything else humans post) —
+    # covers real-time spotting for the modes WSJT-X's own Decode feed
+    # can't (digital-only). Read-only: login with callsign, never post
+    # spots. Same "must not affect the rest of the console" principle as
+    # wsjtx_listener — failure here is a lost data feed, not a startup
+    # failure.
+    rbn_client = RbnClient(my_call=station_profile.current.call)
+    rbn_client.on_spot(spotter.on_cluster_spot)
+    dx_cluster_client = DxClusterClient(my_call=station_profile.current.call)
+    dx_cluster_client.on_spot(spotter.on_cluster_spot)
+    await rbn_client.start()
+    await dx_cluster_client.start()
+
+    claude_advisor = ClaudeAdvisor(rig=rig)
+    asyncio.create_task(_propagation_poll_loop())
+
     logger.info("W7TLG Console running")
 
     yield
 
     logger.info("Shutting down...")
     trend_csv.stop()
+    await spotter.stop_pota_polling()
+    await rbn_client.stop()
+    await dx_cluster_client.stop()
+    await wsjtx_listener.stop()
     await sdr.stop()
     await bridge.stop()
 
@@ -425,6 +548,20 @@ class ModeRequest(BaseModel):
 class TxRequest(BaseModel):
     inhibit: bool
     reason: str = "Manual inhibit"
+
+class StationProfileRequest(BaseModel):
+    profile_id: str
+
+class CallsignLookupRequest(BaseModel):
+    callsign: str
+
+class WatchlistRequest(BaseModel):
+    callsign: str
+
+class AdvisorRequest(BaseModel):
+    question: str = ""
+    clear_history: bool = False
+    auto_qsy: bool = False
 
 # ---------------------------------------------------------------------------
 # REST endpoints
@@ -498,6 +635,137 @@ async def tx_control(req: TxRequest):
         await bridge.inhibit_tx(req.reason)
     else:
         await bridge.allow_tx()
+    return {"status": "ok"}
+
+
+@app.get("/api/station-profile")
+async def get_station_profile():
+    return station_profile.to_dict()
+
+
+@app.post("/api/station-profile")
+async def set_station_profile(req: StationProfileRequest):
+    try:
+        profile = station_profile.set_current(req.profile_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # Broadcast immediately so every connected view (dashboard/monitor/
+    # panadapter, and any future spot/seek panel) picks up the QTH change
+    # without waiting for the next state poll.
+    await manager.broadcast({"type": "station_profile", "data": station_profile.to_dict()})
+    return {"status": "ok", "profile": profile.name}
+
+
+@app.post("/api/lookup/callsign")
+async def lookup_callsign(req: CallsignLookupRequest):
+    """Manual callsign lookup for SSB/CW — no automated decode/grid feed
+    exists for those modes, so the operator looks a heard callsign up by
+    hand here instead of switching to a browser tab for QRZ."""
+    if not callsign_lookup.any_available:
+        raise HTTPException(503, "No callsign lookup service configured (HamQTH/QRZ credentials missing)")
+    info = await callsign_lookup.lookup(req.callsign)
+    return {
+        "call": info.call, "found": info.found, "name": info.name,
+        "grid": info.grid, "state": info.us_state, "country": info.country,
+        "county": info.county, "source": info.source, "error": info.error,
+        "on_watchlist": spotter.watch_list.contains(info.call),
+        "worked_before": award_tracker.have_worked_call(info.call),
+    }
+
+
+@app.get("/api/watchlist")
+async def get_watchlist():
+    return {"callsigns": spotter.watch_list.list()}
+
+
+@app.post("/api/watchlist")
+async def add_watchlist(req: WatchlistRequest):
+    spotter.watch_list.add(req.callsign)
+    return {"status": "ok", "callsigns": spotter.watch_list.list()}
+
+
+@app.delete("/api/watchlist/{callsign}")
+async def remove_watchlist(callsign: str):
+    spotter.watch_list.remove(callsign)
+    return {"status": "ok", "callsigns": spotter.watch_list.list()}
+
+
+@app.get("/api/awards/states")
+async def get_award_states():
+    """Per-band worked/missing US states (WAS award tracking), sourced
+    from RUMLogNG's own database when reachable (falls back to WSJT-X's
+    local ADIF otherwise — see award_tracker.py)."""
+    award_tracker.reload()
+    return {
+        "source": award_tracker.source,
+        "qso_count": award_tracker.qso_count(),
+        "by_band": award_tracker.states_summary_by_band(),
+    }
+
+
+@app.get("/api/awards/dxcc")
+async def get_award_dxcc():
+    """DXCC entities worked, overall and per band. No "missing" list —
+    that needs a complete current DXCC entity reference table this
+    console doesn't have; see award_tracker.py's module docstring."""
+    award_tracker.reload()
+    entities = award_tracker.worked_dxcc_entities()
+    return {
+        "source": award_tracker.source,
+        "qso_count": award_tracker.qso_count(),
+        "total_entities_worked": len(entities),
+        "entities": [
+            {"prefix": e.prefix, "dxcc_adif": e.dxcc_adif,
+             "worked_count": e.worked_count, "bands": sorted(e.bands)}
+            for e in entities
+        ],
+        "by_band": award_tracker.dxcc_summary_by_band(),
+    }
+
+
+@app.get("/api/propagation")
+async def get_propagation():
+    """Current band activity + solar indices. Cached internally (~6min
+    PSKReporter, ~15min NOAA) — safe to call often, won't hammer either
+    upstream service."""
+    return await propagation_source.get_state()
+
+
+@app.post("/api/advisor/stream")
+async def advisor_stream(req: AdvisorRequest):
+    """Server-Sent Events stream of Claude's band-advisor response.
+    auto_qsy defaults False — the operator must explicitly opt in per
+    request before Claude's qsy_to_band tool is even offered, since this
+    is the one path in the console where an LLM can command the radio."""
+    if claude_advisor is None:
+        raise HTTPException(503, "Advisor not initialized")
+    if req.clear_history:
+        claude_advisor.clear_history()
+
+    rig_state = bridge.station.rig if bridge else {}
+    prop_state = await propagation_source.get_state()
+    question = req.question.strip() or None
+
+    async def generate():
+        async for event_type, event_data in claude_advisor.stream_advice_with_tools(
+            rig_state, prop_state, question, req.auto_qsy
+        ):
+            if event_type == "text":
+                yield "data: " + event_data + "\n\n"
+            elif event_type == "qsy":
+                yield "data: [QSY]" + json.dumps(event_data) + "\n\n"
+            elif event_type == "error":
+                yield "data: [ERROR]" + json.dumps({"error": event_data}) + "\n\n"
+            elif event_type == "done":
+                yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/api/advisor/clear")
+async def advisor_clear():
+    if claude_advisor is not None:
+        claude_advisor.clear_history()
     return {"status": "ok"}
 
 
@@ -757,6 +1025,38 @@ async def panadapter():
     if html_path.exists():
         return HTMLResponse(html_path.read_text())
     return HTMLResponse("<h1>Panadapter HTML not found</h1>")
+
+@app.get("/console", response_class=HTMLResponse)
+async def console_view():
+    """Unified single-window shell (Phase A of the layout consolidation) —
+    additive only, doesn't replace / /panadapter /monitor, which stay
+    fully functional standalone. See console.html's own docstring for why
+    it's iframe-based rather than a JS merge."""
+    html_path = Path(__file__).parent / "console.html"
+    if html_path.exists():
+        return HTMLResponse(html_path.read_text())
+    return HTMLResponse("<h1>Console HTML not found</h1>")
+
+@app.get("/propagation", response_class=HTMLResponse)
+async def propagation_view():
+    html_path = Path(__file__).parent / "propagation.html"
+    if html_path.exists():
+        return HTMLResponse(html_path.read_text())
+    return HTMLResponse("<h1>Propagation HTML not found</h1>")
+
+@app.get("/spotseek", response_class=HTMLResponse)
+async def spotseek_view():
+    html_path = Path(__file__).parent / "spotseek.html"
+    if html_path.exists():
+        return HTMLResponse(html_path.read_text())
+    return HTMLResponse("<h1>Spot/Seek HTML not found</h1>")
+
+@app.get("/advisor", response_class=HTMLResponse)
+async def advisor_view():
+    html_path = Path(__file__).parent / "advisor.html"
+    if html_path.exists():
+        return HTMLResponse(html_path.read_text())
+    return HTMLResponse("<h1>Advisor HTML not found</h1>")
 
 
 @app.get("/audio-worklet.js")

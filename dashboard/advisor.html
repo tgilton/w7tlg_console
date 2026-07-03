@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG AI Advisor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --surface:   #161b22;
+  --border:    #21262d;
+  --border2:   #30363d;
+  --cyan:      #00d4ff;
+  --cyan-dim:  #005f73;
+  --amber:     #ff8c00;
+  --amber-dim: #5a3200;
+  --green:     #00e676;
+  --green-dim: #003d1f;
+  --red:       #ff3333;
+  --red-dim:   #4a0000;
+  --yellow:    #ffd60a;
+  --muted:     #58677a;
+  --label:     #8b949e;
+  --text:      #c9d1d9;
+  --mono:      'JetBrains Mono', monospace;
+  --sans:      'Inter', system-ui, sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.header {
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border2);
+  flex: 0 0 auto;
+}
+
+.title {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Auto-QSY is the one control on this whole console where an LLM can
+   command the radio — deliberately loud/impossible-to-miss rather than a
+   quiet checkbox, and defaults off every page load (never persisted). */
+.autoqsy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border2);
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.autoqsy-toggle.on {
+  border-color: var(--red);
+  color: var(--red);
+  background: var(--red-dim);
+  animation: pulse-warn 1.6s infinite;
+}
+@keyframes pulse-warn {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,51,51,0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(255,51,51,0); }
+}
+.autoqsy-toggle input { accent-color: var(--red); cursor: pointer; }
+
+.btn {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: #161b22;
+  color: var(--label);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--cyan-dim); color: var(--text); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+.chat-log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.msg { max-width: 85%; }
+.msg.user { align-self: flex-end; }
+.msg.assistant { align-self: flex-start; }
+
+.msg-bubble {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.msg.user .msg-bubble { background: #0d2538; border: 1px solid var(--cyan-dim); color: var(--text); }
+.msg.assistant .msg-bubble { background: var(--surface); border: 1px solid var(--border2); color: var(--text); }
+
+.msg-qsy {
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--amber);
+  background: var(--amber-dim);
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.msg-error {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--red);
+  background: var(--red-dim);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.empty-note {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: auto;
+  text-align: center;
+}
+
+.input-bar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border2);
+}
+
+#question-input {
+  flex: 1;
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+#question-input:focus { outline: none; border-color: var(--cyan-dim); }
+
+.typing-cursor {
+  display: inline-block;
+  width: 7px; height: 14px;
+  background: var(--cyan);
+  vertical-align: text-bottom;
+  animation: blink 0.9s step-start infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <header class="header">
+    <span class="title">AI ADVISOR</span>
+    <div class="header-controls">
+      <label class="autoqsy-toggle" id="autoqsy-toggle">
+        <input type="checkbox" id="autoqsy-checkbox" onchange="onAutoQsyToggle()">
+        <span id="autoqsy-label">AUTO-QSY: OFF</span>
+      </label>
+      <button class="btn" onclick="clearChat()">Clear Chat</button>
+    </div>
+  </header>
+
+  <div class="chat-log" id="chat-log">
+    <div class="empty-note">Ask about band conditions, or click "Recommend Now" below for an immediate assessment.</div>
+  </div>
+
+  <div class="input-bar">
+    <input type="text" id="question-input" placeholder="Ask the advisor..."
+           onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); askQuestion();}">
+    <button class="btn" id="recommend-btn" onclick="recommendNow()">Recommend Now</button>
+    <button class="btn" id="ask-btn" onclick="askQuestion()">Ask</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+let autoQsy = false;
+let streaming = false;
+
+function onAutoQsyToggle() {
+  autoQsy = document.getElementById('autoqsy-checkbox').checked;
+  const toggle = document.getElementById('autoqsy-toggle');
+  const label = document.getElementById('autoqsy-label');
+  toggle.classList.toggle('on', autoQsy);
+  label.textContent = autoQsy ? 'AUTO-QSY: ON — CAN RETUNE RADIO' : 'AUTO-QSY: OFF';
+}
+
+function clearEmptyNote() {
+  const log = document.getElementById('chat-log');
+  const empty = log.querySelector('.empty-note');
+  if (empty) empty.remove();
+}
+
+function addUserMessage(text) {
+  clearEmptyNote();
+  const log = document.getElementById('chat-log');
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.innerHTML = `<div class="msg-bubble"></div>`;
+  div.querySelector('.msg-bubble').textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function addAssistantMessage() {
+  clearEmptyNote();
+  const log = document.getElementById('chat-log');
+  const div = document.createElement('div');
+  div.className = 'msg assistant';
+  div.innerHTML = `<div class="msg-bubble"><span class="text"></span><span class="typing-cursor"></span></div>`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function setControlsEnabled(enabled) {
+  streaming = !enabled;
+  document.getElementById('recommend-btn').disabled = !enabled;
+  document.getElementById('ask-btn').disabled = !enabled;
+  document.getElementById('question-input').disabled = !enabled;
+}
+
+async function streamAdvisor(question) {
+  if (streaming) return;
+  setControlsEnabled(false);
+
+  const msgEl = addAssistantMessage();
+  const textEl = msgEl.querySelector('.text');
+  const cursorEl = msgEl.querySelector('.typing-cursor');
+  const log = document.getElementById('chat-log');
+
+  try {
+    const resp = await fetch('/api/advisor/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: question || '', auto_qsy: autoQsy }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by a blank line; each event here is a
+      // single "data: ..." line (the server never splits one logical
+      // event across multiple data: lines).
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        if (!rawEvent.startsWith('data: ')) continue;
+        const payload = rawEvent.slice(6);
+
+        if (payload === '[DONE]') {
+          continue;
+        } else if (payload.startsWith('[QSY]')) {
+          const qsy = JSON.parse(payload.slice(5));
+          const qsyDiv = document.createElement('div');
+          qsyDiv.className = 'msg-qsy';
+          const mhz = qsy.frequency_hz ? (qsy.frequency_hz / 1e6).toFixed(4) : '?';
+          qsyDiv.textContent = `⚡ QSY executed: ${mhz} MHz ${qsy.mode || ''} — ${qsy.reason || ''}`;
+          msgEl.appendChild(qsyDiv);
+        } else if (payload.startsWith('[ERROR]')) {
+          const err = JSON.parse(payload.slice(7));
+          const errDiv = document.createElement('div');
+          errDiv.className = 'msg-error';
+          errDiv.textContent = `Error: ${err.error}`;
+          msgEl.appendChild(errDiv);
+        } else {
+          textEl.textContent += payload;
+        }
+        log.scrollTop = log.scrollHeight;
+      }
+    }
+  } catch (e) {
+    const errDiv = document.createElement('div');
+    errDiv.className = 'msg-error';
+    errDiv.textContent = `Connection error: ${e.message}`;
+    msgEl.appendChild(errDiv);
+  } finally {
+    cursorEl.remove();
+    setControlsEnabled(true);
+  }
+}
+
+function recommendNow() {
+  addUserMessage('(Recommend Now)');
+  streamAdvisor(null);
+}
+
+function askQuestion() {
+  const input = document.getElementById('question-input');
+  const question = input.value.trim();
+  if (!question) return;
+  addUserMessage(question);
+  input.value = '';
+  streamAdvisor(question);
+}
+
+async function clearChat() {
+  await fetch('/api/advisor/clear', { method: 'POST' });
+  const log = document.getElementById('chat-log');
+  log.innerHTML = '<div class="empty-note">Chat cleared. Ask about band conditions, or click "Recommend Now" for an immediate assessment.</div>';
+}
+</script>
+</body>
+</html>

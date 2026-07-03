@@ -14,6 +14,14 @@ import signal
 import sys
 
 import uvicorn
+from dotenv import load_dotenv
+
+# Must happen before any module that reads os.environ at import/startup time
+# (e.g. the AI advisor's ANTHROPIC_API_KEY) — .env is not auto-sourced by
+# the shell just because it's present in the directory. os.environ changes
+# here are inherited by uvicorn's --reload subprocess too, since child
+# processes inherit the parent's environment.
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,

@@ -620,6 +620,14 @@ input[type=range]::-webkit-slider-thumb:active {
   background: #000000;
   margin: 0;
 }
+/* Explicitly requested subset — see the dividers above Signal, Band,
+   Filter, TX Power, Fault Status, Operating Mode, and Digital Audio/
+   Antenna A/B Test — made visible against the dark background instead of
+   pure black. Deliberately scoped to just these instances rather than
+   every .divider on the page. */
+.divider.divider-hl {
+  background: #c9d1d9;
+}
 
 /* ── DSP / Filters panel ─────────────────────────────────── */
 .dsp-panel {
@@ -816,7 +824,7 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- S-meter -->
     <div class="smeter-section">
@@ -864,7 +872,7 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- Band buttons -->
     <div>
@@ -884,6 +892,8 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
+    <div class="divider divider-hl"></div>
+
     <!-- Mode buttons -->
     <div>
       <div class="section-label">Mode</div>
@@ -897,7 +907,7 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- Filter width -->
     <div>
@@ -1018,7 +1028,7 @@ input[type=range]::-webkit-slider-thumb:active {
 
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- RF Power -->
     <div>
@@ -1036,6 +1046,8 @@ input[type=range]::-webkit-slider-thumb:active {
         </div>
       </div>
     </div>
+
+    <div class="divider divider-hl"></div>
 
     <!-- Preamp / IPO -->
     <div>
@@ -1122,7 +1134,7 @@ input[type=range]::-webkit-slider-thumb:active {
       <span class="muted">W</span>
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- Fault status -->
     <div>
@@ -1135,7 +1147,7 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- Operating mode -->
     <div>
@@ -1149,7 +1161,7 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- SSB Audio (voice modes) -->
     <div id="voice-tx-controls">
@@ -1212,7 +1224,7 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- Antenna -->
     <div>
@@ -1233,7 +1245,7 @@ input[type=range]::-webkit-slider-thumb:active {
       </div>
     </div>
 
-    <div class="divider"></div>
+    <div class="divider divider-hl"></div>
 
     <!-- Antenna A/B Test -->
     <div>

@@ -84,21 +84,6 @@ html, body {
 .sdr-badge.tx { color: var(--amber); background: var(--amber-dim); }
 .sdr-badge.unavailable { color: var(--red); background: #4a0000; }
 
-.nav-link {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  color: var(--cyan);
-  text-decoration: none;
-  border: 1px solid var(--cyan-dim);
-  border-radius: 4px;
-  padding: 3px 10px;
-  transition: background 0.15s, border-color 0.15s;
-}
-.nav-link:hover {
-  background: var(--cyan-dim);
-  border-color: var(--cyan);
-}
-
 .controls {
   display: flex;
   align-items: center;
@@ -239,7 +224,6 @@ html, body {
     <span class="conn-dot" id="conn-dot"></span>W7TLG PANADAPTER
   </span>
   <div class="header-status">
-    <a class="nav-link" href="/" target="_blank" rel="noopener">← Console</a>
     <span class="sdr-badge unavailable" id="sdr-badge">SDR —</span>
     <span id="hdr-time">—</span>
   </div>
@@ -257,7 +241,7 @@ html, body {
 
   <button class="btn" id="whole-band-btn" onclick="snapToWholeBand()" style="margin-left:8px">Whole Band</button>
 
-  <button class="btn" id="mute-btn" onclick="toggleMute()" style="margin-left:8px">Audio: Muted</button>
+  <button class="btn active" id="mute-btn" onclick="toggleMute()" style="margin-left:8px">Audio: Live</button>
 </div>
 
 <div class="controls">
@@ -362,6 +346,15 @@ const DIGITAL_VIEW_SPAN_HZ = 3000;
 
 function handleDigitalViewMode() {
   if (!rigIsDigital && rigMode !== 'PKTUSB') return;
+  // The narrow span only looks right once latestFineFrame is actually
+  // flowing — that requires audio to have been enabled at least once
+  // (server-side fine-spectrum computation is a byproduct of the audio
+  // demod pipeline, gated on a target frequency having been set via
+  // set_audio_target, which only happens on unmute). Locking to
+  // DIGITAL_VIEW_SPAN_HZ before that exists just crops the coarse
+  // wideband data into a near-useless narrow, blocky sliver. Stay on
+  // the normal wideband view until fine data actually arrives.
+  if (!latestFineFrame) return;
   setViewSpan(DIGITAL_VIEW_SPAN_HZ);
   // Frozen during TX (no center update) so it doesn't chase WSJT-X's
   // small dial wobble around each transmission.
@@ -501,6 +494,20 @@ let pendingHeader = null;
 let latestFrame = null;   // { centerFreqHz, spanHz, data: Float32Array } — full capture, ~2MHz wide
 let latestFineFrame = null;   // digital-mode fine spectrum — 16kHz wide, centered on the audio target
 let pendingRetuneHz = null;   // set while waiting for the SDR to catch up to a requested retune
+let pendingRetuneAt = 0;      // performance.now() when pendingRetuneHz was set — see the timeout below
+const PENDING_RETUNE_TIMEOUT_MS = 3000;   // give up waiting and accept whatever arrives, rather than freezing latestFrame forever
+
+function setPendingRetune(hz) {
+  pendingRetuneHz = hz;
+  pendingRetuneAt = performance.now();
+}
+
+function clearStalePendingRetune() {
+  if (pendingRetuneHz !== null && (performance.now() - pendingRetuneAt) > PENDING_RETUNE_TIMEOUT_MS) {
+    console.log('[panadapter] pendingRetuneHz timed out waiting for the SDR to confirm — clearing');
+    pendingRetuneHz = null;
+  }
+}
 
 function connectSpectrumWs() {
   specWs = new WebSocket(`ws://${location.host}/ws/spectrum`);
@@ -577,13 +584,19 @@ function tuneToInput() {
 }
 
 function updateFreqInputDisplay() {
-  // Tracks where the SDR is actually tuned (latestFrame.centerFreqHz), not
-  // viewCenterHz — panning/zooming (e.g. to Whole Band) never retunes the
-  // SDR, so the view's geometric center is a display concept, not "the
-  // frequency we're on." This box means the latter.
+  // Shows the rig's actual live dial frequency (matching the dashboard),
+  // not latestFrame.centerFreqHz (the SDR hardware's ~2MHz capture window
+  // center). Those two only diverge when retuning to a new frequency that
+  // still falls inside the existing capture window — e.g. switching from
+  // FT8 to FT4 within the same band — which doesn't require the SDR to
+  // physically retune at all. Showing the capture-window center in that
+  // case looked "stuck" to the operator despite everything else (the
+  // spectrum view, the rig marker) correctly tracking the real frequency;
+  // the capture window position isn't actionable operating information.
   const input = document.getElementById('freq-input');
   if (document.activeElement === input) return;   // don't fight the user mid-edit
-  if (latestFrame) input.value = (latestFrame.centerFreqHz / 1e6).toFixed(6);
+  if (rigFreqHz !== null) input.value = (rigFreqHz / 1e6).toFixed(6);
+  else if (latestFrame) input.value = (latestFrame.centerFreqHz / 1e6).toFixed(6);
 }
 
 // ── Controls: span / zoom / pan ───────────────────────────
@@ -645,7 +658,7 @@ function tuneTo(freqHz, recenterView = true) {
       // pattern as the TX freeze) until a frame confirms the SDR caught up,
       // rather than cropping the view against a now-stale capture window.
       send({ cmd: 'set_panadapter_freq', freq_hz: freqHz });
-      pendingRetuneHz = freqHz;
+      setPendingRetune(freqHz);
     }
   }
   // No clampViewToCapture() here — that's for drag-to-pan within an
@@ -677,7 +690,7 @@ function followRigFrequency() {
     const hi = latestFrame.centerFreqHz + latestFrame.spanHz / 2 - margin;
     if ((rigFreqHz < lo || rigFreqHz > hi) && pendingRetuneHz === null) {
       send({ cmd: 'set_panadapter_freq', freq_hz: rigFreqHz });
-      pendingRetuneHz = rigFreqHz;
+      setPendingRetune(rigFreqHz);
     }
   }
 
@@ -801,20 +814,35 @@ function sendAudioTargetFromRig(force) {
   send({ cmd: 'set_audio_target', freq_hz: rigFreqHz, mode, bandwidth_hz: bandwidthHz });
 }
 
-function toggleMute() {
-  audioMuted = !audioMuted;
+// Split out of toggleMute() so page load can trigger the same "go live"
+// sequence the button does, without a synthetic click. Enabling audio
+// (rather than defaulting muted) is what makes the server start computing
+// the digital-mode fine spectrum at all — see handleDigitalViewMode()'s
+// comment. Without it, band/mode changes could leave the panadapter
+// showing a low-resolution crop or, in some cases, what looks like a
+// single jumping line, until audio was manually unmuted once.
+function enableAudio() {
+  audioMuted = false;
   const btn = document.getElementById('mute-btn');
-  btn.textContent = audioMuted ? 'Audio: Muted' : 'Audio: Live';
-  btn.classList.toggle('active', !audioMuted);
-  if (audioMuted) {
-    send({ cmd: 'set_audio_enabled', enabled: false });
-  } else {
-    ensureAudioWorklet().then(() => {
-      ensureAudioWs();
-      send({ cmd: 'set_audio_enabled', enabled: true });
-      sendAudioTargetFromRig(true);
-    });
-  }
+  btn.textContent = 'Audio: Live';
+  btn.classList.add('active');
+  ensureAudioWorklet().then(() => {
+    ensureAudioWs();
+    send({ cmd: 'set_audio_enabled', enabled: true });
+    sendAudioTargetFromRig(true);
+  });
+}
+
+function disableAudio() {
+  audioMuted = true;
+  const btn = document.getElementById('mute-btn');
+  btn.textContent = 'Audio: Muted';
+  btn.classList.remove('active');
+  send({ cmd: 'set_audio_enabled', enabled: false });
+}
+
+function toggleMute() {
+  if (audioMuted) enableAudio(); else disableAudio();
 }
 
 let dragging = false, dragMoved = false, dragStartX = 0, dragStartCenter = 0;
@@ -827,7 +855,19 @@ spectrumWrap.addEventListener('mousedown', evt => {
   spectrumWrap.classList.add('dragging');
 });
 window.addEventListener('mouseup', evt => {
-  if (dragging && !dragMoved && latestFrame && viewCenterHz !== null) {
+  // Click-to-tune is suppressed in digital mode: the visible span there is
+  // only DIGITAL_VIEW_SPAN_HZ wide, so any click lands within a few
+  // hundred Hz of the dial and silently nudges the actual rig VFO via
+  // tuneTo()'s set_frequency command. FT8/digital operation depends on the
+  // dial frequency staying put — decoding happens by audio offset from a
+  // fixed dial, not by retuning to chase a signal — so an accidental
+  // click-driven VFO move here is a real operability problem, not just a
+  // display quirk. (This is also what was producing the panadapter's
+  // frozen/stale frequency display after clicking in digital mode: the
+  // resulting tiny VFO nudge could leave a retune request pending that
+  // never cleanly resolved — see the pendingRetuneHz timeout below for the
+  // general-case fix to that regardless of what triggers it.)
+  if (dragging && !dragMoved && latestFrame && viewCenterHz !== null && !rigIsDigital) {
     // No real drag occurred — treat as click-to-tune at this position.
     const rect = spectrumWrap.getBoundingClientRect();
     const x = evt.clientX - rect.left;
@@ -1026,6 +1066,7 @@ function onGainSlider(v) {
 }
 
 function drawSpectrum() {
+  clearStalePendingRetune();
   updateDisplayedRigFreq();
   updateSmeter();
   const dpr = window.devicePixelRatio || 1;
@@ -1258,6 +1299,16 @@ connectWs();
 connectSpectrumWs();
 updateSpanLabel();
 requestAnimationFrame(drawSpectrum);
+
+// Defaults to live rather than muted — see enableAudio()'s comment for
+// why (fixes a real panadapter display bug, not just a convenience).
+// Browsers block actual audible playback without a prior user gesture on
+// the page, so this may start the AudioContext in a suspended state —
+// audio may stay silent until any click on the page resumes it — but the
+// server-side effect that actually matters here (set_audio_target /
+// set_audio_enabled over /ws and /ws/audio) fires regardless, since
+// neither of those depends on AudioContext playback state.
+enableAudio();
 
 // Mouse-wheel adjustment for panadapter sliders.
 ['span-slider', 'floor-slider', 'gain-slider', 'avg-slider', 'contrast-slider'].forEach(id => {

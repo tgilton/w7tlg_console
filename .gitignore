@@ -15,3 +15,6 @@ RPRT*
 
 # Antenna A/B test CSVs and trend logs — generated output, not source
 /data/
+
+# Secrets — never commit
+.env

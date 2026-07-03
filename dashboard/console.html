@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG Console</title>
+<style>
+/*
+  Shell page for the unified single-window console (Phase A).
+
+  Deliberately built from iframes pointing at the existing, already-working
+  /panadapter, / (dashboard), /monitor routes rather than merging their JS
+  into one shared scope. Those pages carry a lot of hard-won, safety-tuned
+  logic (TX audio mute timing, feedback-loop prevention, digital-mode view
+  locking) as top-level global-scope variables — inlining two ~1000+ line
+  scripts into one global scope risks silent variable collisions and
+  regressions in exactly the code that must not regress. Iframes give true
+  isolation (separate window scope, separate WebSocket connections) at the
+  cost of a handful of redundant /ws connections, which is irrelevant
+  overhead for a single-operator LAN console.
+
+  This also solves the monitor trend-logging question for free: hidden
+  (but still-mounted) iframes keep running their JS and keep their
+  WebSocket open even while a different tab is visually active, so
+  trend_csv_logger.py's existing heartbeat-based gate needs no changes —
+  logging now runs for as long as this shell page is open, matching what
+  was agreed (log whenever the console is open), without touching that
+  file at all.
+
+  This page is served at /console — a new route, additive only. /,
+  /panadapter, /monitor are all untouched and still work standalone.
+*/
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --surface:   #161b22;
+  --border:    #21262d;
+  --border2:   #30363d;
+  --cyan:      #00d4ff;
+  --cyan-dim:  #005f73;
+  --amber:     #ff8c00;
+  --amber-dim: #5a3200;
+  --green:     #00e676;
+  --green-dim: #003d1f;
+  --red:       #ff3333;
+  --red-dim:   #4a0000;
+  --yellow:    #ffd60a;
+  --muted:     #58677a;
+  --label:     #8b949e;
+  --text:      #c9d1d9;
+  --mono:      'JetBrains Mono', monospace;
+  --sans:      'Inter', system-ui, sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  overflow: hidden;   /* each iframe scrolls internally; the shell itself never does */
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.shell-header {
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border2);
+  flex: 0 0 auto;
+}
+
+.callsign {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+}
+
+.shell-header-links {
+  display: flex;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+
+.shell-header-links a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.shell-header-links a:hover { color: var(--cyan); }
+
+.main {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;   /* let children actually shrink instead of overflowing the flex box */
+}
+
+.pane-left {
+  flex: 0 0 auto;
+  min-width: 280px;
+  max-width: 80vw;
+  height: 100%;
+  position: relative;
+}
+
+.pane-left iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+.resize-handle {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 100%;
+  background: var(--border);
+  cursor: col-resize;
+  position: relative;
+}
+.resize-handle:hover, .resize-handle.dragging { background: var(--cyan-dim); }
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px; height: 32px;
+  background: var(--border2);
+  border-radius: 1px;
+}
+
+.pane-right {
+  flex: 1 1 auto;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tab-bar {
+  flex: 0 0 auto;
+  display: flex;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border2);
+}
+
+.tab-btn {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 10px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--label);
+  cursor: pointer;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+.tab-content {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+}
+
+.tab-pane {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  border: none;
+  display: none;
+}
+.tab-pane.active { display: block; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <header class="shell-header">
+    <span class="callsign">W7TLG CONSOLE</span>
+    <div class="shell-header-links">
+      <a href="/" target="_blank" rel="noopener">Dashboard (standalone)</a>
+      <a href="/panadapter" target="_blank" rel="noopener">Panadapter (standalone)</a>
+      <a href="/monitor" target="_blank" rel="noopener">Monitor (standalone)</a>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="pane-left" id="pane-left">
+      <iframe src="/panadapter" title="Panadapter"></iframe>
+    </div>
+
+    <div class="resize-handle" id="resize-handle"></div>
+
+    <div class="pane-right">
+      <div class="tab-bar" id="tab-bar">
+        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="tab-btn" data-tab="monitor">Monitor</button>
+        <button class="tab-btn" data-tab="propagation">Propagation</button>
+        <button class="tab-btn" data-tab="spotseek">Spot/Seek</button>
+        <button class="tab-btn" data-tab="advisor">AI Advisor</button>
+      </div>
+      <div class="tab-content">
+        <iframe class="tab-pane active" data-tab="dashboard" src="/" title="Dashboard"></iframe>
+        <!--
+          Mounted immediately (not lazy-loaded on first tab click) even
+          though it starts hidden — this is what keeps its /ws connection
+          and monitor_heartbeat timer alive in the background, which is
+          exactly what makes trend-logging run for as long as the console
+          shell is open rather than only while this specific tab is
+          active. See the note by the tab-bar click handler below.
+        -->
+        <iframe class="tab-pane" data-tab="monitor" src="/monitor" title="Monitor"></iframe>
+        <iframe class="tab-pane" data-tab="propagation" src="/propagation" title="Propagation"></iframe>
+        <iframe class="tab-pane" data-tab="spotseek" src="/spotseek" title="Spot/Seek"></iframe>
+        <iframe class="tab-pane" data-tab="advisor" src="/advisor" title="AI Advisor"></iframe>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── Tab switching ────────────────────────────────────────────────────
+// Iframes are never removed/recreated on tab switch (just shown/hidden
+// via display:none) — that's what keeps every tab's WebSocket connection
+// and JS state alive in the background regardless of which tab is active.
+document.getElementById('tab-bar').addEventListener('click', evt => {
+  const btn = evt.target.closest('.tab-btn');
+  if (!btn) return;
+  const tab = btn.dataset.tab;
+
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === tab));
+
+  localStorage.setItem('w7tlg_console_active_tab', tab);
+});
+
+(function restoreActiveTab() {
+  const saved = localStorage.getItem('w7tlg_console_active_tab');
+  if (!saved) return;
+  const btn = document.querySelector(`.tab-btn[data-tab="${saved}"]`);
+  if (btn) btn.click();
+})();
+
+// ── Resizable left pane ──────────────────────────────────────────────
+const paneLeft = document.getElementById('pane-left');
+const handle = document.getElementById('resize-handle');
+
+(function restorePaneWidth() {
+  const saved = localStorage.getItem('w7tlg_console_pane_left_width');
+  if (saved) paneLeft.style.width = saved + 'px';
+  else paneLeft.style.width = Math.round(window.innerWidth * 0.55) + 'px';
+})();
+
+let resizing = false;
+handle.addEventListener('mousedown', evt => {
+  resizing = true;
+  handle.classList.add('dragging');
+  // Iframes swallow mousemove while the cursor is over them mid-drag —
+  // block pointer events on both panes for the duration of the drag so
+  // the resize keeps tracking smoothly right up to each pane's edge.
+  document.querySelectorAll('iframe').forEach(f => f.style.pointerEvents = 'none');
+  evt.preventDefault();
+});
+
+window.addEventListener('mousemove', evt => {
+  if (!resizing) return;
+  const min = 280, max = window.innerWidth * 0.8;
+  const w = Math.max(min, Math.min(max, evt.clientX));
+  paneLeft.style.width = w + 'px';
+});
+
+window.addEventListener('mouseup', () => {
+  if (!resizing) return;
+  resizing = false;
+  handle.classList.remove('dragging');
+  document.querySelectorAll('iframe').forEach(f => f.style.pointerEvents = '');
+  localStorage.setItem('w7tlg_console_pane_left_width', parseInt(paneLeft.style.width, 10));
+});
+</script>
+</body>
+</html>

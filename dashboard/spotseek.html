@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG Spot/Seek</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --surface:   #161b22;
+  --border:    #21262d;
+  --border2:   #30363d;
+  --cyan:      #00d4ff;
+  --cyan-dim:  #005f73;
+  --amber:     #ff8c00;
+  --amber-dim: #5a3200;
+  --green:     #00e676;
+  --green-dim: #003d1f;
+  --red:       #ff3333;
+  --red-dim:   #4a0000;
+  --yellow:    #ffd60a;
+  --muted:     #58677a;
+  --label:     #8b949e;
+  --text:      #c9d1d9;
+  --mono:      'JetBrains Mono', monospace;
+  --sans:      'Inter', system-ui, sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  overflow-y: auto;
+}
+
+.header {
+  background: var(--surface);
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border2);
+}
+
+.title {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+}
+
+.content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--yellow);
+  margin-bottom: 8px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 14px 16px;
+}
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+input[type="text"] {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  color: var(--green);
+  padding: 6px 10px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.btn {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 7px 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: #161b22;
+  color: var(--label);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--cyan-dim); color: var(--text); }
+.btn.primary { background: #0d2538; border-color: var(--cyan); color: var(--cyan); }
+.btn.danger:hover { border-color: var(--red); color: var(--red); }
+
+.lookup-result {
+  margin-top: 12px;
+  display: none;
+}
+.lookup-result.show { display: block; }
+
+.lookup-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  margin-bottom: 10px;
+}
+.lookup-grid .k { color: var(--muted); }
+
+.badge {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  display: inline-block;
+  margin-right: 6px;
+}
+.badge.watchlist { color: var(--cyan); background: var(--cyan-dim); }
+.badge.worked { color: var(--green); background: var(--green-dim); }
+.badge.new { color: var(--amber); background: var(--amber-dim); }
+.badge.notfound { color: var(--red); background: var(--red-dim); }
+
+.watchlist-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.watchlist-tag {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  background: #0d2538;
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan);
+  padding: 4px 6px 4px 10px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.watchlist-tag button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0;
+}
+.watchlist-tag button:hover { color: var(--red); }
+
+.alerts-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.alert-card {
+  background: #0a0d11;
+  border: 1px solid var(--border2);
+  border-left: 3px solid var(--cyan);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+.alert-card.idaho { border-left-color: var(--green); }
+.alert-card.pota { border-left-color: var(--amber); }
+.alert-time { color: var(--muted); font-size: 0.65rem; margin-top: 2px; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+th { color: var(--muted); text-transform: uppercase; font-size: 0.65rem; }
+tr:last-child td { border-bottom: none; }
+
+.missing-list {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--label);
+}
+
+.empty-note {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 8px 0;
+}
+
+.source-note {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+  margin-top: 8px;
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <span class="title">SPOT / SEEK</span>
+</header>
+
+<div class="content">
+  <div>
+    <div class="section-label">Manual Callsign Lookup (SSB/CW)</div>
+    <div class="card">
+      <div class="row">
+        <input type="text" id="lookup-input" placeholder="CALLSIGN" maxlength="12"
+               onkeydown="if(event.key==='Enter') doLookup()">
+        <button class="btn primary" onclick="doLookup()">Look Up</button>
+      </div>
+      <div class="lookup-result" id="lookup-result">
+        <div class="lookup-grid" id="lookup-grid"></div>
+        <div id="lookup-badges"></div>
+        <button class="btn" id="lookup-add-btn" onclick="addLookedUpToWatchlist()" style="margin-top:8px">+ Add to Watch List</button>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-label">Watch List</div>
+    <div class="card">
+      <div class="row">
+        <input type="text" id="watchlist-input" placeholder="CALLSIGN" maxlength="12"
+               onkeydown="if(event.key==='Enter') addToWatchlist()">
+        <button class="btn" onclick="addToWatchlist()">+ Add</button>
+      </div>
+      <div class="watchlist-tags" id="watchlist-tags"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-label">Live Alerts (watch list, Idaho grids, POTA, RBN/DX cluster)</div>
+    <div class="card">
+      <div class="alerts-feed" id="alerts-feed">
+        <div class="empty-note">No alerts yet this session.</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-label">Worked All States — Missing by Band</div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Band</th><th>Worked</th><th>Missing</th></tr></thead>
+        <tbody id="was-table-body">
+          <tr><td colspan="3" class="empty-note">Loading...</td></tr>
+        </tbody>
+      </table>
+      <div class="source-note" id="was-source"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-label">DXCC Entities Worked</div>
+    <div class="card">
+      <div id="dxcc-total" class="empty-note">Loading...</div>
+      <table>
+        <thead><tr><th>Band</th><th>Entities Worked</th></tr></thead>
+        <tbody id="dxcc-table-body"></tbody>
+      </table>
+      <div class="source-note">No "missing" count — needs a full current DXCC entity reference list, which isn't bundled. Worked-count only.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+let ws = null;
+
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => {};
+  ws.onclose = () => setTimeout(connectWs, 2000);
+  ws.onmessage = evt => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'spot_alert') addAlert(msg.data);
+  };
+}
+
+function addAlert(data) {
+  const feed = document.getElementById('alerts-feed');
+  const empty = feed.querySelector('.empty-note');
+  if (empty) empty.remove();
+
+  const card = document.createElement('div');
+  card.className = 'alert-card ' + (data.kind || '');
+  const now = new Date().toUTCString().slice(17, 25) + 'Z';
+  card.innerHTML = `
+    <div><strong>${data.call || '?'}</strong> — ${data.detail || ''}</div>
+    <div class="alert-time">${now}</div>
+  `;
+  feed.insertBefore(card, feed.firstChild);
+  while (feed.children.length > 30) feed.removeChild(feed.lastChild);
+}
+
+// -- Manual lookup ------------------------------------------------------
+
+let lastLookupCall = null;
+
+async function doLookup() {
+  const input = document.getElementById('lookup-input');
+  const call = input.value.trim().toUpperCase();
+  if (!call) return;
+  lastLookupCall = call;
+
+  const resp = await fetch('/api/lookup/callsign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callsign: call }),
+  });
+  const info = await resp.json();
+
+  const resultEl = document.getElementById('lookup-result');
+  const gridEl = document.getElementById('lookup-grid');
+  const badgesEl = document.getElementById('lookup-badges');
+  resultEl.classList.add('show');
+
+  if (!info.found) {
+    gridEl.innerHTML = `<span class="k">Call</span><span>${call}</span>`;
+    badgesEl.innerHTML = `<span class="badge notfound">NOT FOUND</span>` +
+      (info.error ? `<span style="color:var(--muted); font-family:var(--mono); font-size:0.75rem;"> ${info.error}</span>` : '');
+    document.getElementById('lookup-add-btn').style.display = 'inline-block';
+    return;
+  }
+
+  gridEl.innerHTML = `
+    <span class="k">Call</span><span>${info.call}</span>
+    <span class="k">Name</span><span>${info.name || '—'}</span>
+    <span class="k">Grid</span><span>${info.grid || '—'}</span>
+    <span class="k">State</span><span>${info.state || '—'}</span>
+    <span class="k">Country</span><span>${info.country || '—'}</span>
+    <span class="k">County</span><span>${info.county || '—'}</span>
+    <span class="k">Source</span><span>${info.source || '—'}</span>
+  `;
+  const badges = [];
+  if (info.on_watchlist) badges.push('<span class="badge watchlist">ON WATCH LIST</span>');
+  if (info.worked_before) badges.push('<span class="badge worked">WORKED BEFORE</span>');
+  else badges.push('<span class="badge new">NEW — NOT WORKED</span>');
+  badgesEl.innerHTML = badges.join('');
+  document.getElementById('lookup-add-btn').style.display = info.on_watchlist ? 'none' : 'inline-block';
+}
+
+async function addLookedUpToWatchlist() {
+  if (!lastLookupCall) return;
+  await addCallToWatchlist(lastLookupCall);
+  doLookup();   // refresh badges to show it's now on the list
+}
+
+// -- Watch list -----------------------------------------------------------
+
+async function loadWatchlist() {
+  const resp = await fetch('/api/watchlist');
+  const data = await resp.json();
+  renderWatchlist(data.callsigns || []);
+}
+
+function renderWatchlist(calls) {
+  const container = document.getElementById('watchlist-tags');
+  if (!calls.length) {
+    container.innerHTML = '<span class="empty-note">No callsigns on the watch list yet.</span>';
+    return;
+  }
+  container.innerHTML = calls.map(c => `
+    <span class="watchlist-tag">${c}<button onclick="removeFromWatchlist('${c}')" title="Remove">×</button></span>
+  `).join('');
+}
+
+async function addCallToWatchlist(call) {
+  const resp = await fetch('/api/watchlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callsign: call }),
+  });
+  const data = await resp.json();
+  renderWatchlist(data.callsigns || []);
+}
+
+async function addToWatchlist() {
+  const input = document.getElementById('watchlist-input');
+  const call = input.value.trim().toUpperCase();
+  if (!call) return;
+  await addCallToWatchlist(call);
+  input.value = '';
+}
+
+async function removeFromWatchlist(call) {
+  const resp = await fetch(`/api/watchlist/${encodeURIComponent(call)}`, { method: 'DELETE' });
+  const data = await resp.json();
+  renderWatchlist(data.callsigns || []);
+}
+
+// -- Awards ---------------------------------------------------------------
+
+async function loadAwards() {
+  const [wasResp, dxccResp] = await Promise.all([
+    fetch('/api/awards/states'),
+    fetch('/api/awards/dxcc'),
+  ]);
+  const was = await wasResp.json();
+  const dxcc = await dxccResp.json();
+
+  const wasBody = document.getElementById('was-table-body');
+  const bandOrder = ['160m','80m','60m','40m','30m','20m','17m','15m','12m','10m','6m'];
+  wasBody.innerHTML = bandOrder.filter(b => was.by_band[b]).map(band => {
+    const b = was.by_band[band];
+    return `<tr>
+      <td>${band}</td>
+      <td>${b.worked_count}/50</td>
+      <td class="missing-list">${b.missing.join(', ') || '— none missing —'}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('was-source').textContent =
+    `${was.qso_count} QSOs from ${was.source === 'rumlogng' ? 'RUMLogNG' : was.source === 'wsjtx_adif' ? 'WSJT-X local ADIF (fallback)' : 'no source available'}`;
+
+  document.getElementById('dxcc-total').textContent =
+    `${dxcc.total_entities_worked} DXCC entities worked overall, from ${dxcc.qso_count} QSOs`;
+  const dxccBody = document.getElementById('dxcc-table-body');
+  dxccBody.innerHTML = bandOrder.filter(b => dxcc.by_band[b] && dxcc.by_band[b].worked_count > 0).map(band => `
+    <tr><td>${band}</td><td>${dxcc.by_band[band].worked_count}</td></tr>
+  `).join('') || '<tr><td colspan="2" class="empty-note">No band data yet</td></tr>';
+}
+
+connectWs();
+loadWatchlist();
+loadAwards();
+</script>
+</body>
+</html>
