@@ -827,6 +827,12 @@ function enableAudio() {
   btn.textContent = 'Audio: Live';
   btn.classList.add('active');
   ensureAudioWorklet().then(() => {
+    // Chrome starts the AudioContext suspended when it was created without a
+    // user gesture (on-load enableAudio). Embedded in the /console panels the
+    // shell's clicks never reach this frame's context, so it stayed silent.
+    // Resume explicitly here — enableAudio() runs from the button click, which
+    // IS a valid gesture inside this frame — and again on any page gesture.
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     ensureAudioWs();
     send({ cmd: 'set_audio_enabled', enabled: true });
     sendAudioTargetFromRig(true);
@@ -1309,6 +1315,14 @@ requestAnimationFrame(drawSpectrum);
 // set_audio_enabled over /ws and /ws/audio) fires regardless, since
 // neither of those depends on AudioContext playback state.
 enableAudio();
+
+// Robustness for the embedded (/console panels) case: any user gesture
+// anywhere on this frame resumes a suspended AudioContext, so audio starts
+// even if the operator clicks the waterfall rather than the Audio button.
+['pointerdown', 'keydown'].forEach(evt =>
+  window.addEventListener(evt, () => {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }, { capture: true }));
 
 // Mouse-wheel adjustment for panadapter sliders.
 ['span-slider', 'floor-slider', 'gain-slider', 'avg-slider', 'contrast-slider'].forEach(id => {

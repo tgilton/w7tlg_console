@@ -114,7 +114,7 @@ class AudioDemodulator:
         self.target_freq_hz: Optional[float] = None
         self.rf_center_hz: Optional[float] = None
         self.mode = "USB"          # USB | LSB
-        self.bandwidth_hz = 2800.0
+        self.bandwidth_hz = 3000.0
         self.agc_gain = 1.0
         # Auto-leveling speed, driven by the console's AGC OFF/FAST/SLOW
         # buttons — repurposed to control this instead of the radio's own
@@ -122,7 +122,7 @@ class AudioDemodulator:
         # receiver and the radio's CAT-commanded AGC has no audible effect.
         # "off" bypasses auto-leveling entirely (manual_gain alone sets the
         # level, same as riding a real radio's AF gain knob with AGC off).
-        self.agc_mode = "slow"    # off | fast | slow
+        self.agc_mode = "fast"    # off | fast | slow  (operator default: fast)
         # Separate, user-facing master volume (RX Volume slider) — kept
         # independent of the AGC's own internal gain so "still too quiet"
         # has a direct, predictable knob instead of more guessing at the
@@ -223,7 +223,10 @@ class AudioDemodulator:
             "low_cut_hz": self.low_cut_hz,
             "bandwidth_hz": self.bandwidth_hz,
         }
-        self.agc_mode = "off"
+        # Operator preference: AGC fast in digital mode too (much louder for
+        # monitoring FT8). Was "off" for clean linear audio to WSJT-X — if FT8
+        # decode ever suffers, revert this one line to "off".
+        self.agc_mode = "fast"
         self.nr_enabled = False
         self.eq_enabled = False
         self.low_cut_hz = 0.0

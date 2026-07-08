@@ -944,7 +944,7 @@ async def handle_ws_command(text: str, ws: WebSocket):
             if sdr is not None and sdr.available:
                 sdr.audio.target_freq_hz = float(msg["freq_hz"])
                 sdr.audio.mode = msg.get("mode", "USB")
-                sdr.audio.bandwidth_hz = float(msg.get("bandwidth_hz", 2400))
+                sdr.audio.bandwidth_hz = float(msg.get("bandwidth_hz", 3000))
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))

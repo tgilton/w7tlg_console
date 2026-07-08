@@ -915,20 +915,20 @@ input[type=range]::-webkit-slider-thumb:active {
       <div class="control-row" style="margin-bottom:6px">
         <span class="control-label">WIDTH</span>
         <div class="preamp-btns">
-          <button class="btn active" id="filt-NAR" onclick="setFilterWidthMode('NAR')">NAR</button>
-          <button class="btn" id="filt-WID" onclick="setFilterWidthMode('WID')">WID</button>
+          <button class="btn" id="filt-NAR" onclick="setFilterWidthMode('NAR')">NAR</button>
+          <button class="btn active" id="filt-WID" onclick="setFilterWidthMode('WID')">WID</button>
         </div>
       </div>
       <div class="control-row">
         <span class="control-label">&nbsp;</span>
         <div class="power-slider-wrap">
-          <input type="range" min="200" max="3000" step="50" value="1800" id="width-slider"
+          <input type="range" min="200" max="3000" step="50" value="3000" id="width-slider"
             oninput="onWidthSlider(this.value)"
             onmousedown="_widthDragging=true"
             onmouseup="_sliderRelease('_widthDragging', ()=>setWidth(this.value))"
             ontouchstart="_widthDragging=true"
             ontouchend="_sliderRelease('_widthDragging', ()=>setWidth(this.value))">
-          <span class="power-value" id="width-val">1800Hz</span>
+          <span class="power-value" id="width-val">3000Hz</span>
         </div>
       </div>
 
@@ -1901,11 +1901,11 @@ function setMode(btn) {
 // the radio (try a value, read it back with the rig's own width control) and
 // narrow these down once confirmed. FM has no variable-width control.
 const FILTER_RANGES = {
-  USB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 2400 },
-  LSB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 2400 },
+  USB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 3000 },
+  LSB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 3000 },
   CW:     { NAR: [50, 500],    WID: [500, 2400],  narDefault: 300,  widDefault: 1200 },
   AM:     { NAR: [2500, 6000], WID: [6000, 9000], narDefault: 6000, widDefault: 9000 },
-  PKTUSB: { NAR: [50, 1500],   WID: [1500, 3000], narDefault: 500,  widDefault: 2400 },
+  PKTUSB: { NAR: [50, 1500],   WID: [1500, 3000], narDefault: 500,  widDefault: 3000 },
   FM:     null,
 };
 
