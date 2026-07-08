@@ -1850,9 +1850,19 @@ function updateFilterWidth(rig) {
   narBtn.classList.remove('disabled');
   widBtn.classList.remove('disabled');
 
-  const pb = rig.passband_hz || range.narDefault;
-  // Infer NAR vs WID from which bracket the current passband falls into
-  const which = pb >= range.WID[0] ? 'WID' : 'NAR';
+  // DATA-U (PKTUSB) is a wide monitoring mode here: the SDR (not the radio) is
+  // the receiver and its digital-mode audio runs the full 0-3kHz, so the width
+  // control sits at WID/widDefault (3kHz) instead of mirroring the FT-991A's
+  // own narrow DATA-U IF filter (reported as ~500Hz, or 0 -> narDefault=500).
+  // Other modes still infer NAR/WID from the rig's actual reported passband.
+  let pb, which;
+  if (mode === 'PKTUSB') {
+    which = 'WID';
+    pb = (rig.passband_hz && rig.passband_hz >= range.WID[0]) ? rig.passband_hz : range.widDefault;
+  } else {
+    pb = rig.passband_hz || range.narDefault;
+    which = pb >= range.WID[0] ? 'WID' : 'NAR';
+  }
   _widthMode = which;
   narBtn.className = 'btn' + (which === 'NAR' ? ' active' : '') + (range ? '' : ' disabled');
   widBtn.className = 'btn' + (which === 'WID' ? ' active' : '') + (range ? '' : ' disabled');
