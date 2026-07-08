@@ -148,10 +148,15 @@ class AudioDemodulator:
         self._eq_key = None
         self._eq_zi: Optional[np.ndarray] = None
 
-        # Noise reduction (DeepFilterNet3) — on by default for voice
-        # listening if the model loaded; digital mode forces this off
-        # (see enter_digital_mode).
-        self.nr_enabled = _df_enhance is not None
+        # Noise reduction (DeepFilterNet3) — OFF by default; opt-in via the
+        # UI toggle. DeepFilterNet is a *speech* denoiser: measured against
+        # this receiver's audio it attenuates anything non-speech by ~40dB —
+        # band noise, CW, tuning tones, weak signals all get crushed to
+        # silence, so as an always-on default it made voice/CW modes sound
+        # dead (digital mode already force-bypasses it, which is why FT8
+        # monitoring still had audio). Leave it available for cleaning up a
+        # genuinely noisy SSB voice contact, but don't impose it by default.
+        self.nr_enabled = False
         self.nr_atten_limit_db = 40.0   # higher = more aggressive suppression
         self._nr_model = None
         self._nr_df_state = None
