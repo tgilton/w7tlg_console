@@ -47,6 +47,13 @@ class SdrClient:
     def __init__(
         self,
         rf_freq_hz: float = 14_074_000.0,
+        # 2 MHz native capture. A 6 MHz wide-view experiment (2026-07-08) tripled
+        # this and pushed CPU ~6x (52%), starving the audio-demod thread — which
+        # decimates from this full rate in one stage, so its FIR got 3x longer
+        # over 3x the samples and could no longer produce 16 kHz audio in real
+        # time (stutter, no audible signals). Reverted. A true wide view needs
+        # the audio path decoupled from the capture rate (two-stage decimation)
+        # before fs can go up. Divides 16 kHz exactly (decim_factor 125).
         sample_rate_hz: float = 2_000_000.0,
         fft_size: int = 65536,
         display_fps: float = 18.0,
@@ -132,10 +139,31 @@ class SdrClient:
 
     async def start(self):
         self._loop = asyncio.get_running_loop()
-        try:
-            await self._loop.run_in_executor(None, self._open_and_init)
-        except Exception as e:
-            logger.warning(f"SDR unavailable: {e}")
+        # The RSPdx often returns sdrplay_api_Fail on Init if a previous
+        # session's device handle hasn't fully settled — classically a quick
+        # console restart, where the prior process's Uninit and this process's
+        # Init land within a few seconds of each other. A single attempt then
+        # leaves the SDR dead until someone physically replugs the USB. Retry
+        # with backoff instead: _open_and_init() calls _safe_release() on every
+        # failure, so each attempt starts clean, and the growing gaps give the
+        # device time to recover on its own. Delays are BEFORE each retry.
+        retry_delays_s = [0.0, 3.0, 5.0, 7.0]
+        last_err = None
+        for i, delay in enumerate(retry_delays_s):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                await self._loop.run_in_executor(None, self._open_and_init)
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    f"SDR init attempt {i + 1}/{len(retry_delays_s)} failed: {e}")
+        if last_err is not None:
+            logger.warning(
+                f"SDR unavailable after {len(retry_delays_s)} attempts "
+                f"(device may need a USB replug): {last_err}")
             self.available = False
             self.status = "unavailable"
             return
