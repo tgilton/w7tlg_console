@@ -402,7 +402,13 @@ function connectWs() {
       if (rigPtt) txSilenceStart(); else txSilenceEnd();
       rigFreqHz = rig.freq_hz ?? rigFreqHz;
       rigBand = rig.band ?? rigBand;
-      rigMode = rig.near_digital_freq ? 'PKTUSB' : (rig.mode || rigMode);
+      // The radio's ACTUAL mode is authoritative. Previously, being within
+      // 2kHz of a band's FT8 frequency forced rigMode to 'PKTUSB', which made
+      // handleDigitalViewMode() lock the view to 3000Hz and refuse Whole Band
+      // even when the radio was in USB/LSB/CW — you had to dial off 14.074 to
+      // escape it. Now the digital view engages only in a real DATA-U/L mode
+      // (rig.is_digital), so voice/CW modes near an FT8 freq pan/zoom freely.
+      rigMode = rig.mode || rigMode;
       rigPassbandHz = rig.passband_hz ?? rigPassbandHz;
       // Don't update rigIsDigital during TX: the rig can report CW for the
       // TX VFO-B in split mode, which would switch frame selection from
