@@ -10,8 +10,6 @@ Usage:
 import argparse
 import asyncio
 import logging
-import signal
-import sys
 
 import uvicorn
 from dotenv import load_dotenv
@@ -31,18 +29,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def handle_shutdown(sig, frame):
-    """
-    Clean shutdown handler.
-    Called on SIGINT (Ctrl+C) or SIGTERM (kill).
-    Allows uvicorn's lifespan to run cleanup (closes serial port cleanly).
-    """
-    logger.info(f"Received signal {sig} — shutting down cleanly...")
-    # uvicorn handles the actual shutdown via its own signal handling
-    # We just need to ensure we don't abruptly kill the process
-    sys.exit(0)
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='W7TLG Station Console')
     parser.add_argument('--host', default='127.0.0.1',
@@ -53,9 +39,14 @@ if __name__ == '__main__':
                         help='Auto-reload on code changes (development)')
     args = parser.parse_args()
 
-    # Register clean shutdown handlers
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    # SIGINT (Ctrl+C) is handled by uvicorn natively
+    # Signal handling is left entirely to uvicorn, which installs graceful
+    # shutdown handlers for BOTH SIGINT (Ctrl+C) and SIGTERM (kill) and runs
+    # the app's lifespan shutdown on either — that's what releases the SDR
+    # (sdrplay_api_Uninit) and closes the ACOM serial port cleanly. A custom
+    # SIGTERM handler used to live here and just called sys.exit(0), which
+    # preempted uvicorn's handler so lifespan shutdown never ran on `kill` —
+    # leaving the RSPdx-R2 stuck in the streaming state, so the next start
+    # failed with sdrplay_api_Fail until the device was physically replugged.
 
     print(f"\n{'='*50}")
     print(f"  W7TLG Station Console")
