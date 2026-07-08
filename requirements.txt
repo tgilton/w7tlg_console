@@ -8,7 +8,41 @@ scipy==1.18.0
 sounddevice==0.5.5
 torch==2.12.1
 torchaudio==2.11.0
-deepfilternet==0.5.6
 python-dotenv==1.2.2
 httpx==0.28.1
 anthropic==0.113.0
+
+# --- DeepFilterNet3 noise reduction ---------------------------------------
+# deepfilternet's numpy-2-safe runtime deps, installed normally:
+appdirs==1.4.4
+loguru==0.7.3
+requests==2.34.2
+#
+# deepfilternet==0.5.6 and deepfilterlib==0.5.6 are deliberately NOT normal
+# pins here. Their published metadata caps numpy<2.0 (pre-NumPy-2 ABI-break
+# packaging conservatism from mid-2024, never updated; 0.5.6 is the final
+# release). Listing them normally makes pip refuse to resolve against the
+# numpy==2.4.6 pin above and the ENTIRE install fails.
+#
+# That numpy cap is stale, not real: verified 2026-07-07 that DeepFilterNet3
+# loads and enhances audio correctly under numpy 2.4.6 — the FFI boundary
+# only marshals arrays across to the compiled Rust core (deepfilterlib), with
+# no NumPy C-API interop that a 2.0 ABI break could touch.
+#
+# Install them AFTER `pip install -r requirements.txt`, bypassing the stale
+# metadata cap with --no-deps (requires Rust/cargo on PATH — deepfilterlib
+# compiles from source; no prebuilt wheel exists for py3.12 / macOS-arm64):
+#
+#     pip install deepfilterlib==0.5.6 --no-deps
+#     pip install deepfilternet==0.5.6 --no-deps
+#
+# or just run:  tools/install_deepfilternet.sh
+#
+# DO NOT "fix" this by adding a plain `deepfilternet==0.5.6` line — that
+# reintroduces the numpy conflict and breaks a clean install for everyone.
+#
+# Note: df.io imports torchaudio.backend.common.AudioMetaData, removed in
+# torchaudio 2.x; sdr/audio_demod.py installs a shim for that dead import. NR
+# is optional at runtime — if these two packages are absent, audio_demod logs
+# a warning and disables noise reduction gracefully.
+# --------------------------------------------------------------------------
