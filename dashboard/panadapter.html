@@ -482,7 +482,11 @@ function send(obj) {
 function updateSdrBadge() {
   const badge = document.getElementById('sdr-badge');
   if (!sdrAvailable) {
-    badge.textContent = 'SDR UNAVAILABLE';
+    // The dominant failure mode is a silent IQ-stream stall that wedges the
+    // device (server-side stall watchdog catches it, but the only thing that
+    // clears the wedge is re-enumerating the USB) — so make the badge tell
+    // the operator the fix instead of leaving them staring at a dead panel.
+    badge.textContent = 'SDR UNAVAILABLE — REPLUG USB';
     badge.className = 'sdr-badge unavailable';
   } else if (rigPtt) {
     badge.textContent = 'SDR TX — DISCONNECTED';
@@ -496,6 +500,23 @@ function updateSdrBadge() {
 // ── Spectrum /ws/spectrum — binary frames ────────────────────
 let specWs = null;
 let sdrAvailable = false;
+let lastSpectrumAt = 0;
+// Availability is inferred purely from frames arriving — the spectrum WS
+// stays open even when the server tears the SDR pipeline down (device
+// glitch/removal), so onclose never fires to tell us. Without this, the
+// badge sticks on "LIVE" and the waterfall freezes on the last frame with
+// no indication. Frames flow continuously in every live mode (including
+// during TX, when they're received but not rendered), so a multi-second gap
+// means the device is genuinely gone. When the server recovers the device,
+// frames resume and the onmessage handler flips us back to LIVE on its own.
+const SPECTRUM_STALE_MS = 3000;
+setInterval(() => {
+  if (sdrAvailable && specWs && specWs.readyState === WebSocket.OPEN
+      && performance.now() - lastSpectrumAt > SPECTRUM_STALE_MS) {
+    sdrAvailable = false;
+    updateSdrBadge();
+  }
+}, 1000);
 let pendingHeader = null;
 let latestFrame = null;   // { centerFreqHz, spanHz, data: Float32Array } — full capture, ~2MHz wide
 let latestFineFrame = null;   // digital-mode fine spectrum — 16kHz wide, centered on the audio target
@@ -526,8 +547,8 @@ function connectSpectrumWs() {
       return;
     }
     if (!pendingHeader) return;
-    sdrAvailable = true;
-    updateSdrBadge();
+    lastSpectrumAt = performance.now();
+    if (!sdrAvailable) { sdrAvailable = true; updateSdrBadge(); }
     const data = new Float32Array(evt.data);
     const frame = {
       centerFreqHz: pendingHeader.center_freq_hz,

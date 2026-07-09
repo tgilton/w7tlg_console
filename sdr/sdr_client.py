@@ -95,6 +95,26 @@ class SdrClient:
         self._stop_event = threading.Event()
         self._consumer_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # A device-removed/failure event fires on the vendor callback thread
+        # and can arrive in a burst (removed + failure together). This gate
+        # collapses that burst into exactly one in-flight recovery attempt,
+        # set/cleared under the lock from two different threads.
+        self._recovery_lock = threading.Lock()
+        self._recovery_pending = False
+        # Stall watchdog: the RSPdx can silently stop delivering IQ mid-session
+        # WITHOUT firing a DeviceRemoved/DeviceFailure event — the vendor
+        # callback thread just goes quiet and the device wedges (confirmed:
+        # GetDevices still lists it, but Init fails until a USB replug). The
+        # event path above never fires for this, so without a data-liveness
+        # check the app sits forever holding a dead session. _last_sample_at is
+        # stamped on every callback; _stall_watchdog trips if it goes stale.
+        self._last_sample_at = 0.0
+        self._watchdog_task: Optional[asyncio.Task] = None
+        # 2 MHz sustained means callbacks arrive continuously (thousands/s),
+        # and they keep coming during TX too (the antenna switch mutes the
+        # input, not the stream) — so any multi-second gap is a real stall,
+        # not TX or normal jitter.
+        self._stall_timeout_s = 3.0
         self._spectrum_callbacks: list[SpectrumCallback] = []
         self._window = np.hanning(fft_size).astype(np.float32)
         # 0dBFS reference: the coherent FFT magnitude a full-scale (32767)
@@ -139,14 +159,25 @@ class SdrClient:
 
     async def start(self):
         self._loop = asyncio.get_running_loop()
-        # The RSPdx often returns sdrplay_api_Fail on Init if a previous
-        # session's device handle hasn't fully settled — classically a quick
-        # console restart, where the prior process's Uninit and this process's
-        # Init land within a few seconds of each other. A single attempt then
-        # leaves the SDR dead until someone physically replugs the USB. Retry
-        # with backoff instead: _open_and_init() calls _safe_release() on every
-        # failure, so each attempt starts clean, and the growing gaps give the
-        # device time to recover on its own. Delays are BEFORE each retry.
+        if not await self._init_with_retries():
+            return
+        self._start_pipeline()
+        logger.info("SdrClient started")
+
+    async def _init_with_retries(self) -> bool:
+        """Open + Init the device, retrying with backoff. On success sets
+        available/live and returns True; on exhaustion sets unavailable and
+        returns False. Shared by first start() and post-glitch recovery.
+
+        The RSPdx often returns sdrplay_api_Fail on Init if a previous
+        session's device handle hasn't fully settled — classically a quick
+        console restart, where the prior process's Uninit and this process's
+        Init land within a few seconds of each other, or a USB glitch where
+        the device re-enumerates a beat after it dropped. A single attempt
+        then leaves the SDR dead until someone physically replugs the USB.
+        Retry with backoff instead: _open_and_init() calls _safe_release() on
+        every failure, so each attempt starts clean, and the growing gaps give
+        the device time to recover on its own. Delays are BEFORE each retry."""
         retry_delays_s = [0.0, 3.0, 5.0, 7.0]
         last_err = None
         for i, delay in enumerate(retry_delays_s):
@@ -154,22 +185,23 @@ class SdrClient:
                 await asyncio.sleep(delay)
             try:
                 await self._loop.run_in_executor(None, self._open_and_init)
-                last_err = None
-                break
+                self.available = True
+                self.status = "live"
+                return True
             except Exception as e:
                 last_err = e
                 logger.warning(
                     f"SDR init attempt {i + 1}/{len(retry_delays_s)} failed: {e}")
-        if last_err is not None:
-            logger.warning(
-                f"SDR unavailable after {len(retry_delays_s)} attempts "
-                f"(device may need a USB replug): {last_err}")
-            self.available = False
-            self.status = "unavailable"
-            return
+        logger.warning(
+            f"SDR unavailable after {len(retry_delays_s)} attempts "
+            f"(device may need a USB replug / daemon restart): {last_err}")
+        self.available = False
+        self.status = "unavailable"
+        return False
 
-        self.available = True
-        self.status = "live"
+    def _start_pipeline(self):
+        """Spin up the consumer/audio/digital threads against a device that
+        _open_and_init has just brought live. Non-blocking; safe on the loop."""
         self._stop_event.clear()
         self._consumer_thread = threading.Thread(
             target=self._consumer_loop, name="sdr-fft", daemon=True)
@@ -177,18 +209,38 @@ class SdrClient:
         self.audio.rf_center_hz = self.rf_freq_hz
         self.audio.start(self._loop)
         self.digital_audio.start()
-        logger.info("SdrClient started")
+        # Fresh baseline so the watchdog doesn't trip on the gap before the
+        # first callback arrives.
+        self._last_sample_at = time.monotonic()
+        self._watchdog_task = self._loop.create_task(self._stall_watchdog())
+
+    async def _teardown_pipeline(self):
+        """Stop the consumer/audio/digital threads and release the device.
+        Every blocking step (thread joins up to 3s each, plus the vendor
+        Uninit/Close) runs on the executor as one unit so the event loop is
+        never stalled — important on the device-removed path, which fires
+        while the UI is live and waiting on it."""
+        self._stop_event.set()
+        if self._watchdog_task is not None:
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
+        consumer = self._consumer_thread
+        self._consumer_thread = None
+
+        def _blocking_teardown():
+            self.audio.stop()
+            self.digital_audio.stop()
+            if consumer:
+                consumer.join(3.0)
+            self._close()
+
+        await self._loop.run_in_executor(None, _blocking_teardown)
+        self._avg_power = None
 
     async def stop(self):
         if not self.available:
             return
-        self._stop_event.set()
-        self.audio.stop()
-        self.digital_audio.stop()
-        if self._consumer_thread:
-            await self._loop.run_in_executor(None, self._consumer_thread.join, 3.0)
-        await self._loop.run_in_executor(None, self._close)
-        self._avg_power = None
+        await self._teardown_pipeline()
         self.available = False
         self.status = "stopped"
         logger.info("SdrClient stopped")
@@ -299,6 +351,9 @@ class SdrClient:
     # ------------------------------------------------------------------
 
     def _on_stream_data(self, xi, xq, params, num_samples, reset, cb_context):
+        # Liveness stamp for _stall_watchdog — a plain float write from the
+        # vendor callback thread, GIL-atomic, no lock needed on the read side.
+        self._last_sample_at = time.monotonic()
         i = np.ctypeslib.as_array(xi, shape=(num_samples,)).astype(np.int16, copy=True)
         q_arr = np.ctypeslib.as_array(xq, shape=(num_samples,)).astype(np.int16, copy=True)
         try:
@@ -316,32 +371,87 @@ class SdrClient:
         self.audio.feed(i, q_arr)
 
     def _on_event(self, event_id, tuner, params, cb_context):
+        # Both events mean "the stream against this device is now invalid."
+        # A removed event is usually a USB glitch (drop + re-enumerate); a
+        # failure is a transient fault. Either way, don't sit half-dead
+        # streaming garbage from a gone device until a full app restart —
+        # tear down and try to come back in place. _schedule_recovery
+        # collapses a removed+failure burst into one attempt.
         if event_id == capi.Event_DeviceRemoved:
-            if self.available:
-                logger.warning("SDR device removed — stopping stream and releasing resources")
-                self.available = False
-                self.status = "unavailable"
-                if self._loop is not None:
-                    try:
-                        asyncio.run_coroutine_threadsafe(self._handle_device_removed(), self._loop)
-                    except RuntimeError:
-                        pass   # loop closing/closed during shutdown
+            self._schedule_recovery("device removed")
         elif event_id == capi.Event_DeviceFailure:
-            logger.warning("SDR device failure event")
+            self._schedule_recovery("device failure")
 
-    async def _handle_device_removed(self):
-        """Previously this just logged a warning forever while the stream
-        kept trying to run against a device that was already gone — left
-        the session in a half-dead state with no way to recover short of a
-        full app restart. Now actually tears down like a normal stop()."""
-        self._stop_event.set()
-        self.audio.stop()
-        self.digital_audio.stop()
-        if self._consumer_thread:
-            await self._loop.run_in_executor(None, self._consumer_thread.join, 3.0)
-        await self._loop.run_in_executor(None, self._close)
-        self._avg_power = None
-        logger.info("SdrClient cleaned up after device removal")
+    def _schedule_recovery(self, reason: str):
+        """Kick off recovery from the vendor callback thread. Idempotent
+        across a burst of events: the first caller wins the gate and the
+        rest no-op until that attempt finishes."""
+        with self._recovery_lock:
+            if self._recovery_pending:
+                return
+            self._recovery_pending = True
+        self.available = False
+        self.status = "unavailable"
+        logger.warning(f"SDR {reason} — tearing down and attempting recovery")
+        if self._loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(self._recover(), self._loop)
+                return
+            except RuntimeError:
+                pass   # loop closing/closed during shutdown
+        with self._recovery_lock:
+            self._recovery_pending = False
+
+    async def _recover(self):
+        """Tear the pipeline down, then re-init in place with backoff. A
+        transient glitch re-enumerates within a second or two and the
+        _init_with_retries backoff catches it, resuming the stream with no
+        app restart. A genuine unplug exhausts the retries and lands in a
+        clean 'unavailable' (the frontend's staleness watchdog surfaces that
+        instead of a frozen-but-'LIVE' panel)."""
+        try:
+            await self._teardown_pipeline()
+            if await self._init_with_retries():
+                self._start_pipeline()
+                logger.info("SDR recovered — stream resumed")
+            else:
+                logger.warning(
+                    "SDR recovery failed — device likely gone "
+                    "(needs replug / daemon restart)")
+        except Exception:
+            logger.exception("SDR recovery raised — leaving device unavailable")
+            self.available = False
+            self.status = "unavailable"
+        finally:
+            with self._recovery_lock:
+                self._recovery_pending = False
+
+    async def _stall_watchdog(self):
+        """Trip when the IQ callback goes silent while we believe we're live.
+        The RSPdx can stop delivering samples mid-session without raising any
+        DeviceRemoved/DeviceFailure event — the _on_event path never fires for
+        this — so data-liveness is the only reliable signal for it. On a trip
+        we route through the same _schedule_recovery path as a real event: it
+        tears the dead session down (freeing the device, so a later restart
+        isn't fighting a held handle) and attempts one in-place re-init. A
+        transient stall resumes; a hard wedge keeps failing Init and lands in a
+        clean 'unavailable', where the frontend badge tells the operator to
+        replug the USB (the only thing that clears it — confirmed by probe)."""
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                if not self.available:
+                    return
+                gap = time.monotonic() - self._last_sample_at
+                if gap > self._stall_timeout_s:
+                    logger.warning(
+                        f"SDR IQ stream stalled — no samples for {gap:.1f}s and "
+                        f"no device event fired; tearing down (device likely "
+                        f"wedged — a USB replug is what clears this)")
+                    self._schedule_recovery("stream stalled")
+                    return
+        except asyncio.CancelledError:
+            pass
 
     # ------------------------------------------------------------------
     # Internal: dedicated consumer thread — FFT pipeline
