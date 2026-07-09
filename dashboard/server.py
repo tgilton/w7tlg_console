@@ -33,7 +33,7 @@ from config.station_profile import station_profile
 from rig.rigctld_client import RigctldClient, RigState
 from sdr.sdr_client import SdrClient
 from wsjtx.udp_listener import wsjtx_listener
-from wsjtx.protocol import Status as WsjtxStatus
+from wsjtx.protocol import Status as WsjtxStatus, LoggedAdif
 from wsjtx.qso_logger import qso_telemetry_logger
 from wsjtx.award_tracker import award_tracker
 from wsjtx.spotter import spotter, SpotAlert
@@ -302,6 +302,7 @@ async def on_wsjtx_status(status: WsjtxStatus):
             "tx_message": status.tx_message,
         },
     })
+
 
 
 async def on_audio_frame(audio_bytes: bytes):

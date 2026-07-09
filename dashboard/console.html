@@ -4,31 +4,34 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>W7TLG Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 /*
-  Shell page for the unified single-window console (Phase A).
+  Unified single-window console (Phase B — replaces the Phase A iframe
+  shell). The previous version of this file (see git history at commit
+  5840933) deliberately used three iframes to isolate index.html,
+  panadapter.html and monitor.html's JS scopes from each other, because
+  panadapter.html carries TX-audio-mute timing, feedback-loop prevention,
+  and digital-mode view locking as module-scoped globals that must not
+  collide with anything else on the page.
 
-  Deliberately built from iframes pointing at the existing, already-working
-  /panadapter, / (dashboard), /monitor routes rather than merging their JS
-  into one shared scope. Those pages carry a lot of hard-won, safety-tuned
-  logic (TX audio mute timing, feedback-loop prevention, digital-mode view
-  locking) as top-level global-scope variables — inlining two ~1000+ line
-  scripts into one global scope risks silent variable collisions and
-  regressions in exactly the code that must not regress. Iframes give true
-  isolation (separate window scope, separate WebSocket connections) at the
-  cost of a handful of redundant /ws connections, which is irrelevant
-  overhead for a single-operator LAN console.
+  This version merges everything into one document but keeps that same
+  isolation guarantee by construction rather than by iframe boundary: the
+  Panadapter module below is an IIFE with its own private `let`s (ported
+  near-verbatim from panadapter.html), owns its own /ws, /ws/spectrum and
+  /ws/audio connections directly, and is the only thing that ever touches
+  its own DOM subtree. RigControl is a separate IIFE the same way. Nothing
+  here shares a mutable global across modules except the tiny read-only
+  StatusBar/Toast display helpers, which never influence TX behavior. See
+  ui-redesign/SPEC.md for the full isolation rationale (note: SPEC.md
+  describes a diversity-combiner panel and a WSJT-X decode table that were
+  both later cut at the operator's request — this file is the current
+  source of truth, not that doc).
 
-  This also solves the monitor trend-logging question for free: hidden
-  (but still-mounted) iframes keep running their JS and keep their
-  WebSocket open even while a different tab is visually active, so
-  trend_csv_logger.py's existing heartbeat-based gate needs no changes —
-  logging now runs for as long as this shell page is open, matching what
-  was agreed (log whenever the console is open), without touching that
-  file at all.
-
-  This page is served at /console — a new route, additive only. /,
-  /panadapter, /monitor are all untouched and still work standalone.
+  /monitor, /panadapter, /propagation, /spotseek, /advisor remain separate,
+  untouched, fully-functional standalone routes — linked from the status
+  bar, not embedded.
 */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -54,243 +57,2097 @@
 }
 
 html, body {
-  height: 100%;
+  min-height: 100%;
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
   font-size: 13px;
-  overflow: hidden;   /* each iframe scrolls internally; the shell itself never does */
+  line-height: 1.4;
 }
 
-.shell {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-}
-
-.shell-header {
-  background: var(--surface);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--border2);
-  flex: 0 0 auto;
-}
-
-.callsign {
-  font-family: var(--mono);
-  font-size: 0.9rem;
-  font-weight: 700;
-  color: var(--cyan);
-  letter-spacing: 0.12em;
-}
-
-.shell-header-links {
-  display: flex;
-  gap: 12px;
-  font-family: var(--mono);
-  font-size: 0.7rem;
-}
-
-.shell-header-links a {
-  color: var(--muted);
-  text-decoration: none;
-}
-.shell-header-links a:hover { color: var(--cyan); }
-
-.main {
-  flex: 1 1 auto;
-  display: flex;
-  min-height: 0;   /* let children actually shrink instead of overflowing the flex box */
-}
-
-.pane-left {
-  flex: 0 0 auto;
-  min-width: 280px;
-  max-width: 80vw;
-  height: 100%;
-  position: relative;
-}
-
-.pane-left iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  display: block;
-}
-
-.resize-handle {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 100%;
+.console {
+  display: grid;
+  grid-template-columns: 190px 1fr 220px;
+  grid-template-areas:
+    "status   status   status"
+    "modedsp  center   bandamp";
+  gap: 1px;
   background: var(--border);
-  cursor: col-resize;
-  position: relative;
-}
-.resize-handle:hover, .resize-handle.dragging { background: var(--cyan-dim); }
-.resize-handle::after {
-  content: '';
-  position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  width: 2px; height: 32px;
-  background: var(--border2);
-  border-radius: 1px;
+  align-items: start;
 }
 
-.pane-right {
-  flex: 1 1 auto;
-  min-width: 320px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.tab-bar {
-  flex: 0 0 auto;
-  display: flex;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border2);
-}
-
-.tab-btn {
-  font-family: var(--mono);
-  font-size: 0.75rem;
+.panel { background: var(--surface); padding: 12px; min-width: 0; }
+.panel h2, .section-label {
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 10px 18px;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
+  color: var(--label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+
+/* ── Status bar ─────────────────────────────────────────── */
+.panel-status {
+  grid-area: status;
+  display: flex; align-items: center; gap: 16px;
+  padding: 8px 16px;
+  flex-wrap: wrap;
+}
+.app-name { font-family: var(--mono); font-weight: 700; font-size: 0.9rem; color: var(--cyan); letter-spacing: 0.1em; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--red); }
+.dot.on { background: var(--green); }
+.status-item { font-size: 0.7rem; color: var(--label); display: flex; align-items: center; font-family: var(--mono); }
+.status-item.on { color: var(--green); }
+.spacer { flex: 1; }
+.freq-summary { font-family: var(--mono); font-size: 0.75rem; color: var(--cyan); }
+.nav-link {
+  font-family: var(--mono); font-size: 0.68rem; color: var(--cyan);
+  text-decoration: none; border: 1px solid var(--cyan-dim); border-radius: 3px;
+  padding: 3px 8px;
+}
+.nav-link:hover { background: var(--cyan-dim); }
+
+.inhibit-banner {
+  display: none;
+  font-family: var(--mono); font-size: 0.7rem; color: var(--red);
+  border: 1px solid var(--red); border-radius: 3px; padding: 3px 8px;
+  animation: pulse-border 1.5s infinite;
+}
+.inhibit-banner.visible { display: inline-block; }
+@keyframes pulse-border { 0%,100% { border-color: var(--red); } 50% { border-color: #ff8888; } }
+
+/* ── Buttons ────────────────────────────────────────────── */
+.btn {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 5px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: var(--bg);
   color: var(--label);
   cursor: pointer;
+  text-align: center;
+  user-select: none;
+  transition: all 0.1s;
 }
-.tab-btn:hover { color: var(--text); }
-.tab-btn.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+.btn:hover:not(.disabled) { border-color: var(--cyan-dim); color: var(--text); }
+.btn.active { background: #0d2538; border-color: var(--cyan); color: var(--cyan); }
+.btn.active-amber { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
+.btn.active-green { background: var(--green-dim); border-color: var(--green); color: var(--green); }
+.btn.danger { border-color: #6b2020; color: #ff6b6b; background: #2a0d0d; }
+.btn.danger:hover { border-color: var(--red); color: var(--red); }
+.btn.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
 
-.tab-content {
-  flex: 1 1 auto;
-  position: relative;
-  min-height: 0;
+.badge {
+  font-family: var(--mono); font-size: 0.65rem; font-weight: 600;
+  padding: 2px 6px; border-radius: 3px; letter-spacing: 0.04em;
+}
+.badge-band   { background: var(--cyan-dim); color: var(--cyan); }
+.badge-mode   { background: #1e2a38; color: #7db8d8; }
+.badge-ptt-rx { background: var(--green-dim); color: var(--green); }
+.badge-ptt-tx { background: var(--amber-dim); color: var(--amber); animation: pulse-tx 0.8s infinite; }
+.badge-digital { background: #1a2a1a; color: #4f8; }
+.badge-digital-audio-active { background: #1a2a1a; color: #4f8; }
+.badge-digital-audio-inactive { background: #2a1a1a; color: #f88; }
+.badge-split { background: #3a2a00; color: #f90; animation: pulse-tx 1.2s infinite; }
+@keyframes pulse-tx { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+/* ── Mode / DSP column ──────────────────────────────────── */
+.panel-modedsp { grid-area: modedsp; }
+.mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 10px; }
+.slider-label { font-size: 0.65rem; color: var(--label); margin: 6px 0 3px; text-transform: uppercase; letter-spacing: 0.06em; }
+input[type=range] { width: 100%; accent-color: var(--cyan); cursor: pointer; }
+.dsp-toggle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; margin-top: 6px; }
+.dsp-toggle {
+  padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border2);
+  background: var(--bg); color: var(--muted); font-family: var(--mono);
+  font-size: 0.65rem; font-weight: 600; cursor: pointer;
+}
+.dsp-toggle.active { background: var(--cyan-dim); border-color: var(--cyan); color: var(--cyan); }
+.dsp-agc-btn {
+  padding: 4px 6px; border-radius: 3px; border: 1px solid var(--border2);
+  background: var(--bg); color: var(--muted); font-family: var(--mono);
+  font-size: 0.62rem; font-weight: 600; cursor: pointer;
+}
+.dsp-agc-btn.active { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
+.dsp-val { font-family: var(--mono); font-size: 0.65rem; color: var(--muted); min-width: 16px; text-align: right; }
+.dsp-slider-mini { width: 60px; }
+
+/* ── Center column ──────────────────────────────────────── */
+.panel-center { grid-area: center; }
+.freq-readout { font-family: var(--mono); font-size: 3.2rem; font-weight: 700; color: var(--green); letter-spacing: 0.03em; transition: color 0.15s; text-align: center; }
+.freq-readout.tx { color: var(--amber); }
+.vfo-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 8px; }
+
+.smeter-bar-wrap { position: relative; height: 14px; background: #0a0d11; border: 1px solid var(--border2); border-radius: 3px; overflow: hidden; margin-bottom: 2px; }
+.smeter-bar { height: 100%; width: 0%; background: var(--green); transition: width 0.15s ease-out, background-color 0.15s ease-out; }
+.smeter-bar.over-s9 { background: var(--red); }
+.smeter-readout { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 0.68rem; color: var(--muted); margin-bottom: 8px; }
+.smeter-readout .val { color: var(--cyan); font-weight: 600; }
+#s9-cal-input {
+  font-family: var(--mono); font-size: 0.65rem; background: #0a0d11;
+  border: 1px solid var(--border2); color: var(--text); padding: 1px 4px;
+  border-radius: 2px; width: 40px;
 }
 
-.tab-pane {
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  border: none;
-  display: none;
+.tx-meters { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; transition: opacity 0.15s; }
+.tx-meters.inactive { opacity: 0.35; }
+.tx-meter-label { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.tx-meter-bar-wrap { height: 10px; background: #0a0d11; border: 1px solid var(--border2); border-radius: 2px; overflow: hidden; margin: 2px 0; }
+.tx-meter-bar { height: 100%; width: 0%; border-radius: 2px; transition: width 0.12s ease-out; }
+.tx-meter-bar.alc, .tx-meter-bar.po { background: var(--cyan); }
+.meter-good  { background: var(--green) !important; }
+.meter-warn  { background: var(--yellow) !important; }
+.meter-alert { background: var(--red) !important; }
+.tx-meter-value { font-family: var(--mono); font-size: 0.65rem; color: var(--text); }
+
+.scope-box { background: #0a0d11; border: 1px solid var(--border2); border-radius: 4px; position: relative; overflow: hidden; }
+.panadapter-box { height: 130px; margin-bottom: 4px; cursor: grab; }
+.panadapter-box.dragging { cursor: grabbing; }
+.waterfall-box { height: 210px; margin-bottom: 6px; }
+#spectrum-canvas, #waterfall-canvas { width: 100%; height: 100%; display: block; }
+#waterfall-overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+.freq-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 0.6rem; color: var(--muted); padding: 1px 2px 4px; }
+
+.center-controls-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.center-controls-row .ctl-label { font-size: 0.62rem; color: var(--label); text-transform: uppercase; letter-spacing: 0.05em; }
+#freq-input {
+  font-family: var(--mono); font-size: 0.75rem; font-weight: 700; background: #0a0d11;
+  border: 1px solid var(--border2); color: var(--green); padding: 3px 6px; border-radius: 3px; width: 100px;
 }
-.tab-pane.active { display: block; }
+.span-val { font-family: var(--mono); color: var(--cyan); font-size: 0.68rem; min-width: 56px; display: inline-block; }
+#span-slider { width: 90px; }
+select#palette-select {
+  font-family: var(--mono); font-size: 0.65rem; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border2); border-radius: 3px; padding: 2px 4px;
+}
+
+/* ── Band / amp column ──────────────────────────────────── */
+.panel-bandamp { grid-area: bandamp; }
+.band-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 10px; }
+.divider { height: 1px; background: var(--border2); margin: 10px 0; }
+.meter-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.72rem; padding: 2px 0; }
+.meter-row .val { font-family: var(--mono); }
+.meter-row .val.status-green, .meter-row .val.good { color: var(--green); }
+.meter-row .val.status-amber, .meter-row .val.warn { color: var(--yellow); }
+.meter-row .val.status-red, .meter-row .val.alert { color: var(--red); }
+.meter-bar-wrap { height: 4px; background: #0a0d11; border-radius: 2px; overflow: hidden; margin: 3px 0 6px; }
+.meter-bar { height: 100%; border-radius: 2px; transition: width 0.2s ease-out; }
+
+.amp-state-badge {
+  font-family: var(--mono); font-size: 0.65rem; font-weight: 600; padding: 2px 7px;
+  border-radius: 3px; border: 1px solid var(--border2); background: #0a0d11; color: var(--muted);
+}
+.amp-state-badge.standby { border-color: #2a3a4a; color: #4a7a9b; }
+.amp-state-badge.opr-rx  { border-color: var(--green-dim); color: var(--green); }
+.amp-state-badge.opr-tx  { border-color: var(--amber-dim); color: var(--amber); animation: pulse-tx 0.8s infinite; }
+.amp-state-badge.disconn { border-color: #4a2020; color: #884444; }
+.amp-state-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+
+.opmode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
+.ant-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 6px; }
+.ant-indicator { cursor: default; pointer-events: none; font-size: 0.62rem; }
+
+.fault-severity {
+  font-family: var(--mono); font-size: 0.62rem; font-weight: 700; padding: 2px 6px;
+  border-radius: 3px; display: inline-block; margin-bottom: 4px;
+}
+.fault-severity.ok { background: var(--green-dim); color: var(--green); }
+.fault-severity.warning { background: #3a2a00; color: var(--yellow); }
+.fault-severity.fault { background: var(--red-dim); color: var(--red); animation: pulse-tx 1s infinite; }
+.fault-messages { font-family: var(--mono); font-size: 0.62rem; color: var(--text); margin-bottom: 8px; }
+.fault-item { color: var(--red); }
+.fault-item.soft { color: var(--yellow); }
+.fault-item.warn { color: var(--muted); }
+
+.dummy-timer-wrap { display: none; align-items: center; gap: 5px; margin-top: 4px; }
+.dummy-timer-wrap.visible { display: flex; }
+.dummy-timer { font-family: var(--mono); font-weight: 700; color: var(--yellow); font-size: 0.9rem; }
+.dummy-timer.critical { color: var(--red); animation: pulse-tx 0.4s infinite; }
+
+.power-slider-wrap { display: flex; align-items: center; gap: 6px; }
+.power-value { font-family: var(--mono); font-size: 0.68rem; color: var(--cyan); min-width: 32px; text-align: right; }
+.abt-row { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 0.62rem; margin-bottom: 4px; }
+.abt-row input[type=number] { width: 44px; font-size: 0.62rem; background: var(--bg); color: var(--text); border: 1px solid var(--border2); border-radius: 2px; }
+#abt-results table { width: 100%; border-collapse: collapse; font-size: 0.6rem; }
+#abt-results th, #abt-results td { padding: 2px 0; border-bottom: 1px solid var(--border); }
+
+.scroll-table { max-height: 180px; overflow-y: auto; }
+
+/* ── Toast ──────────────────────────────────────────────── */
+.toast-stack { position: fixed; bottom: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 1100; }
+.toast {
+  font-family: var(--mono); font-size: 0.75rem; padding: 10px 14px; border-radius: 4px;
+  border: 1px solid var(--red); background: #2a0505; color: #ff8888;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4); animation: toast-in 0.15s ease-out; max-width: 320px;
+}
+.toast.info { border-color: var(--cyan); background: #051a2a; color: var(--cyan); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
 
-<div class="shell">
-  <header class="shell-header">
-    <span class="callsign">W7TLG CONSOLE</span>
-    <div class="shell-header-links">
-      <a href="/" target="_blank" rel="noopener">Dashboard (standalone)</a>
-      <a href="/panadapter" target="_blank" rel="noopener">Panadapter (standalone)</a>
-      <a href="/monitor" target="_blank" rel="noopener">Monitor (standalone)</a>
+<div class="console">
+
+  <!-- ── 1. Status bar ────────────────────────────────────── -->
+  <div class="panel panel-status">
+    <span class="app-name">W7TLG CONSOLE</span>
+    <span class="status-item" id="stat-rig"><span class="dot" id="dot-rig"></span>Rig</span>
+    <span class="status-item" id="stat-amp"><span class="dot" id="dot-amp"></span>Amp</span>
+    <span class="status-item" id="stat-sdr"><span class="dot" id="dot-sdr"></span>SDR</span>
+    <span class="status-item" id="stat-wsjtx"><span class="dot" id="dot-wsjtx"></span>WSJT-X</span>
+    <span class="spacer"></span>
+    <span class="freq-summary" id="status-summary">— &middot; — &middot; —</span>
+    <span class="inhibit-banner" id="inhibit-banner">&#9940; TX INHIBITED &mdash; <span id="inhibit-reason">—</span></span>
+    <button class="btn danger" onclick="RigControl.inhibitTx()">&#9940; Inhibit</button>
+    <button class="btn active-green" onclick="RigControl.allowTx()">&#10003; Allow</button>
+    <span class="nav-link"><a href="/monitor" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Monitor &#8599;</a></span>
+    <span class="nav-link"><a href="/propagation" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Propagation &#8599;</a></span>
+    <span class="nav-link"><a href="/spotseek" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Spot/Seek &#8599;</a></span>
+    <span class="nav-link"><a href="/advisor" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Advisor &#8599;</a></span>
+  </div>
+
+  <!-- ── 2. Mode / DSP ────────────────────────────────────── -->
+  <div class="panel panel-modedsp">
+    <h2>Mode</h2>
+    <div class="mode-grid">
+      <button class="btn" data-mode="USB"    onclick="RigControl.setMode(this)">USB</button>
+      <button class="btn" data-mode="LSB"    onclick="RigControl.setMode(this)">LSB</button>
+      <button class="btn" data-mode="CW"     onclick="RigControl.setMode(this)">CW</button>
+      <button class="btn" data-mode="AM"     onclick="RigControl.setMode(this)">AM</button>
+      <button class="btn" data-mode="PKTUSB" onclick="RigControl.setMode(this)">DATA-U</button>
+      <button class="btn" data-mode="FM"     onclick="RigControl.setMode(this)">FM</button>
     </div>
-  </header>
 
-  <div class="main">
-    <div class="pane-left" id="pane-left">
-      <iframe src="/panadapter" title="Panadapter"></iframe>
+    <h2>Filter</h2>
+    <div class="btn-row" style="margin-bottom:6px">
+      <button class="btn" id="filt-NAR" onclick="RigControl.setFilterWidthMode('NAR')">NAR</button>
+      <button class="btn active" id="filt-WID" onclick="RigControl.setFilterWidthMode('WID')">WID</button>
+    </div>
+    <input type="range" min="200" max="3000" step="50" value="3000" id="width-slider"
+      oninput="RigControl.onWidthSlider(this.value)"
+      onmousedown="RigControl.setDragging('width', true)"
+      onmouseup="RigControl.sliderRelease('width', () => RigControl.setWidth(document.getElementById('width-slider').value))"
+      ontouchstart="RigControl.setDragging('width', true)"
+      ontouchend="RigControl.sliderRelease('width', () => RigControl.setWidth(document.getElementById('width-slider').value))">
+    <div class="power-value" id="width-val" style="text-align:left;margin-bottom:6px">3000Hz</div>
+
+    <div class="divider"></div>
+    <div id="digital-tx-controls">
+      <h2>Digital Audio</h2>
+      <div class="power-slider-wrap" style="margin-bottom:6px">
+        <span class="ctl-label" style="min-width:40px;font-size:0.62rem">DT GAIN</span>
+        <input type="range" min="0" max="100" value="15" id="dt-gain-slider"
+          oninput="document.getElementById('dt-gain-val').textContent = this.value"
+          onmousedown="RigControl.setDragging('dtGain', true)"
+          onmouseup="RigControl.sliderRelease('dtGain', () => RigControl.setDtGain(document.getElementById('dt-gain-slider').value))"
+          ontouchstart="RigControl.setDragging('dtGain', true)"
+          ontouchend="RigControl.sliderRelease('dtGain', () => RigControl.setDtGain(document.getElementById('dt-gain-slider').value))">
+        <span class="power-value" id="dt-gain-val">15</span>
+      </div>
+      <!-- COMP intentionally removed here — it's the same underlying
+           rig.comp_level as SSB Audio's COMP slider below, not a separate
+           digital-mode parameter, so showing both (now that both blocks are
+           always visible, not mode-swapped) was two controls silently
+           fighting over one value. SSB Audio's COMP is the single source of
+           truth for now. Something digital-mode-specific may go here later,
+           but nothing yet. -->
     </div>
 
-    <div class="resize-handle" id="resize-handle"></div>
+    <div class="divider"></div>
+    <div id="voice-tx-controls">
+      <h2>SSB Audio</h2>
+      <div class="power-slider-wrap" style="margin-bottom:6px">
+        <span class="ctl-label" style="min-width:40px;font-size:0.62rem">MIC</span>
+        <input type="range" min="0" max="100" value="50" id="mic-gain-slider"
+          oninput="document.getElementById('mic-gain-val').textContent = this.value + '%'"
+          onmousedown="RigControl.setDragging('micGain', true)"
+          onmouseup="RigControl.sliderRelease('micGain', () => RigControl.setMicGain(document.getElementById('mic-gain-slider').value))"
+          ontouchstart="RigControl.setDragging('micGain', true)"
+          ontouchend="RigControl.sliderRelease('micGain', () => RigControl.setMicGain(document.getElementById('mic-gain-slider').value))">
+        <span class="power-value" id="mic-gain-val">50%</span>
+      </div>
+      <div class="power-slider-wrap">
+        <span class="ctl-label" style="min-width:40px;font-size:0.62rem">COMP</span>
+        <input type="range" min="0" max="100" value="0" id="comp-slider"
+          oninput="document.getElementById('comp-val').textContent = this.value + '%'"
+          onmousedown="RigControl.setDragging('comp', true)"
+          onmouseup="RigControl.sliderRelease('comp', () => RigControl.setComp(document.getElementById('comp-slider').value))"
+          ontouchstart="RigControl.setDragging('comp', true)"
+          ontouchend="RigControl.sliderRelease('comp', () => RigControl.setComp(document.getElementById('comp-slider').value))">
+        <span class="power-value" id="comp-val">0%</span>
+      </div>
+    </div>
 
-    <div class="pane-right">
-      <div class="tab-bar" id="tab-bar">
-        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-        <button class="tab-btn" data-tab="monitor">Monitor</button>
-        <button class="tab-btn" data-tab="propagation">Propagation</button>
-        <button class="tab-btn" data-tab="spotseek">Spot/Seek</button>
-        <button class="tab-btn" data-tab="advisor">AI Advisor</button>
-      </div>
-      <div class="tab-content">
-        <iframe class="tab-pane active" data-tab="dashboard" src="/" title="Dashboard"></iframe>
-        <!--
-          Mounted immediately (not lazy-loaded on first tab click) even
-          though it starts hidden — this is what keeps its /ws connection
-          and monitor_heartbeat timer alive in the background, which is
-          exactly what makes trend-logging run for as long as the console
-          shell is open rather than only while this specific tab is
-          active. See the note by the tab-bar click handler below.
-        -->
-        <iframe class="tab-pane" data-tab="monitor" src="/monitor" title="Monitor"></iframe>
-        <iframe class="tab-pane" data-tab="propagation" src="/propagation" title="Propagation"></iframe>
-        <iframe class="tab-pane" data-tab="spotseek" src="/spotseek" title="Spot/Seek"></iframe>
-        <iframe class="tab-pane" data-tab="advisor" src="/advisor" title="AI Advisor"></iframe>
-      </div>
+    <div class="dsp-toggle-row">
+      <button class="dsp-toggle" id="nb-btn" onclick="RigControl.toggleNB()">NB <span id="nb-state">OFF</span></button>
+      <button class="dsp-toggle" id="dnf-btn" onclick="RigControl.toggleDNF()">DNF <span id="dnf-state">OFF</span></button>
+    </div>
+    <div class="dsp-toggle-row">
+      <button class="dsp-toggle" id="nr-btn" onclick="RigControl.toggleNR()">DNR <span id="nr-state">OFF</span></button>
+      <input type="range" min="1" max="15" step="1" value="8" id="nr-slider" class="dsp-slider-mini"
+        oninput="RigControl.onNRChange(this.value)"
+        onmousedown="RigControl.setDragging('nr', true)"
+        onmouseup="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))"
+        ontouchstart="RigControl.setDragging('nr', true)"
+        ontouchend="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))">
+      <span class="dsp-val" id="nr-val">8</span>
+    </div>
+    <div class="dsp-toggle-row">
+      <span class="slider-label" style="margin:0">AGC</span>
+      <button class="dsp-agc-btn" id="agc-off" onclick="RigControl.setAGC(0)">OFF</button>
+      <button class="dsp-agc-btn" id="agc-fast" onclick="RigControl.setAGC(2)">FAST</button>
+      <button class="dsp-agc-btn" id="agc-slow" onclick="RigControl.setAGC(3)">SLOW</button>
+    </div>
+    <div class="dsp-toggle-row">
+      <span class="slider-label" style="margin:0">VOL</span>
+      <input type="range" min="0" max="1000" step="10" value="400" id="rx-vol-slider" class="dsp-slider-mini"
+        oninput="document.getElementById('rx-vol-val').textContent = this.value + '%'"
+        onmousedown="RigControl.setDragging('rxVol', true)"
+        onmouseup="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))"
+        ontouchstart="RigControl.setDragging('rxVol', true)"
+        ontouchend="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))">
+      <span class="dsp-val" id="rx-vol-val" style="min-width:34px">400%</span>
+    </div>
+    <div class="dsp-toggle-row">
+      <button class="dsp-toggle active" id="eq-btn" onclick="RigControl.toggleEQ()">EQ <span id="eq-state">ON</span></button>
+    </div>
+    <div class="dsp-toggle-row" style="gap:3px 6px">
+      <span class="dsp-val">B</span>
+      <input type="range" min="-12" max="12" step="1" value="0" id="eq-bass-slider" class="dsp-slider-mini" style="width:44px"
+        oninput="document.getElementById('eq-bass-val').textContent = this.value"
+        onmousedown="RigControl.setDragging('eq', true)"
+        onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+        ontouchstart="RigControl.setDragging('eq', true)"
+        ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+      <span class="dsp-val" id="eq-bass-val">0</span>
+      <span class="dsp-val">M</span>
+      <input type="range" min="-12" max="12" step="1" value="0" id="eq-mid-slider" class="dsp-slider-mini" style="width:44px"
+        oninput="document.getElementById('eq-mid-val').textContent = this.value"
+        onmousedown="RigControl.setDragging('eq', true)"
+        onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+        ontouchstart="RigControl.setDragging('eq', true)"
+        ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+      <span class="dsp-val" id="eq-mid-val">0</span>
+      <span class="dsp-val">T</span>
+      <input type="range" min="-12" max="12" step="1" value="0" id="eq-treble-slider" class="dsp-slider-mini" style="width:44px"
+        oninput="document.getElementById('eq-treble-val').textContent = this.value"
+        onmousedown="RigControl.setDragging('eq', true)"
+        onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+        ontouchstart="RigControl.setDragging('eq', true)"
+        ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+      <span class="dsp-val" id="eq-treble-val">0</span>
     </div>
   </div>
-</div>
+
+  <!-- ── 3. VFO / panadapter / waterfall / tune ──────────── -->
+  <div class="panel panel-center">
+    <div class="freq-readout" id="vfo">  0.000.000</div>
+    <div class="vfo-meta">
+      <span class="badge badge-band" id="badge-band">??</span>
+      <span class="badge badge-mode" id="badge-mode">—</span>
+      <span class="badge badge-ptt-rx" id="badge-ptt">RX</span>
+      <span class="badge badge-split" id="badge-split" style="display:none">&#9888; SPLIT</span>
+      <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
+      <span class="badge badge-digital-audio-inactive" id="badge-digital-audio" style="display:none">DIGI AUDIO</span>
+    </div>
+
+    <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter-bar"></div></div>
+    <div class="smeter-readout">
+      <span class="val" id="smeter-label">S0</span>
+      <span id="smeter-db">— dBFS</span>
+      <span>S9 Cal <input type="number" id="s9-cal-input" value="-75" step="1" oninput="RigControl.onS9CalInput(this.value)"></span>
+    </div>
+
+    <div class="tx-meters inactive" id="tx-meters">
+      <div>
+        <div class="tx-meter-label">ALC</div>
+        <div class="tx-meter-bar-wrap"><div class="tx-meter-bar alc" id="alc-bar"></div></div>
+        <div class="tx-meter-value" id="alc-val">—</div>
+      </div>
+      <div>
+        <div class="tx-meter-label">Radio PO</div>
+        <div class="tx-meter-bar-wrap"><div class="tx-meter-bar po" id="po-bar"></div></div>
+        <div class="tx-meter-value" id="po-val">—</div>
+      </div>
+      <div>
+        <div class="tx-meter-label">SWR</div>
+        <div class="tx-meter-bar-wrap"><div class="tx-meter-bar swr" id="swr-bar"></div></div>
+        <div class="tx-meter-value" id="swr-val">—</div>
+      </div>
+    </div>
+
+    <div class="scope-box panadapter-box" id="spectrum-wrap">
+      <canvas id="spectrum-canvas"></canvas>
+    </div>
+    <div class="freq-axis">
+      <span id="axis-lo">—</span><span id="axis-center">—</span><span id="axis-hi">—</span>
+    </div>
+    <div class="scope-box waterfall-box" id="waterfall-wrap">
+      <canvas id="waterfall-canvas"></canvas>
+      <canvas id="waterfall-overlay-canvas"></canvas>
+    </div>
+
+    <div class="center-controls-row">
+      <input type="text" id="freq-input" value="14.074000">
+      <button class="btn" onclick="Panadapter.tuneToInput()">Tune</button>
+      <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()">Whole Band</button>
+      <button class="btn" onclick="Panadapter.recenterView()">Center</button>
+      <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()">Audio: Live</button>
+      <!-- Tune/VOX/MOX intentionally NOT wired — there is no existing CAT
+           command for a tuning burst or manual PTT keying independent of
+           the mic/digital source, and the spec explicitly forbids adding a
+           second, competing TX-control path alongside /api/tx. Shown
+           disabled rather than silently omitted, same convention as
+           Loop/Combined above, so the gap is visible rather than hidden. -->
+      <button class="btn disabled" title="No CAT tune-burst command exists yet">Tune Burst</button>
+      <button class="btn disabled" title="No manual-PTT command exists yet — use rig PTT">VOX</button>
+      <button class="btn disabled" title="No manual-PTT command exists yet — use rig PTT">MOX</button>
+    </div>
+    <div class="center-controls-row">
+      <span class="ctl-label">Span</span>
+      <input type="range" id="span-slider" min="0" max="1000" value="500" oninput="Panadapter.onSpanSlider(this.value)">
+      <span class="span-val" id="span-val">15.0 kHz</span>
+      <label class="ctl-label"><input type="checkbox" id="auto-scale-cb" checked onchange="Panadapter.onAutoScaleToggle(this.checked)"> Auto</label>
+      <span class="ctl-label">Floor</span>
+      <input type="range" id="floor-slider" min="-160" max="0" value="-90" disabled style="width:60px" oninput="Panadapter.onFloorSlider(this.value)">
+      <span class="ctl-label">Gain</span>
+      <input type="range" id="gain-slider" min="0" max="100" value="50" disabled style="width:60px" oninput="Panadapter.onGainSlider(this.value)">
+      <span class="ctl-label">Avg</span>
+      <input type="range" id="avg-slider" min="0" max="100" value="30" style="width:60px" oninput="Panadapter.onAvgSlider(this.value)">
+      <select id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
+        <option value="default">Default</option>
+        <option value="linrad">Linrad</option>
+        <option value="grayscale">Grayscale</option>
+        <option value="hot">Hot</option>
+        <option value="gqrx">GQRX</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- ── 4. Band / amp ────────────────────────────────────── -->
+  <div class="panel panel-bandamp">
+    <h2>Band</h2>
+    <div class="band-grid">
+      <button class="btn" data-band="160m" data-freq="1840000"  onclick="RigControl.setBand(this)">160</button>
+      <button class="btn" data-band="80m"  data-freq="3573000"  onclick="RigControl.setBand(this)">80</button>
+      <button class="btn" data-band="60m"  data-freq="5357000"  onclick="RigControl.setBand(this)">60</button>
+      <button class="btn" data-band="40m"  data-freq="7074000"  onclick="RigControl.setBand(this)">40</button>
+      <button class="btn" data-band="30m"  data-freq="10136000" onclick="RigControl.setBand(this)">30</button>
+      <button class="btn" data-band="20m"  data-freq="14074000" onclick="RigControl.setBand(this)">20</button>
+      <button class="btn" data-band="17m"  data-freq="18100000" onclick="RigControl.setBand(this)">17</button>
+      <button class="btn" data-band="15m"  data-freq="21074000" onclick="RigControl.setBand(this)">15</button>
+      <button class="btn" data-band="12m"  data-freq="24915000" onclick="RigControl.setBand(this)">12</button>
+      <button class="btn" data-band="10m"  data-freq="28074000" onclick="RigControl.setBand(this)">10</button>
+      <button class="btn" data-band="6m"   data-freq="50313000" onclick="RigControl.setBand(this)">6</button>
+    </div>
+
+    <h2>Amp (ACOM 1200S)</h2>
+    <div class="amp-state-row">
+      <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
+      <span class="amp-state-badge" id="amp-atu-badge" style="display:none">ATU &#10003;</span>
+    </div>
+    <div class="meter-row"><span>Fwd Power</span><span class="val good" id="amp-fwd-val">0 W</span></div>
+    <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div></div>
+    <div class="meter-row"><span>SWR</span><span class="val good" id="amp-swr-val">—</span></div>
+    <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-swr-bar" style="width:0%"></div></div>
+    <div class="meter-row"><span>PAM1 Temp</span><span class="val" id="amp-temp-val">— &deg;C</span></div>
+    <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div></div>
+    <div class="meter-row"><span>Drive In</span><span class="val" id="amp-drive-val">— W</span></div>
+    <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-drive-bar" style="width:0%"></div></div>
+    <div class="meter-row mono" style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">
+      <span>HV <span id="amp-hv-val">—</span>V</span>
+      <span>I <span id="amp-current-val">—</span>A</span>
+      <span>Refl <span id="amp-refl-val">—</span>W</span>
+    </div>
+
+    <div class="divider"></div>
+    <h2>Fault Status</h2>
+    <span class="fault-severity ok" id="fault-severity">OK</span>
+    <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--muted)">No active faults</span></div>
+
+    <div class="divider"></div>
+    <h2>Operating Mode</h2>
+    <div class="opmode-grid">
+      <button class="btn active" id="mode-AMP_OFF" onclick="RigControl.setOpMode('AMP_OFF')">AMP OFF</button>
+      <button class="btn" id="mode-AMP_ON" onclick="RigControl.setOpMode('AMP_ON')">AMP ON</button>
+    </div>
+
+    <h2>TX Power</h2>
+    <div class="power-slider-wrap" style="margin-bottom:8px">
+      <input type="range" min="5" max="100" value="50" id="rf-power-slider"
+        oninput="document.getElementById('rf-power-val').textContent = this.value + 'W'"
+        onmousedown="RigControl.setDragging('rfPwr', true)"
+        onmouseup="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))"
+        ontouchstart="RigControl.setDragging('rfPwr', true)"
+        ontouchend="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))">
+      <span class="power-value" id="rf-power-val">50W</span>
+    </div>
+
+    <div class="meter-row"><span>Preamp</span>
+      <span>
+        <button class="btn" id="preamp-ipo" style="padding:2px 5px" onclick="RigControl.setPreamp(0)">IPO</button>
+        <button class="btn" id="preamp-amp1" style="padding:2px 5px" onclick="RigControl.setPreamp(1)">A1</button>
+        <button class="btn" id="preamp-amp2" style="padding:2px 5px" onclick="RigControl.setPreamp(2)">A2</button>
+      </span>
+    </div>
+    <div class="meter-row"><span>ATT</span><span class="mono" id="att-val">OFF</span></div>
+
+    <div class="divider"></div>
+    <h2>Antenna</h2>
+    <div class="ant-grid">
+      <div class="btn ant-indicator" id="ant-1">A1F</div>
+      <div class="btn ant-indicator disabled" id="ant-2">A2F</div>
+      <div class="btn ant-indicator" id="ant-3">A3R</div>
+      <div class="btn ant-indicator" id="ant-4">A4R</div>
+    </div>
+    <button class="btn" style="width:100%" onclick="RigControl.nextAntenna()">&#8635; NEXT ANT</button>
+    <div class="dummy-timer-wrap" id="dummy-timer-wrap">
+      <span class="muted mono" style="font-size:0.6rem;color:var(--muted)">DUMMY LOAD:</span>
+      <span class="dummy-timer" id="dummy-timer">10.0s</span>
+    </div>
+
+    <div class="divider"></div>
+    <h2>Antenna A/B Test</h2>
+    <div class="abt-row">
+      <label><input type="checkbox" id="abt-ant-1" checked> A1F</label>
+      <label><input type="checkbox" id="abt-ant-3" checked> A3R</label>
+      <label><input type="checkbox" id="abt-ant-4"> A4R</label>
+    </div>
+    <div class="abt-row">
+      <span>Rounds</span><input type="number" id="abt-rounds" value="10" min="1" max="100">
+      <span>Dwell s</span><input type="number" id="abt-dwell" value="12" min="5" max="120" step="1">
+    </div>
+    <div class="abt-row">
+      <span>MHz</span><input type="number" id="abt-scan-start" value="14.2000" step="0.0001" style="width:56px">
+      <span>to</span><input type="number" id="abt-scan-stop" value="14.3250" step="0.0001" style="width:56px">
+    </div>
+    <div class="btn-row" style="margin-top:4px">
+      <button class="btn active-green" style="flex:1" onclick="RigControl.startAbTest()">&#9654; Start</button>
+      <button class="btn danger" style="flex:1" onclick="RigControl.stopAbTest()">&#9632; Stop</button>
+    </div>
+    <div class="mono" style="font-size:0.62rem;margin-bottom:4px" id="abt-status">idle</div>
+    <div id="abt-summary" class="mono" style="font-size:0.6rem;margin-bottom:4px"></div>
+    <div id="abt-results" class="scroll-table"></div>
+  </div>
+
+</div><!-- .console -->
+
+<div class="toast-stack" id="toast-stack"></div>
 
 <script>
 'use strict';
 
-// ── Tab switching ────────────────────────────────────────────────────
-// Iframes are never removed/recreated on tab switch (just shown/hidden
-// via display:none) — that's what keeps every tab's WebSocket connection
-// and JS state alive in the background regardless of which tab is active.
-document.getElementById('tab-bar').addEventListener('click', evt => {
-  const btn = evt.target.closest('.tab-btn');
-  if (!btn) return;
-  const tab = btn.dataset.tab;
-
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
-  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === tab));
-
-  localStorage.setItem('w7tlg_console_active_tab', tab);
-});
-
-(function restoreActiveTab() {
-  const saved = localStorage.getItem('w7tlg_console_active_tab');
-  if (!saved) return;
-  const btn = document.querySelector(`.tab-btn[data-tab="${saved}"]`);
-  if (btn) btn.click();
+// ── Shared, read-only display helpers ───────────────────────────────────
+// These are the ONLY things shared across modules. Both are one-way
+// display writers (dot color, summary text, toast) with no influence on
+// TX behavior or control-plane commands — sharing them is not the kind of
+// shared mutable state the isolation plan is about.
+const StatusBar = (function () {
+  function setDot(name, ok) {
+    const dot = document.getElementById('dot-' + name);
+    const item = document.getElementById('stat-' + name);
+    if (dot) dot.classList.toggle('on', !!ok);
+    if (item) item.classList.toggle('on', !!ok);
+  }
+  function setSummary(text) {
+    const el = document.getElementById('status-summary');
+    if (el) el.textContent = text;
+  }
+  return { setDot, setSummary };
 })();
 
-// ── Resizable left pane ──────────────────────────────────────────────
-const paneLeft = document.getElementById('pane-left');
-const handle = document.getElementById('resize-handle');
+function showToast(message, type) {
+  const stack = document.getElementById('toast-stack');
+  const el = document.createElement('div');
+  el.className = 'toast' + (type === 'info' ? ' info' : '');
+  el.textContent = message;
+  stack.appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
 
-(function restorePaneWidth() {
-  const saved = localStorage.getItem('w7tlg_console_pane_left_width');
-  if (saved) paneLeft.style.width = saved + 'px';
-  else paneLeft.style.width = Math.round(window.innerWidth * 0.55) + 'px';
+// Single shared clock — both source pages ran their own redundant copy of
+// this; one is enough now that #hdr-time-equivalent lives once on the page.
+// (No visible header clock element in this layout's status bar; kept out
+// rather than added back in for space — band/mode/freq summary covers the
+// "what's the console doing right now" glance better in this compact bar.)
+
+// ── WSJT-X status dot ─────────────────────────────────────────────────────
+// The operator runs WSJT-X directly alongside this console, and logs
+// through a separate program — this console doesn't render decodes or a
+// QSO log at all. All that's left to track here is whether the WSJT-X UDP
+// feed is actually reaching the console (wsjtx_status still broadcasts for
+// that purpose). Not TX/safety relevant.
+const WsjtxLink = (function () {
+  let lastStatusAt = 0;
+  const WSJTX_STALE_MS = 15000;
+
+  function onStatus(_d) {
+    lastStatusAt = performance.now();
+    StatusBar.setDot('wsjtx', true);
+  }
+
+  setInterval(() => {
+    if (lastStatusAt && performance.now() - lastStatusAt > WSJTX_STALE_MS) {
+      StatusBar.setDot('wsjtx', false);
+    }
+  }, 3000);
+
+  return { onStatus };
 })();
 
-let resizing = false;
-handle.addEventListener('mousedown', evt => {
-  resizing = true;
-  handle.classList.add('dragging');
-  // Iframes swallow mousemove while the cursor is over them mid-drag —
-  // block pointer events on both panes for the duration of the drag so
-  // the resize keeps tracking smoothly right up to each pane's edge.
-  document.querySelectorAll('iframe').forEach(f => f.style.pointerEvents = 'none');
-  evt.preventDefault();
-});
-
-window.addEventListener('mousemove', evt => {
-  if (!resizing) return;
-  const min = 280, max = window.innerWidth * 0.8;
-  const w = Math.max(min, Math.min(max, evt.clientX));
-  paneLeft.style.width = w + 'px';
-});
-
-window.addEventListener('mouseup', () => {
-  if (!resizing) return;
-  resizing = false;
-  handle.classList.remove('dragging');
-  document.querySelectorAll('iframe').forEach(f => f.style.pointerEvents = '');
-  localStorage.setItem('w7tlg_console_pane_left_width', parseInt(paneLeft.style.width, 10));
-});
 </script>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     Panadapter module — spectrum, waterfall, TX audio mute, feedback-loop
+     prevention, digital-mode view lock.
+
+     Ported near-verbatim from dashboard/panadapter.html (see that file's
+     git history for the pre-redesign version). This is the one part of the
+     page where "near-verbatim" is a deliberate choice, not laziness: every
+     comment below documents a real bug this exact logic fixed previously,
+     and re-deriving it from scratch risks reintroducing those bugs. Only
+     the S-meter (previously duplicated between this file and the main
+     panel) and the standalone conn-dot/sdr-badge elements (now the shared
+     StatusBar dots) were removed — everything TX/feedback/digital-lock
+     related is unchanged.
+
+     Owns its own /ws, /ws/spectrum, /ws/audio connections directly, exactly
+     as the standalone panadapter.html page does — no shared connection or
+     dispatcher with RigControl below, so there is no new code in the
+     critical path between "tx_mute arrives" and "audio is silenced."
+     ══════════════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+const Panadapter = (function () {
+
+// ── Band edges (US Amateur Radio Bands, ARRL chart) ──────────
+const BAND_EDGES_HZ = {
+  '160m': [1800000, 2000000],
+  '80m':  [3500000, 4000000],
+  '60m':  [5330500, 5403500],
+  '40m':  [7000000, 7300000],
+  '30m':  [10100000, 10150000],
+  '20m':  [14000000, 14350000],
+  '17m':  [18068000, 18168000],
+  '15m':  [21000000, 21450000],
+  '12m':  [24890000, 24990000],
+  '10m':  [28000000, 29700000],
+  '6m':   [50000000, 54000000],
+};
+
+const SPAN_MIN_HZ = 1000;
+const SPAN_MAX_HZ = 2000000;
+
+// ── Main /ws — rig/amp state + commands ─────────────────────
+let ws = null;
+let rigPtt = false;
+let rigBand = null;
+let rigMode = null;
+let rigFreqHz = null;
+let rigPassbandHz = null;
+let rigIsDigital = false;
+let wholeBandApplied = false;
+
+const DIGITAL_VIEW_SPAN_HZ = 3000;
+
+function handleDigitalViewMode() {
+  if (!rigIsDigital && rigMode !== 'PKTUSB') return;
+  if (!latestFineFrame) return;
+  setViewSpan(DIGITAL_VIEW_SPAN_HZ);
+  if (rigFreqHz !== null && (!rigPtt || viewCenterHz === null)) {
+    viewCenterHz = rigFreqHz + viewSpanHz / 2;
+  }
+}
+
+let displayedRigFreqHz = null;
+function updateDisplayedRigFreq() {
+  if (rigFreqHz === null) return;
+  if (displayedRigFreqHz === null || Math.abs(rigFreqHz - displayedRigFreqHz) > 50000) {
+    displayedRigFreqHz = rigFreqHz;
+    return;
+  }
+  displayedRigFreqHz += (rigFreqHz - displayedRigFreqHz) * 0.5;
+}
+
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => {};
+  ws.onclose = () => setTimeout(connectWs, 2000);
+  ws.onmessage = evt => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'tx_mute') {
+      // Fast PTT gate fired on the server. Call txSilenceStart() (not just a
+      // ring flush) so audioWs is closed — that drops the pending binary audio
+      // frames still in the /ws/audio receive queue before they can play.
+      // A flush injected into /ws/audio itself always arrives late because it
+      // sits behind the audio frame backlog; /ws has no such queue.
+      console.log('[TX] tx_mute received on /ws at', performance.now().toFixed(1), 'ms');
+      txSilenceStart();
+      return;
+    }
+    if (msg.type === 'state') {
+      const rig = msg.data.rig || {};
+      rigPtt = !!rig.ptt;
+      if (rigPtt) txSilenceStart(); else txSilenceEnd();
+      rigFreqHz = rig.freq_hz ?? rigFreqHz;
+      const prevRigBand = rigBand;
+      rigBand = rig.band ?? rigBand;
+      // A real band change (not just a repeated state broadcast) invalidates
+      // a locked whole-band view — otherwise switching bands while "Whole
+      // Band" is active leaves the view stuck showing the old band's edges.
+      if (rigBand && rigBand !== prevRigBand) wholeBandView = false;
+      rigMode = rig.mode || rigMode;
+      rigPassbandHz = rig.passband_hz ?? rigPassbandHz;
+      if (!rigPtt) rigIsDigital = !!rig.is_digital;
+
+      if (!wholeBandApplied && rigBand && latestFrame) {
+        wholeBandApplied = true;
+        snapToWholeBand();
+      }
+      handleDigitalViewMode();
+      followRigFrequency();
+      sendAudioTargetFromRig();
+      StatusBar.setDot('sdr', sdrAvailable);
+    }
+  };
+}
+
+// ── TX audio mute ────────────────────────────────────────────────────────
+// Silence the panadapter audio the instant PTT is detected. The physical mic
+// on the FT-991A can pick up whatever the speakers are playing and transmit
+// it as SSB — creating a feedback loop. Cutting the audio immediately and
+// holding it muted for 500ms after TX ends breaks the loop.
+
+function txSilenceStart() {
+  console.log('[TX] txSilenceStart at', performance.now().toFixed(1), 'ms  already silenced:', _txSilenced);
+  if (_txUnmuteTimer) { clearTimeout(_txUnmuteTimer); _txUnmuteTimer = null; }
+  if (muteGain) muteGain.gain.value = 0;
+  if (_txSilenced) return;
+  _txSilenced = true;
+  if (audioWs) { console.log('[TX] closing audioWs'); audioWs.close(); audioWs = null; }
+  if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+}
+
+function txSilenceEnd() {
+  if (!_txSilenced || _txUnmuteTimer) return;
+  console.log('[TX] txSilenceEnd — scheduling unmute in 500ms');
+  _txUnmuteTimer = setTimeout(() => {
+    console.log('[TX] unmuting audio');
+    _txSilenced = false;
+    _txUnmuteTimer = null;
+    if (muteGain) muteGain.gain.value = 1;
+    if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+    if (!audioMuted) ensureAudioWs();
+  }, 500);
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+// ── Spectrum /ws/spectrum — binary frames ────────────────────
+let specWs = null;
+let sdrAvailable = false;
+let lastSpectrumAt = 0;
+const SPECTRUM_STALE_MS = 3000;
+setInterval(() => {
+  if (sdrAvailable && specWs && specWs.readyState === WebSocket.OPEN
+      && performance.now() - lastSpectrumAt > SPECTRUM_STALE_MS) {
+    sdrAvailable = false;
+    StatusBar.setDot('sdr', false);
+  }
+}, 1000);
+let pendingHeader = null;
+let latestFrame = null;
+let latestFineFrame = null;
+let pendingRetuneHz = null;
+let pendingRetuneAt = 0;
+const PENDING_RETUNE_TIMEOUT_MS = 3000;
+
+function setPendingRetune(hz) {
+  pendingRetuneHz = hz;
+  pendingRetuneAt = performance.now();
+}
+
+function clearStalePendingRetune() {
+  if (pendingRetuneHz !== null && (performance.now() - pendingRetuneAt) > PENDING_RETUNE_TIMEOUT_MS) {
+    console.log('[panadapter] pendingRetuneHz timed out waiting for the SDR to confirm — clearing');
+    pendingRetuneHz = null;
+  }
+}
+
+function connectSpectrumWs() {
+  specWs = new WebSocket(`ws://${location.host}/ws/spectrum`);
+  specWs.binaryType = 'arraybuffer';
+  specWs.onopen = () => {};
+  specWs.onclose = () => setTimeout(connectSpectrumWs, 2000);
+  specWs.onmessage = evt => {
+    if (typeof evt.data === 'string') {
+      pendingHeader = JSON.parse(evt.data);
+      return;
+    }
+    if (!pendingHeader) return;
+    lastSpectrumAt = performance.now();
+    if (!sdrAvailable) { sdrAvailable = true; StatusBar.setDot('sdr', true); }
+    const data = new Float32Array(evt.data);
+    const frame = {
+      centerFreqHz: pendingHeader.center_freq_hz,
+      spanHz: pendingHeader.span_hz,
+      data,
+    };
+
+    if (pendingHeader.kind === 'fine') {
+      latestFineFrame = frame;
+      if (rigIsDigital && !rigPtt) pushWaterfallRow(frame);
+    } else if (rigPtt) {
+      // SDR Switch disconnects the antenna from the SDR during TX — freeze.
+    } else if (pendingRetuneHz !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz) > 1000) {
+      // Waiting for an explicit retune to land — freeze.
+    } else {
+      pendingRetuneHz = null;
+      if (viewCenterHz === null || !isViewWithinCapture(frame)) {
+        viewCenterHz = frame.centerFreqHz;
+      }
+      latestFrame = frame;
+      if (!rigIsDigital) pushWaterfallRow(frame);
+    }
+    pendingHeader = null;
+  };
+}
+
+// ── Controls: tuning ──────────────────────────────────────
+function tuneToInput() {
+  const mhz = parseFloat(document.getElementById('freq-input').value);
+  if (!isFinite(mhz)) return;
+  tuneTo(mhz * 1e6);
+}
+
+function updateFreqInputDisplay() {
+  const input = document.getElementById('freq-input');
+  if (document.activeElement === input) return;
+  if (rigFreqHz !== null) input.value = (rigFreqHz / 1e6).toFixed(6);
+  else if (latestFrame) input.value = (latestFrame.centerFreqHz / 1e6).toFixed(6);
+}
+
+// ── Controls: span / zoom / pan ───────────────────────────
+let viewSpanHz = 15000;
+let viewCenterHz = null;
+// True while showing a deliberate "Whole Band" view. Without this,
+// followRigFrequency()'s normal recenter-once-you're-80%-off-center
+// behavior (tuned for a narrow operating span) fires on the very next state
+// message and snaps the view back to a band-width span centered on the
+// rig's actual frequency — which usually isn't the band's midpoint (e.g.
+// 10m FT8 at 28.074 vs a band center of 28.850), so "Whole Band" appeared
+// to silently do nothing / show the wrong edges. Cleared by any explicit
+// view action (pan, zoom, span change, click/typed tune, Center) or a real
+// band change, so normal follow-behavior resumes as soon as the operator
+// takes control of the view again.
+let wholeBandView = false;
+
+function spanFromSlider(v) {
+  const t = v / 1000;
+  return SPAN_MIN_HZ * Math.pow(SPAN_MAX_HZ / SPAN_MIN_HZ, t);
+}
+function sliderFromSpan(hz) {
+  const t = Math.log(hz / SPAN_MIN_HZ) / Math.log(SPAN_MAX_HZ / SPAN_MIN_HZ);
+  return Math.round(t * 1000);
+}
+
+function setViewSpan(hz) {
+  viewSpanHz = Math.max(SPAN_MIN_HZ, Math.min(SPAN_MAX_HZ, hz));
+  document.getElementById('span-slider').value = sliderFromSpan(viewSpanHz);
+  updateSpanLabel();
+}
+
+function updateSpanLabel() {
+  const el = document.getElementById('span-val');
+  el.textContent = viewSpanHz >= 1e6 ? (viewSpanHz / 1e6).toFixed(2) + ' MHz'
+                                      : (viewSpanHz / 1e3).toFixed(2) + ' kHz';
+}
+
+function onSpanSlider(v) {
+  viewSpanHz = spanFromSlider(parseInt(v, 10));
+  wholeBandView = false;   // manual span change exits the locked whole-band view
+  updateSpanLabel();
+}
+
+function tuneTo(freqHz, recenterView = true) {
+  freqHz = Math.round(freqHz);
+  wholeBandView = false;   // explicit tune (typed freq or click-to-tune) exits whole-band view
+  send({ cmd: 'set_frequency', freq_hz: freqHz });
+
+  if (recenterView) viewCenterHz = freqHz;
+  if (latestFrame) {
+    const margin = viewSpanHz / 2;
+    const lo = latestFrame.centerFreqHz - latestFrame.spanHz / 2 + margin;
+    const hi = latestFrame.centerFreqHz + latestFrame.spanHz / 2 - margin;
+    if (freqHz < lo || freqHz > hi) {
+      send({ cmd: 'set_panadapter_freq', freq_hz: freqHz });
+      setPendingRetune(freqHz);
+    }
+  }
+}
+
+function snapToWholeBand() {
+  const edges = BAND_EDGES_HZ[rigBand];
+  if (!edges) return;
+  const [lo, hi] = edges;
+  setViewSpan(Math.min(hi - lo, SPAN_MAX_HZ));
+  viewCenterHz = (lo + hi) / 2;
+  wholeBandView = true;
+  // The view alone doesn't move the SDR's actual ~2MHz capture window (see
+  // SPAN_MAX_HZ, which is set to match sdr_client.py's sample_rate_hz) —
+  // without an explicit retune here it stays wherever it last was, usually
+  // near the rig's own dial frequency. For a band where operation clusters
+  // well off the band's numeric center (e.g. 10m FT8 at 28.074 vs a band
+  // center of 28.850), that leftover capture position doesn't reach far
+  // enough to cover the requested edge, showing a rolloff/blank region
+  // instead of real data toward the top of the band. Retune hardware to
+  // the whole-band center so the real capture actually covers the view.
+  send({ cmd: 'set_panadapter_freq', freq_hz: viewCenterHz });
+  setPendingRetune(viewCenterHz);
+}
+
+// Recenter the view on the rig's current frequency without changing span —
+// the mockup's "Center" button. Harmless, view-only; doesn't touch the rig.
+function recenterView() {
+  wholeBandView = false;
+  if (rigFreqHz !== null) viewCenterHz = rigFreqHz;
+}
+
+function followRigFrequency() {
+  if (rigFreqHz === null) return;
+
+  // While showing a deliberate Whole Band view, the SDR hardware capture is
+  // intentionally centered on the band's midpoint (see snapToWholeBand()),
+  // not on the rig's current dial frequency — the whole point is to see the
+  // entire band at once, which is usually wider than margin around wherever
+  // the rig is actually parked. Both retune paths below are tuned for a
+  // normal narrow operating span and would otherwise retune the hardware
+  // (and then the view) straight back to the rig's frequency, undoing the
+  // whole-band capture on the very next state message.
+  if (wholeBandView) return;
+
+  if (latestFrame) {
+    const margin = viewSpanHz / 2;
+    const lo = latestFrame.centerFreqHz - latestFrame.spanHz / 2 + margin;
+    const hi = latestFrame.centerFreqHz + latestFrame.spanHz / 2 - margin;
+    if ((rigFreqHz < lo || rigFreqHz > hi) && pendingRetuneHz === null) {
+      send({ cmd: 'set_panadapter_freq', freq_hz: rigFreqHz });
+      setPendingRetune(rigFreqHz);
+    }
+  }
+
+  if (rigIsDigital || rigMode === 'PKTUSB') return;
+
+  if (viewCenterHz !== null) {
+    const halfSpan = viewSpanHz / 2;
+    if (Math.abs(rigFreqHz - viewCenterHz) > halfSpan * 0.8) {
+      viewCenterHz = rigFreqHz;
+    }
+  }
+}
+
+let cursorFreqHz = null;
+
+function attachHoverCrosshair(el) {
+  el.addEventListener('mousemove', evt => {
+    if (viewCenterHz === null) return;
+    const rect = el.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    cursorFreqHz = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
+  });
+}
+
+function clampViewToCapture() {
+  if (!latestFrame || viewCenterHz === null) return;
+  const lo = latestFrame.centerFreqHz - latestFrame.spanHz / 2 + viewSpanHz / 2;
+  const hi = latestFrame.centerFreqHz + latestFrame.spanHz / 2 - viewSpanHz / 2;
+  if (lo <= hi) viewCenterHz = Math.max(lo, Math.min(hi, viewCenterHz));
+  else viewCenterHz = latestFrame.centerFreqHz;
+}
+
+function isViewWithinCapture(frame) {
+  const capLo = frame.centerFreqHz - frame.spanHz / 2;
+  const capHi = frame.centerFreqHz + frame.spanHz / 2;
+  const viewLo = viewCenterHz - viewSpanHz / 2;
+  const viewHi = viewCenterHz + viewSpanHz / 2;
+  return viewHi > capLo && viewLo < capHi;
+}
+
+function cropToView(frame, outPoints) {
+  const n = frame.data.length;
+  const binHz = frame.spanHz / n;
+  const fullLoHz = frame.centerFreqHz - frame.spanHz / 2;
+  const viewLoHz = viewCenterHz - viewSpanHz / 2;
+  const viewHiHz = viewCenterHz + viewSpanHz / 2;
+
+  let startBin = Math.floor((viewLoHz - fullLoHz) / binHz);
+  let endBin = Math.ceil((viewHiHz - fullLoHz) / binHz);
+  startBin = Math.max(0, Math.min(n - 1, startBin));
+  endBin = Math.max(startBin + 1, Math.min(n, endBin));
+  const span = endBin - startBin;
+
+  const out = new Float32Array(outPoints);
+  for (let i = 0; i < outPoints; i++) {
+    const srcIdx = startBin + Math.floor((i / outPoints) * span);
+    out[i] = frame.data[Math.min(n - 1, srcIdx)];
+  }
+  return out;
+}
+
+// ── Spectrum line rendering ────────────────────────────────
+let canvas, ctx;
+
+let floorDb = -110, ceilDb = -40;
+function updateDbRange(data) {
+  const sorted = Array.from(data).sort((a, b) => a - b);
+  const p10 = sorted[Math.floor(0.10 * (sorted.length - 1))];
+  const p999 = sorted[Math.floor(0.999 * (sorted.length - 1))];
+  if (!isFinite(p10) || !isFinite(p999)) return;
+  const alpha = 0.05;
+  floorDb += ((p10 - 3) - floorDb) * alpha;
+  ceilDb += ((p999 + 5) - ceilDb) * alpha;
+}
+
+let autoScale = true;
+let manualFloorDb = -90;
+let manualRangeDb = 80;
+
+function effectiveFloorCeil() {
+  return autoScale ? [floorDb, ceilDb] : [manualFloorDb, manualFloorDb + manualRangeDb];
+}
+
+function onAutoScaleToggle(checked) {
+  autoScale = checked;
+  document.getElementById('floor-slider').disabled = checked;
+  document.getElementById('gain-slider').disabled = checked;
+}
+
+function onFloorSlider(v) {
+  manualFloorDb = parseFloat(v);
+}
+
+function drawRigMarker(c, w, h, dpr) {
+  dpr = dpr || 1;
+  if (rigFreqHz === null || viewCenterHz === null) return;
+  const drawFreqHz = displayedRigFreqHz === null ? rigFreqHz : displayedRigFreqHz;
+  const x = ((drawFreqHz - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+  if (x < 0 || x > w) return;
+
+  c.save();
+  c.strokeStyle = 'rgba(255, 214, 10, 0.85)';
+  c.lineWidth = 1.5 * dpr;
+  c.setLineDash([4, 4]);
+  c.beginPath();
+  c.moveTo(x, 0);
+  c.lineTo(x, h);
+  c.stroke();
+
+  c.setLineDash([]);
+  const label = (rigFreqHz / 1e6).toFixed(4) + ' MHz';
+  c.font = `${11 * dpr}px monospace`;
+  c.fillStyle = '#ffd60a';
+  const labelW = c.measureText(label).width;
+  const labelX = (x + labelW + 6 > w) ? x - labelW - 6 : x + 6;
+  c.fillText(label, labelX, h - 4 * dpr);
+  c.restore();
+}
+
+function onGainSlider(v) {
+  const g = parseFloat(v);
+  manualRangeDb = 150 - (g / 100) * 140;
+}
+
+function drawSpectrum() {
+  clearStalePendingRetune();
+  updateDisplayedRigFreq();
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(1, rect.width * dpr), h = Math.max(1, rect.height * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  ctx.clearRect(0, 0, w, h);
+
+  const frame = (rigIsDigital && latestFineFrame) ? latestFineFrame : latestFrame;
+
+  if (frame && viewCenterHz !== null) {
+    document.getElementById('axis-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);
+    document.getElementById('axis-center').textContent = (viewCenterHz / 1e6).toFixed(4);
+    document.getElementById('axis-hi').textContent = ((viewCenterHz + viewSpanHz / 2) / 1e6).toFixed(4);
+    updateFreqInputDisplay();
+
+    const points = cropToView(frame, Math.round(w));
+    if (autoScale) updateDbRange(points);
+    const [floor, ceil] = effectiveFloorCeil();
+
+    const drawPoints = applySpectrumSmoothing(points);
+    const xs = new Float32Array(drawPoints.length);
+    const ys = new Float32Array(drawPoints.length);
+    for (let i = 0; i < drawPoints.length; i++) {
+      xs[i] = (i / (drawPoints.length - 1)) * w;
+      const pct = Math.max(0, Math.min(1, (drawPoints[i] - floor) / (ceil - floor)));
+      ys[i] = h - pct * h;
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(xs[0], ys[0]);
+    for (let i = 1; i < drawPoints.length; i++) ctx.lineTo(xs[i], ys[i]);
+    ctx.lineTo(xs[drawPoints.length - 1], h);
+    ctx.lineTo(xs[0], h);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 212, 255, 0.25)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(xs[0], ys[0]);
+    for (let i = 1; i < drawPoints.length; i++) ctx.lineTo(xs[i], ys[i]);
+    ctx.strokeStyle = '#00d4ff';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.stroke();
+
+    drawRigMarker(ctx, w, h, dpr);
+    drawCursorCrosshair(ctx, w, h, dpr);
+  }
+
+  drawWaterfallOverlay();
+  requestAnimationFrame(drawSpectrum);
+}
+
+function drawCursorCrosshair(c, w, h, dpr) {
+  if (cursorFreqHz === null || viewCenterHz === null) return;
+  const cx = ((cursorFreqHz - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+  if (cx < 0 || cx > w) return;
+
+  c.save();
+  c.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+  c.lineWidth = 1;
+  c.beginPath();
+  c.moveTo(cx, 0);
+  c.lineTo(cx, h);
+  c.stroke();
+
+  const label = (cursorFreqHz / 1e6).toFixed(4) + ' MHz';
+  c.font = `${11 * dpr}px monospace`;
+  c.fillStyle = '#ffffff';
+  const labelW = c.measureText(label).width;
+  const labelX = (cx + labelW + 6 > w) ? cx - labelW - 6 : cx + 6;
+  c.fillText(label, labelX, 12 * dpr);
+  c.restore();
+}
+
+// ── Waterfall rendering ─────────────────────────────────────
+let wfCanvas, wfCtx;
+
+const PALETTES = {
+  default: [ [0.00,0,0,0], [0.20,0,0,130], [0.40,0,180,200], [0.60,0,220,60], [0.80,255,220,0], [1.00,255,30,30] ],
+  linrad:  [ [0.00,0,0,0], [0.15,0,0,80], [0.35,0,0,255], [0.55,0,255,255], [0.70,0,255,0], [0.85,255,255,0], [0.95,255,0,0], [1.00,255,255,255] ],
+  grayscale: [ [0.00,0,0,0], [1.00,255,255,255] ],
+  hot: [ [0.00,0,0,0], [0.40,200,0,0], [0.70,255,160,0], [0.85,255,240,0], [1.00,255,255,255] ],
+  gqrx: [ [0.00,0,0,32], [0.25,0,40,120], [0.50,0,150,200], [0.70,100,210,100], [0.85,240,220,0], [1.00,255,80,30] ],
+};
+let currentPalette = 'default';
+function onPaletteSelect(v) { currentPalette = v; }
+
+let wfContrast = 1.5;
+function onContrastSlider(v) { wfContrast = parseFloat(v) / 10; }
+
+let smoothedSpectrum = null;
+let specAvgAlpha = 0.30;
+function onAvgSlider(v) { specAvgAlpha = parseFloat(v) / 100 * 0.95; }
+function applySpectrumSmoothing(points) {
+  if (specAvgAlpha < 0.01) return points;
+  if (!smoothedSpectrum || smoothedSpectrum.length !== points.length) {
+    smoothedSpectrum = new Float32Array(points);
+    return smoothedSpectrum;
+  }
+  const fresh = 1 - specAvgAlpha;
+  for (let i = 0; i < points.length; i++) {
+    smoothedSpectrum[i] = fresh * points[i] + specAvgAlpha * smoothedSpectrum[i];
+  }
+  return smoothedSpectrum;
+}
+
+function dbToColor(db, floor, ceil) {
+  let pct = Math.max(0, Math.min(1, (db - floor) / (ceil - floor)));
+  pct = Math.pow(pct, wfContrast);
+  const stops = PALETTES[currentPalette] || PALETTES.default;
+  for (let i = 1; i < stops.length; i++) {
+    if (pct <= stops[i][0]) {
+      const [p0, r0, g0, b0] = stops[i - 1];
+      const [p1, r1, g1, b1] = stops[i];
+      const t = (pct - p0) / (p1 - p0 || 1);
+      return [r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t];
+    }
+  }
+  return stops[stops.length - 1].slice(1);
+}
+
+function ensureWfCanvasSize() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = wfCanvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * dpr)), h = Math.max(1, Math.round(rect.height * dpr));
+  if (wfCanvas.width !== w || wfCanvas.height !== h) {
+    wfCanvas.width = w;
+    wfCanvas.height = h;
+  }
+  return { w, h };
+}
+
+let wfOverlayCanvas, wfOverlayCtx;
+
+function drawWaterfallOverlay() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = wfOverlayCanvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * dpr)), h = Math.max(1, Math.round(rect.height * dpr));
+  if (wfOverlayCanvas.width !== w || wfOverlayCanvas.height !== h) {
+    wfOverlayCanvas.width = w;
+    wfOverlayCanvas.height = h;
+  }
+  wfOverlayCtx.clearRect(0, 0, w, h);
+  drawRigMarker(wfOverlayCtx, w, h, dpr);
+}
+
+function pushWaterfallRow(frame) {
+  const { w, h } = ensureWfCanvasSize();
+  if (h < 2) return;
+  const img = wfCtx.getImageData(0, 0, w, h - 1);
+  wfCtx.putImageData(img, 0, 1);
+
+  const points = cropToView(frame, w);
+  const [floor, ceil] = effectiveFloorCeil();
+  const row = wfCtx.createImageData(w, 1);
+  for (let x = 0; x < w; x++) {
+    const [r, g, b] = dbToColor(points[x], floor, ceil);
+    row.data[x * 4 + 0] = r;
+    row.data[x * 4 + 1] = g;
+    row.data[x * 4 + 2] = b;
+    row.data[x * 4 + 3] = 255;
+  }
+  wfCtx.putImageData(row, 0, 0);
+}
+
+// ── Audio: always at the rig's live frequency, unless muted ────────────
+let audioCtx = null;
+let audioWs = null;
+let audioWorkletNode = null;
+let muteGain = null;
+let audioWorkletReady = null;
+let audioMuted = true;
+let _txSilenced = false;
+let _txUnmuteTimer = null;
+let lastAudioFreqHz = null;
+let lastAudioMode = null;
+let lastAudioBandwidthHz = null;
+
+function sidebandForRigMode(mode) {
+  return (mode && mode.includes('L')) ? 'LSB' : 'USB';
+}
+
+function ensureAudioWorklet() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioWorkletReady) {
+    audioWorkletReady = audioCtx.audioWorklet.addModule('/audio-worklet.js').then(() => {
+      audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
+      muteGain = audioCtx.createGain();
+      muteGain.gain.value = 1;
+      audioWorkletNode.connect(muteGain);
+      muteGain.connect(audioCtx.destination);
+    });
+  }
+  return audioWorkletReady;
+}
+
+function ensureAudioWs() {
+  if (audioWs && audioWs.readyState <= WebSocket.OPEN) return;
+  audioWs = new WebSocket(`ws://${location.host}/ws/audio`);
+  audioWs.binaryType = 'arraybuffer';
+  audioWs.onclose = () => { if (!audioMuted && !_txSilenced) setTimeout(ensureAudioWs, 1000); };
+  audioWs.onmessage = evt => {
+    if (!audioWorkletNode || _txSilenced) return;
+    const pcm16 = new Int16Array(evt.data);
+    const f32 = new Float32Array(pcm16.length);
+    for (let i = 0; i < pcm16.length; i++) f32[i] = pcm16[i] / 32768;
+    audioWorkletNode.port.postMessage(f32);
+  };
+}
+
+function sendAudioTargetFromRig(force) {
+  if (audioMuted || rigFreqHz === null) return;
+  const mode = sidebandForRigMode(rigMode);
+  const bandwidthHz = (rigPassbandHz && rigPassbandHz > 0) ? rigPassbandHz : 2400;
+  if (!force && rigFreqHz === lastAudioFreqHz && mode === lastAudioMode
+      && bandwidthHz === lastAudioBandwidthHz) return;
+  lastAudioFreqHz = rigFreqHz;
+  lastAudioMode = mode;
+  lastAudioBandwidthHz = bandwidthHz;
+  send({ cmd: 'set_audio_target', freq_hz: rigFreqHz, mode, bandwidth_hz: bandwidthHz });
+}
+
+function enableAudio() {
+  audioMuted = false;
+  const btn = document.getElementById('mute-btn');
+  btn.textContent = 'Audio: Live';
+  btn.classList.add('active');
+  ensureAudioWorklet().then(() => {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    ensureAudioWs();
+    send({ cmd: 'set_audio_enabled', enabled: true });
+    sendAudioTargetFromRig(true);
+  });
+}
+
+function disableAudio() {
+  audioMuted = true;
+  const btn = document.getElementById('mute-btn');
+  btn.textContent = 'Audio: Muted';
+  btn.classList.remove('active');
+  send({ cmd: 'set_audio_enabled', enabled: false });
+}
+
+function toggleMute() {
+  if (audioMuted) enableAudio(); else disableAudio();
+}
+
+let dragging = false, dragMoved = false, dragStartX = 0, dragStartCenter = 0;
+let spectrumWrap;
+
+function init() {
+  canvas = document.getElementById('spectrum-canvas');
+  ctx = canvas.getContext('2d');
+  wfCanvas = document.getElementById('waterfall-canvas');
+  wfCtx = wfCanvas.getContext('2d');
+  wfOverlayCanvas = document.getElementById('waterfall-overlay-canvas');
+  wfOverlayCtx = wfOverlayCanvas.getContext('2d');
+  spectrumWrap = document.getElementById('spectrum-wrap');
+
+  spectrumWrap.addEventListener('wheel', evt => {
+    evt.preventDefault();
+    const factor = evt.deltaY > 0 ? 1.15 : (1 / 1.15);
+    setViewSpan(viewSpanHz * factor);
+    wholeBandView = false;   // manual zoom exits the locked whole-band view
+  }, { passive: false });
+
+  attachHoverCrosshair(spectrumWrap);
+  attachHoverCrosshair(document.getElementById('waterfall-wrap'));
+
+  spectrumWrap.addEventListener('mousedown', evt => {
+    if (evt.button !== 0) return;
+    dragging = true;
+    dragMoved = false;
+    dragStartX = evt.clientX;
+    dragStartCenter = viewCenterHz || 0;
+    spectrumWrap.classList.add('dragging');
+  });
+  window.addEventListener('mouseup', evt => {
+    if (dragging && !dragMoved && latestFrame && viewCenterHz !== null && !rigIsDigital) {
+      const rect = spectrumWrap.getBoundingClientRect();
+      const x = evt.clientX - rect.left;
+      const freqHz = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
+      tuneTo(freqHz, false);
+    }
+    dragging = false;
+    spectrumWrap.classList.remove('dragging');
+  });
+  window.addEventListener('mousemove', evt => {
+    if (!dragging || !latestFrame) return;
+    const dx = evt.clientX - dragStartX;
+    if (Math.abs(dx) > 3) dragMoved = true;
+    if (!dragMoved) return;
+    const rect = spectrumWrap.getBoundingClientRect();
+    const hzPerPx = viewSpanHz / rect.width;
+    viewCenterHz = dragStartCenter - dx * hzPerPx;
+    wholeBandView = false;   // manual pan exits the locked whole-band view
+    clampViewToCapture();
+  });
+
+  connectWs();
+  connectSpectrumWs();
+  updateSpanLabel();
+  requestAnimationFrame(drawSpectrum);
+
+  // Defaults to live rather than muted — see enableAudio()'s comment for
+  // why (fixes a real panadapter display bug, not just a convenience).
+  enableAudio();
+
+  ['pointerdown', 'keydown'].forEach(evt =>
+    window.addEventListener(evt, () => {
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }, { capture: true }));
+
+  ['span-slider', 'floor-slider', 'gain-slider', 'avg-slider'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      if (el.disabled) return;
+      const step = parseFloat(el.step) || 1;
+      const dir = e.deltaY < 0 ? 1 : -1;
+      el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
+                          parseFloat(el.value) + step * dir));
+      el.dispatchEvent(new Event('input'));
+    }, { passive: false });
+  });
+}
+
+return {
+  init, tuneToInput, snapToWholeBand, recenterView, toggleMute,
+  onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider,
+  onPaletteSelect,
+};
+
+})();
+
+Panadapter.init();
+</script>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     RigControl module — mode/DSP/band/power/amp panel. Ported from
+     dashboard/index.html's script (same git history reference as above).
+     Its own private /ws connection, own private DOM subtree, no shared
+     mutable state with Panadapter. The PKTUSB known-good defaults block in
+     setMode() below is unchanged from index.html — confirmed live and
+     hand-tuned, fires only on this explicit click, never reactively.
+     ══════════════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+const RigControl = (function () {
+
+let ws = null;
+let state = {};
+
+// Dragging guards, keyed rather than bare globals — inline event handlers
+// call setDragging()/sliderRelease() (below) instead of assigning a bare
+// variable name, specifically so this stays inside RigControl's closure
+// instead of leaking a same-named `window.*` global that this module's own
+// internal checks would silently stop seeing.
+const _dragging = {};
+function setDragging(key, val) { _dragging[key] = val; }
+function isDragging(key) { return !!_dragging[key]; }
+function sliderRelease(key, sendFn) {
+  sendFn();
+  setTimeout(() => { _dragging[key] = false; }, 350);
+}
+
+let _swrWarningShown = false;
+let _lastTxAmp = null;
+let _liveTxAmp = null;
+let _ampWasTx = false;
+
+function addWheelToSlider(id, sendFn, key) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('wheel', e => {
+    e.preventDefault();
+    const step = parseFloat(el.step) || 1;
+    const dir = e.deltaY < 0 ? 1 : -1;
+    el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
+                        parseFloat(el.value) + step * dir));
+    el.dispatchEvent(new Event('input'));
+    if (key) setDragging(key, true);
+    if (sendFn) {
+      sendFn(el.value);
+      clearTimeout(el._wheelTimer);
+      el._wheelTimer = setTimeout(() => { if (key) setDragging(key, false); }, 350);
+    }
+  }, { passive: false });
+}
+
+let s9CalDb = -75;
+function onS9CalInput(v) {
+  const n = parseFloat(v);
+  if (isFinite(n)) s9CalDb = n;
+}
+
+function smeterLabel(strengthDb) {
+  if (strengthDb >= 0) {
+    const over = Math.round(strengthDb / 10) * 10;
+    return over > 0 ? `S9+${over}` : 'S9';
+  }
+  const s = Math.max(0, Math.min(9, 9 + Math.floor(strengthDb / 6)));
+  return `S${s}`;
+}
+
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { send({ cmd: 'monitor_heartbeat' }); };
+  ws.onclose = () => { setTimeout(connectWs, 2000); };
+  ws.onmessage = evt => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'state') { state = msg.data; updateUI(state); }
+    else if (msg.type === 'cmd_response' && !msg.ok) showToast('Error: ' + msg.message, 'error');
+    else if (msg.type === 'ab_test_status') updateAbTestUI(msg.data);
+    // WSJT-X link status only — no TX/safety relevance, so it's fine to
+    // piggyback on this module's existing connection rather than opening a
+    // dedicated socket just for a status dot.
+    else if (msg.type === 'wsjtx_status') WsjtxLink.onStatus(msg.data);
+  };
+}
+
+function startAbTest() {
+  const antennas = [1, 3, 4].filter(n => document.getElementById(`abt-ant-${n}`).checked);
+  if (antennas.length < 2) { showToast('Select at least two antennas', 'error'); return; }
+  send({
+    cmd: 'ab_test_start',
+    antennas,
+    rounds: parseInt(document.getElementById('abt-rounds').value, 10),
+    profile_duration_s: parseFloat(document.getElementById('abt-dwell').value),
+    scan_start_hz: parseFloat(document.getElementById('abt-scan-start').value) * 1e6,
+    scan_stop_hz: parseFloat(document.getElementById('abt-scan-stop').value) * 1e6,
+  });
+}
+
+function stopAbTest() { send({ cmd: 'ab_test_stop' }); }
+
+function updateAbTestUI(d) {
+  const statusEl = document.getElementById('abt-status');
+  let line = `${d.status}`;
+  if (d.status === 'running') {
+    line += ` — round ${d.current_round}/${d.total_rounds}, antenna A${d.current_antenna}`;
+    line += ` (${d.current_active_channels} active)`;
+  }
+  if (d.status === 'error') line += ` — ${d.error}`;
+  statusEl.textContent = line;
+
+  const summaryEl = document.getElementById('abt-summary');
+  if (d.summary && d.summary.length) {
+    summaryEl.innerHTML = d.summary.map(s => {
+      if (!s.n_matched) return `<div style="color:#ffc107">A${s.ref_antenna} vs A${s.compare_antenna}: ${s.note}</div>`;
+      const sign = s.mean_signal_diff_db >= 0 ? 'stronger' : 'weaker';
+      return `<div style="color:#00e5ff">A${s.ref_antenna} vs A${s.compare_antenna}: ` +
+        `${Math.abs(s.mean_signal_diff_db).toFixed(1)}dB ${sign}</div>`;
+    }).join('');
+  } else {
+    summaryEl.innerHTML = '';
+  }
+
+  const resultsEl = document.getElementById('abt-results');
+  if (!d.results || !d.results.length) { resultsEl.innerHTML = ''; return; }
+  let rows = d.results.map(r =>
+    `<tr><td>${r.round}</td><td>A${r.antenna}</td>` +
+    `<td>${r.signal_db_p90.toFixed(1)}</td><td>${r.snr_db.toFixed(1)}</td></tr>`
+  ).join('');
+  resultsEl.innerHTML =
+    `<table><tr><th>R</th><th>A</th><th>Sig</th><th>SNR</th></tr>${rows}</table>`;
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function updateUI(s) {
+  const rig = s.rig || {};
+
+  StatusBar.setDot('rig', !!rig.connected);
+  StatusBar.setDot('amp', !!s.amp_connected);
+  StatusBar.setSummary(
+    `${rig.band || '—'} · ${(rig.freq_display || '—').trim()} · ${rig.mode || '—'}`
+  );
+
+  const vfoEl = document.getElementById('vfo');
+  vfoEl.textContent = rig.freq_display || '  0.000.000';
+  vfoEl.className = 'freq-readout' + (rig.ptt ? ' tx' : '');
+
+  document.getElementById('badge-band').textContent = rig.band || '??';
+  document.getElementById('badge-mode').textContent = rig.mode || '—';
+
+  const pttBadge = document.getElementById('badge-ptt');
+  pttBadge.textContent = rig.ptt ? 'TX' : 'RX';
+  pttBadge.className = rig.ptt ? 'badge badge-ptt-tx' : 'badge badge-ptt-rx';
+
+  document.getElementById('badge-split').style.display = rig.split ? 'inline-block' : 'none';
+  document.getElementById('badge-digital').style.display = rig.near_digital_freq ? 'inline-block' : 'none';
+
+  // Both SSB Audio and Digital Audio stay visible at all times now (Digital
+  // Audio stacked above SSB Audio in the left column) — no longer hidden by
+  // rig.is_digital. DT GAIN still only makes sense to sync while actually
+  // in a digital mode, so that part of the gate stays.
+  const isDigitalMode = !!rig.is_digital;
+  if (isDigitalMode && !isDragging('dtGain') && rig.dt_gain != null) {
+    document.getElementById('dt-gain-slider').value = rig.dt_gain;
+    document.getElementById('dt-gain-val').textContent = rig.dt_gain;
+  }
+  const digAudioBadge = document.getElementById('badge-digital-audio');
+  digAudioBadge.style.display = isDigitalMode ? 'inline-block' : 'none';
+  if (isDigitalMode) {
+    const active = !!rig.digital_audio_active;
+    digAudioBadge.className = 'badge ' + (active ? 'badge-digital-audio-active' : 'badge-digital-audio-inactive');
+    digAudioBadge.textContent = active ? 'DIGI AUDIO' : 'DIGI AUDIO: NO CABLE';
+  }
+
+  const isTx = rig.ptt;
+  document.getElementById('tx-meters').classList.toggle('inactive', !isTx);
+
+  if (!isTx && rig.sdr_strength_db !== undefined && rig.sdr_strength_db !== null) {
+    const dbFs = rig.sdr_strength_db;
+    const strengthDb = dbFs - s9CalDb;
+    const pct = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100));
+    const smeterBar = document.getElementById('smeter-bar');
+    smeterBar.style.width = pct + '%';
+    smeterBar.classList.toggle('over-s9', strengthDb >= 0);
+    document.getElementById('smeter-label').textContent = smeterLabel(strengthDb);
+    document.getElementById('smeter-db').textContent = dbFs.toFixed(1) + ' dBFS';
+  }
+
+  if (isTx) {
+    const alc = rig.alc ?? 0;
+    setBar('alc-bar', alc * 100);
+    document.getElementById('alc-val').textContent = (alc * 100).toFixed(0) + '%';
+
+    const po = rig.rf_power_out ?? 0;
+    setBar('po-bar', po * 100);
+    document.getElementById('po-val').textContent = (po * 100).toFixed(0) + 'W';
+
+    const swr = rig.swr_radio ?? 1;
+    const swrPct = Math.max(0, Math.min(100, ((swr - 1) / 4) * 100));
+    setBar('swr-bar', swrPct);
+    setMeterStatus('swr-bar', swr, 2.0, 3.0);
+    document.getElementById('swr-val').textContent = swr.toFixed(2);
+  } else {
+    setBar('alc-bar', 0);
+    document.getElementById('alc-val').textContent = '—';
+    setBar('po-bar', 0);
+    document.getElementById('po-val').textContent = '—';
+    setBar('swr-bar', 0);
+    setMeterStatus('swr-bar', 1, 2.0, 3.0);
+    document.getElementById('swr-val').textContent = '—';
+  }
+
+  const driveLimit = s.drive_limit_w ?? 100;
+  const slider = document.getElementById('rf-power-slider');
+  slider.max = driveLimit;
+  const pct = Math.min(rig.rf_power_pct ?? 50, driveLimit);
+  if (!isDragging('rfPwr')) { slider.value = pct; }
+  document.getElementById('rf-power-val').textContent = pct + 'W';
+
+  const preamp = rig.preamp ?? 0;
+  ['preamp-ipo', 'preamp-amp1', 'preamp-amp2'].forEach((id, i) => {
+    document.getElementById(id).className = 'btn' + (preamp === i ? ' active' : '');
+  });
+
+  document.getElementById('att-val').textContent =
+    (rig.att_db && rig.att_db > 0) ? rig.att_db + 'dB' : 'OFF';
+
+  document.querySelectorAll('[data-band]').forEach(btn => {
+    btn.className = 'btn' + (btn.dataset.band === (rig.band || '') ? ' active' : '');
+  });
+  document.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.className = 'btn' + (btn.dataset.mode === (rig.mode || '') ? ' active' : '');
+  });
+
+  updateFilterWidth(rig);
+  updateAmp(s);
+
+  ['AMP_OFF', 'AMP_ON'].forEach(m => {
+    const btn = document.getElementById('mode-' + m);
+    if (!btn) return;
+    const isActive = s.operating_mode === m;
+    btn.className = 'btn' + (isActive ? (m === 'AMP_ON' ? ' active-amber' : ' active') : '');
+  });
+
+  if (!isDragging('micGain')) {
+    const micPct = Math.round((rig.mic_gain ?? 0.5) * 100);
+    document.getElementById('mic-gain-slider').value = micPct;
+    document.getElementById('mic-gain-val').textContent = micPct + '%';
+  }
+  if (!isDragging('comp')) {
+    const compPct = Math.round((rig.comp_level ?? 0) * 100);
+    document.getElementById('comp-slider').value = compPct;
+    document.getElementById('comp-val').textContent = compPct + '%';
+  }
+  if (!isDragging('rxVol') && rig.sdr_rx_volume !== undefined) {
+    const volPct = Math.round(rig.sdr_rx_volume * 100);
+    document.getElementById('rx-vol-slider').value = volPct;
+    document.getElementById('rx-vol-val').textContent = volPct + '%';
+  }
+
+  [1, 2, 3, 4].forEach(n => {
+    const btn = document.getElementById('ant-' + n);
+    if (!btn || btn.classList.contains('disabled')) return;
+    btn.className = btn.className.replace(' active', '').replace(' active-amber', '') +
+      (s.selected_antenna === n ? ' active' : '');
+  });
+
+  const dtp = document.getElementById('dummy-timer-wrap');
+  if (s.dummy_load_active) {
+    dtp.className = 'dummy-timer-wrap visible';
+    const rem = s.dummy_load_remaining_s ?? 0;
+    const timerEl = document.getElementById('dummy-timer');
+    timerEl.textContent = rem.toFixed(1) + 's';
+    timerEl.className = 'dummy-timer' + (rem <= 3 ? ' critical' : '');
+  } else {
+    dtp.className = 'dummy-timer-wrap';
+  }
+
+  if (s.swr_warning_active && !_swrWarningShown) {
+    _swrWarningShown = true;
+    showToast(`⚠ SWR ${(s.swr_warning_peak ?? 0).toFixed(2)} — check antenna/feedline`, 'info');
+  } else if (!s.swr_warning_active) {
+    _swrWarningShown = false;
+  }
+
+  const banner = document.getElementById('inhibit-banner');
+  banner.className = 'inhibit-banner' + (s.tx_inhibited ? ' visible' : '');
+  document.getElementById('inhibit-reason').textContent = s.tx_inhibit_reason || '—';
+
+  updateDSP(rig);
+}
+
+function updateAmp(s) {
+  const badge = document.getElementById('amp-state-badge');
+  const modeName = (s.amp_mode || '').toLowerCase();
+  let badgeClass = 'amp-state-badge ';
+  let badgeText = s.amp_mode || '—';
+
+  if (!s.amp_connected) {
+    badgeClass += 'disconn'; badgeText = 'DISCONNECTED';
+  } else if (modeName.includes('opr/tx') || modeName.includes('tx')) {
+    badgeClass += 'opr-tx';
+  } else if (modeName.includes('opr')) {
+    badgeClass += 'opr-rx';
+  } else if (modeName.includes('standby')) {
+    badgeClass += 'standby';
+  }
+  badge.className = badgeClass;
+  badge.textContent = badgeText;
+
+  document.getElementById('amp-atu-badge').style.display = s.amp_atu_tuned ? 'inline-block' : 'none';
+
+  const isTxAmp = !!s.amp_ptt_active;
+  if (isTxAmp) {
+    if (!_ampWasTx) _lastTxAmp = null;
+    if ((s.amp_fwd_w ?? 0) > 0) {
+      _liveTxAmp = {
+        amp_fwd_w: s.amp_fwd_w, amp_swr: s.amp_swr, amp_temp_c: s.amp_temp_c,
+        amp_drive_w: s.amp_drive_w, amp_hv_v: s.amp_hv_v,
+        amp_current_ma: s.amp_current_ma, amp_refl_w: s.amp_refl_w,
+      };
+    }
+  } else if (_ampWasTx && _liveTxAmp) {
+    _lastTxAmp = _liveTxAmp;
+    _liveTxAmp = null;
+  }
+  _ampWasTx = isTxAmp;
+
+  const src = isTxAmp ? s : (_lastTxAmp ?? s);
+  const isStale = !isTxAmp && _lastTxAmp !== null;
+
+  const fwd = src.amp_fwd_w ?? 0;
+  document.getElementById('amp-fwd-val').textContent = fwd.toFixed(0) + ' W';
+  setBar('amp-fwd-bar', isStale ? 0 : Math.min(100, (fwd / 1500) * 100));
+  if (!isStale) setMeterStatus('amp-fwd-bar', fwd, 1000, 1300);
+
+  const swr = src.amp_swr ?? 0;
+  const swrEl = document.getElementById('amp-swr-val');
+  swrEl.textContent = swr > 0 ? swr.toFixed(2) : '—';
+  swrEl.className = 'val ' + (isStale ? '' : (swr > 3 ? 'alert' : swr > 2.5 ? 'warn' : 'good'));
+  setBar('amp-swr-bar', isStale ? 0 : Math.max(0, Math.min(100, ((swr - 1) / 4) * 100)));
+  if (!isStale) setMeterStatus('amp-swr-bar', swr, 2.5, 3.0);
+
+  const temp = s.amp_temp_c ?? 0;
+  document.getElementById('amp-temp-val').textContent = (temp > 0 ? temp.toFixed(1) : '—') + ' °C';
+  setBar('amp-temp-bar', Math.min(100, (temp / 80) * 100));
+  setMeterStatus('amp-temp-bar', temp, 55, 65);
+
+  const drive = src.amp_drive_w ?? 0;
+  const limit = s.drive_limit_w ?? 100;
+  document.getElementById('amp-drive-val').textContent = (drive > 0 ? drive.toFixed(1) : '—') + ' W';
+  setBar('amp-drive-bar', isStale ? 0 : Math.min(100, (drive / limit) * 100));
+  if (!isStale) setMeterStatus('amp-drive-bar', drive, limit * 0.75, limit * 0.95);
+
+  const hv  = (isStale ? src.amp_hv_v      : s.amp_hv_v)      ?? 0;
+  const cur = (isStale ? src.amp_current_ma : s.amp_current_ma) ?? 0;
+  const refl= (isStale ? src.amp_refl_w    : s.amp_refl_w)    ?? null;
+  document.getElementById('amp-hv-val').textContent = hv > 0 ? hv.toFixed(1) : '—';
+  document.getElementById('amp-current-val').textContent = cur > 0 ? (cur / 1000).toFixed(1) : '—';
+  document.getElementById('amp-refl-val').textContent = refl != null ? refl.toFixed(0) : '—';
+
+  const sevEl = document.getElementById('fault-severity');
+  const sev = s.fault_severity || 'OK';
+  sevEl.textContent = sev;
+  sevEl.className = 'fault-severity ' + (sev === 'OK' ? 'ok' : sev === 'WARNING' ? 'warning' : 'fault');
+
+  const faultMsgs = document.getElementById('fault-messages');
+  const all = [
+    ...(s.fault_hard || []).map(f => `<div class="fault-item">${f}</div>`),
+    ...(s.fault_soft || []).map(f => `<div class="fault-item soft">${f}</div>`),
+    ...(s.fault_warnings || []).map(f => `<div class="fault-item warn">${f}</div>`),
+  ];
+  faultMsgs.innerHTML = all.length ? all.join('')
+    : '<span class="muted" style="color:var(--muted)">No active faults</span>';
+}
+
+function updateFilterWidth(rig) {
+  const mode = rig.mode || 'USB';
+  const range = filterRangeFor(mode);
+  const wrap = document.getElementById('width-slider');
+  const narBtn = document.getElementById('filt-NAR');
+  const widBtn = document.getElementById('filt-WID');
+
+  if (!range) {
+    wrap.disabled = true;
+    narBtn.classList.add('disabled');
+    widBtn.classList.add('disabled');
+    document.getElementById('width-val').textContent = 'N/A';
+    return;
+  }
+  wrap.disabled = false;
+  narBtn.classList.remove('disabled');
+  widBtn.classList.remove('disabled');
+
+  let pb, which;
+  if (mode === 'PKTUSB') {
+    which = 'WID';
+    pb = (rig.passband_hz && rig.passband_hz >= range.WID[0]) ? rig.passband_hz : range.widDefault;
+  } else {
+    pb = rig.passband_hz || range.narDefault;
+    which = pb >= range.WID[0] ? 'WID' : 'NAR';
+  }
+  _widthMode = which;
+  narBtn.className = 'btn' + (which === 'NAR' ? ' active' : '');
+  widBtn.className = 'btn' + (which === 'WID' ? ' active' : '');
+  const [lo, hi] = range[which];
+  wrap.min = lo;
+  wrap.max = hi;
+  if (!isDragging('width')) { wrap.value = pb; }
+  document.getElementById('width-val').textContent = pb + 'Hz';
+}
+
+function setBar(id, pct) {
+  const el = document.getElementById(id);
+  if (el) el.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%';
+}
+
+function setMeterStatus(id, val, warnAt, alertAt) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('meter-good', 'meter-warn', 'meter-alert');
+  el.classList.add(val >= alertAt ? 'meter-alert' : val >= warnAt ? 'meter-warn' : 'meter-good');
+}
+
+function setBand(btn) {
+  send({ cmd: 'set_frequency', freq_hz: parseInt(btn.dataset.freq, 10) });
+}
+
+// DATA-U known-good starting point (confirmed live 2026-07-03) — applied
+// only on this explicit mode-select click, never reactively from
+// telemetry. AGC/NB/DNF/IPO/width are real rig CAT settings; DNR/EQ are
+// SDR-audio-chain-only (see their own set_* handlers in server.py). This
+// block must not be generalized or triggered from any other code path.
+function setMode(btn) {
+  const mode = btn.dataset.mode;
+  if (mode === 'PKTUSB') {
+    send({ cmd: 'set_mode', mode, passband: 3000 });
+    send({ cmd: 'set_agc', value: 2 });        // FAST
+    send({ cmd: 'set_nb', on: false });
+    send({ cmd: 'set_dnf', on: false });
+    send({ cmd: 'set_preamp', level: 0 });     // IPO
+    send({ cmd: 'set_audio_nr', on: false });  // DNR
+    send({ cmd: 'set_eq', enabled: false });
+  } else {
+    send({ cmd: 'set_mode', mode, passband: 0 });
+  }
+}
+
+const FILTER_RANGES = {
+  USB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 3000 },
+  LSB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 3000 },
+  CW:     { NAR: [50, 500],    WID: [500, 2400],  narDefault: 300,  widDefault: 1200 },
+  AM:     { NAR: [2500, 6000], WID: [6000, 9000], narDefault: 6000, widDefault: 9000 },
+  PKTUSB: { NAR: [50, 1500],   WID: [1500, 3000], narDefault: 500,  widDefault: 3000 },
+  FM:     null,
+};
+
+const VALID_WIDTHS = {
+  USB: { NAR: [200,400,600,850,1100,1350,1500,1650,1800], WID: [1800,1950,2100,2200,2300,2400,2500,2600,2700,2800,2900,3000,3200] },
+  LSB: { NAR: [200,400,600,850,1100,1350,1500,1650,1800], WID: [1800,1950,2100,2200,2300,2400,2500,2600,2700,2800,2900,3000,3200] },
+  CW:  { NAR: [50,100,150,200,250,300,350,400,450,500],   WID: [500,800,1200,1400,1700,2000,2400,3000] },
+  PKTUSB: { NAR: [50,100,150,200,250,300,350,400,450,500], WID: [500,800,1200,1400,1700,2000,2400,3000] },
+  AM: { NAR: [3000,4000,5000,6000], WID: [6000,7000,8000,9000] },
+};
+
+function snapWidth(val, mode, which) {
+  const table = VALID_WIDTHS[mode] || VALID_WIDTHS.USB;
+  const steps = table[which] || table.NAR;
+  let best = steps[0], bestDist = Math.abs(val - steps[0]);
+  for (const s of steps) {
+    const d = Math.abs(val - s);
+    if (d < bestDist) { best = s; bestDist = d; }
+  }
+  return best;
+}
+
+var _widthMode = 'NAR';
+
+function filterRangeFor(mode) {
+  return FILTER_RANGES[mode] || FILTER_RANGES.USB;
+}
+
+function setFilterWidthMode(which) {
+  const mode = (state.rig && state.rig.mode) || 'USB';
+  const range = filterRangeFor(mode);
+  if (!range) return;
+  _widthMode = which;
+  document.getElementById('filt-NAR').className = 'btn' + (which === 'NAR' ? ' active' : '');
+  document.getElementById('filt-WID').className = 'btn' + (which === 'WID' ? ' active' : '');
+  const [lo, hi] = range[which];
+  const slider = document.getElementById('width-slider');
+  slider.min = lo;
+  slider.max = hi;
+  const def = which === 'NAR' ? range.narDefault : range.widDefault;
+  slider.value = def;
+  document.getElementById('width-val').textContent = def + 'Hz';
+  setWidth(def);
+}
+
+function onWidthSlider(val) {
+  const mode = (state.rig && state.rig.mode) || 'USB';
+  const snapped = snapWidth(parseInt(val, 10), mode, _widthMode);
+  document.getElementById('width-val').textContent = snapped + 'Hz';
+}
+
+function setWidth(val) {
+  const mode = (state.rig && state.rig.mode) || 'USB';
+  const snapped = snapWidth(parseInt(val, 10), mode, _widthMode);
+  const slider = document.getElementById('width-slider');
+  slider.value = snapped;
+  document.getElementById('width-val').textContent = snapped + 'Hz';
+  send({ cmd: 'set_mode', mode, passband: snapped });
+}
+
+function setPower(val) { send({ cmd: 'set_rf_power', pct: parseInt(val, 10) }); }
+function setPreamp(level) { send({ cmd: 'set_preamp', level }); }
+function setOpMode(mode) { send({ cmd: 'set_mode_op', mode, confirmed: true }); }
+function setMicGain(val) { send({ cmd: 'set_mic_gain', level: parseFloat(val) / 100 }); }
+function setComp(val) { send({ cmd: 'set_comp', level: parseFloat(val) / 100 }); }
+function nextAntenna() { send({ cmd: 'next_antenna' }); }
+function inhibitTx() { send({ cmd: 'inhibit_tx', reason: 'Manual operator inhibit' }); }
+function allowTx() { send({ cmd: 'allow_tx' }); }
+
+var _nbOn = false, _nrOn = false, _dnfOn = false, _eqOn = true;
+
+function toggleNB() { _nbOn = !_nbOn; send({ cmd: 'set_nb', on: _nbOn }); _applyNB(_nbOn); }
+function _applyNB(on) {
+  const btn = document.getElementById('nb-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+  document.getElementById('nb-state').textContent = on ? 'ON' : 'OFF';
+}
+
+function toggleNR() { _nrOn = !_nrOn; send({ cmd: 'set_audio_nr', on: _nrOn }); _applyNR(_nrOn); }
+function _applyNR(on) {
+  const btn = document.getElementById('nr-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+  document.getElementById('nr-state').textContent = on ? 'ON' : 'OFF';
+}
+function onNRChange(val) { document.getElementById('nr-val').textContent = val; }
+function setNR(val) { send({ cmd: 'set_audio_nr', on: _nrOn, level: parseInt(val, 10) }); }
+
+function toggleDNF() { _dnfOn = !_dnfOn; send({ cmd: 'set_dnf', on: _dnfOn }); _applyDNF(_dnfOn); }
+function _applyDNF(on) {
+  const btn = document.getElementById('dnf-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+  document.getElementById('dnf-state').textContent = on ? 'ON' : 'OFF';
+}
+
+function setAGC(value) { send({ cmd: 'set_agc', value }); }
+function setRxVolume(v) { send({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 }); }
+
+function toggleEQ() { _eqOn = !_eqOn; setEQ(); _applyEQ(_eqOn); }
+function _applyEQ(on) {
+  const btn = document.getElementById('eq-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+  document.getElementById('eq-state').textContent = on ? 'ON' : 'OFF';
+}
+function setEQ() {
+  send({
+    cmd: 'set_eq', enabled: _eqOn,
+    bass_db: parseFloat(document.getElementById('eq-bass-slider').value),
+    mid_db: parseFloat(document.getElementById('eq-mid-slider').value),
+    treble_db: parseFloat(document.getElementById('eq-treble-slider').value),
+  });
+}
+
+function setDtGain(val) { send({ cmd: 'set_dt_gain', value: parseInt(val, 10) }); }
+
+function updateDSP(s) {
+  if (s.nb_on !== undefined && s.nb_on !== _nbOn) { _nbOn = !!s.nb_on; _applyNB(_nbOn); }
+  if (s.sdr_nr_enabled !== undefined && s.sdr_nr_enabled !== _nrOn) { _nrOn = !!s.sdr_nr_enabled; _applyNR(_nrOn); }
+  if (!isDragging('nr')) {
+    const nrSlider = document.getElementById('nr-slider');
+    const nrVal = document.getElementById('nr-val');
+    if (nrSlider && s.sdr_nr_atten_limit_db !== undefined) {
+      const lvl = Math.max(1, Math.min(15, Math.round(1 + (s.sdr_nr_atten_limit_db - 6.0) / 34.0 * 14.0)));
+      nrSlider.value = lvl;
+      if (nrVal) nrVal.textContent = lvl;
+    }
+  }
+  if (s.dnf_on !== undefined && s.dnf_on !== _dnfOn) { _dnfOn = !!s.dnf_on; _applyDNF(_dnfOn); }
+
+  const agcMap = { off: 'agc-off', fast: 'agc-fast', slow: 'agc-slow' };
+  ['agc-off', 'agc-fast', 'agc-slow'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active');
+  });
+  const activeId = agcMap[s.sdr_agc_mode];
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) el.classList.add('active');
+  }
+
+  if (s.sdr_eq_enabled !== undefined && s.sdr_eq_enabled !== _eqOn) { _eqOn = !!s.sdr_eq_enabled; _applyEQ(_eqOn); }
+  if (!isDragging('eq')) {
+    const bands = [
+      ['eq-bass-slider', 'eq-bass-val', s.sdr_eq_bass_db],
+      ['eq-mid-slider', 'eq-mid-val', s.sdr_eq_mid_db],
+      ['eq-treble-slider', 'eq-treble-val', s.sdr_eq_treble_db],
+    ];
+    for (const [sliderId, valId, db] of bands) {
+      if (db === undefined) continue;
+      const slider = document.getElementById(sliderId);
+      const val = document.getElementById(valId);
+      if (slider) slider.value = db;
+      if (val) val.textContent = db;
+    }
+  }
+}
+
+function init() {
+  connectWs();
+  setInterval(() => send({ cmd: 'monitor_heartbeat' }), 4000);
+
+  addWheelToSlider('width-slider',    v => setWidth(v),    'width');
+  addWheelToSlider('nr-slider',       v => setNR(v),        'nr');
+  addWheelToSlider('rx-vol-slider',   v => setRxVolume(v),  'rxVol');
+  addWheelToSlider('eq-bass-slider',  () => setEQ(),         'eq');
+  addWheelToSlider('eq-mid-slider',   () => setEQ(),         'eq');
+  addWheelToSlider('eq-treble-slider',() => setEQ(),         'eq');
+  addWheelToSlider('rf-power-slider', v => setPower(v),      'rfPwr');
+  addWheelToSlider('mic-gain-slider', v => setMicGain(v),    'micGain');
+  addWheelToSlider('comp-slider',     v => setComp(v),       'comp');
+  addWheelToSlider('dt-gain-slider',  v => setDtGain(v),     'dtGain');
+}
+
+return {
+  init, setDragging, sliderRelease, onS9CalInput,
+  setBand, setMode, setFilterWidthMode, onWidthSlider, setWidth,
+  setPower, setPreamp, setOpMode, setMicGain, setComp,
+  nextAntenna, inhibitTx, allowTx,
+  toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume,
+  toggleEQ, setEQ, setDtGain,
+  startAbTest, stopAbTest,
+};
+
+})();
+
+RigControl.init();
+</script>
+
 </body>
 </html>
