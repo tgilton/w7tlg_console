@@ -1901,7 +1901,22 @@ function setBand(btn) {
 }
 
 function setMode(btn) {
-  send({ cmd: 'set_mode', mode: btn.dataset.mode, passband: 0 });
+  const mode = btn.dataset.mode;
+  if (mode === 'PKTUSB') {
+    // DATA-U known-good starting point (confirmed live 2026-07-03) — applied
+    // only on this explicit mode-select click, never reactively from
+    // telemetry. AGC/NB/DNF/IPO/width are real rig CAT settings; DNR/EQ are
+    // SDR-audio-chain-only (see their own set_* handlers in server.py).
+    send({ cmd: 'set_mode', mode, passband: 3000 });
+    send({ cmd: 'set_agc', value: 2 });        // FAST
+    send({ cmd: 'set_nb', on: false });
+    send({ cmd: 'set_dnf', on: false });
+    send({ cmd: 'set_preamp', level: 0 });     // IPO
+    send({ cmd: 'set_audio_nr', on: false });  // DNR
+    send({ cmd: 'set_eq', enabled: false });
+  } else {
+    send({ cmd: 'set_mode', mode, passband: 0 });
+  }
 }
 
 // ── Filter width (NAR/WID) ──────────────────────────────────
