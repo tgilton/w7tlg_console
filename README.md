@@ -270,7 +270,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for internal design: data flow, module re
 
 ## License
 
-Personal project, not currently licensed for redistribution.
+MIT — see [LICENSE](LICENSE). This controls real RF/TX hardware; use at your own risk, no warranty.
 
 ## Author
 
