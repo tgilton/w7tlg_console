@@ -33,7 +33,7 @@ from config.station_profile import station_profile
 from rig.rigctld_client import RigctldClient, RigState
 from sdr.sdr_client import SdrClient
 from wsjtx.udp_listener import wsjtx_listener
-from wsjtx.protocol import Status as WsjtxStatus
+from wsjtx.protocol import Status as WsjtxStatus, LoggedAdif
 from wsjtx.qso_logger import qso_telemetry_logger
 from wsjtx.award_tracker import award_tracker
 from wsjtx.spotter import spotter, SpotAlert
@@ -302,6 +302,7 @@ async def on_wsjtx_status(status: WsjtxStatus):
             "tx_message": status.tx_message,
         },
     })
+
 
 
 async def on_audio_frame(audio_bytes: bytes):
@@ -882,6 +883,15 @@ async def handle_ws_command(text: str, ws: WebSocket):
             # passthrough, see RigctldClient.set_dt_gain).
             value = max(0, min(100, int(msg["value"])))
             ok = await bridge.rig.set_dt_gain(value)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_ssb_tx_bpf":
+            # CAT menu 110 "SSB TX BPF" — one of 5 fixed radio presets (0-4),
+            # not a Hamlib level (raw CAT passthrough, see
+            # RigctldClient.set_ssb_tx_bpf / SSB_TX_BPF_PRESETS).
+            value = int(msg["value"])
+            ok = await bridge.rig.set_ssb_tx_bpf(value)
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
