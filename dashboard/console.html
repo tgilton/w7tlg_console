@@ -36,22 +36,25 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:        #0d1117;
-  --surface:   #161b22;
-  --border:    #21262d;
-  --border2:   #30363d;
-  --cyan:      #00d4ff;
-  --cyan-dim:  #005f73;
-  --amber:     #ff8c00;
-  --amber-dim: #5a3200;
-  --green:     #00e676;
+  /* High-Contrast Slate — same hue family as before, pushed for contrast:
+     deeper ground, brighter ink, stronger border definition. See
+     ui-redesign/ for the palette comparison this was chosen from. */
+  --bg:        #090c10;
+  --surface:   #141920;
+  --border:    #232a33;
+  --border2:   #3d454f;
+  --cyan:      #2ce0ff;
+  --cyan-dim:  #073542;
+  --amber:     #ffa733;
+  --amber-dim: #4a2c00;
+  --green:     #10f0a3;
   --green-dim: #003d1f;
-  --red:       #ff3333;
+  --red:       #ff5c5c;
   --red-dim:   #4a0000;
-  --yellow:    #ffd60a;
-  --muted:     #58677a;
-  --label:     #8b949e;
-  --text:      #c9d1d9;
+  --yellow:    #ffe14d;
+  --muted:     #7c8a99;
+  --label:     #a3b0bd;
+  --text:      #eef2f6;
   --mono:      'JetBrains Mono', monospace;
   --sans:      'Inter', system-ui, sans-serif;
 }
@@ -67,7 +70,7 @@ html, body {
 
 .console {
   display: grid;
-  grid-template-columns: 190px 1fr 220px;
+  grid-template-columns: 215px 1fr 250px;
   grid-template-areas:
     "status   status   status"
     "modedsp  center   bandamp";
@@ -155,9 +158,48 @@ html, body {
 .badge-split { background: #3a2a00; color: #f90; animation: pulse-tx 1.2s infinite; }
 @keyframes pulse-tx { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 
+/* ── Zoned grouping ─────────────────────────────────────────
+   Color-codes which physical signal path a control group affects, so it
+   reads at a glance without re-reading labels. Deliberately not applied
+   panel-wide: panel-modedsp and panel-bandamp each mix several categories
+   of control, so the accent goes on the specific sub-block it actually
+   describes. Everything left unstriped (Mode, Filter, Band, Antenna,
+   Preamp/ATT) is either genuinely neutral or already reads as the app's
+   default cyan interactive style — only categories that need to visually
+   stand OUT from that default get their own stripe. Semantic status colors
+   (SWR/temp good-amber-red) are untouched — this is "what kind of control
+   is this", not "is it okay". */
+.zone-tx, .zone-amp {
+  border-left: 3px solid var(--amber);
+  padding-left: 9px;
+  margin-left: -9px;
+  margin-bottom: 4px;
+}
+.zone-amp { border-left-color: var(--green); }
+.zone-tx h2, .zone-tx .section-label { color: var(--amber); }
+.zone-amp h2, .zone-amp .section-label { color: var(--green); }
+
+/* Segmented-pill containers for true multi-choice controls (exactly one
+   of N is ever active) — Mode, Filter, AGC, Band. Individual .btn/.dsp-
+   agc-btn active styling already does the "selected" look; this just adds
+   the bordered pill around the group so it reads as one control with N
+   settings rather than N independent buttons. */
+.mode-grid, .band-grid, .seg-row {
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  padding: 3px;
+}
+.seg-row { display: flex; flex-wrap: wrap; gap: 4px; }
+
 /* ── Mode / DSP column ──────────────────────────────────── */
 .panel-modedsp { grid-area: modedsp; }
 .mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 10px; }
+/* DATA-U was wrapping onto a second line ("DATA-" / "U") at the old 190px
+   column width, doubling the row height. Widening the column (above) gives
+   it room; tightened padding + no-wrap here make that robust rather than
+   "just barely fits" if content or font ever changes. */
+.mode-grid .btn { padding: 5px 4px; white-space: nowrap; }
 .slider-label { font-size: 0.65rem; color: var(--label); margin: 6px 0 3px; text-transform: uppercase; letter-spacing: 0.06em; }
 input[type=range] { width: 100%; accent-color: var(--cyan); cursor: pointer; }
 .dsp-toggle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; margin-top: 6px; }
@@ -323,7 +365,7 @@ select#palette-select {
     </div>
 
     <h2>Filter</h2>
-    <div class="btn-row" style="margin-bottom:6px">
+    <div class="btn-row seg-row" style="margin-bottom:6px">
       <button class="btn" id="filt-NAR" onclick="RigControl.setFilterWidthMode('NAR')">NAR</button>
       <button class="btn active" id="filt-WID" onclick="RigControl.setFilterWidthMode('WID')">WID</button>
     </div>
@@ -336,7 +378,7 @@ select#palette-select {
     <div class="power-value" id="width-val" style="text-align:left;margin-bottom:6px">3000Hz</div>
 
     <div class="divider"></div>
-    <div id="digital-tx-controls">
+    <div id="digital-tx-controls" class="zone-tx">
       <h2>Digital Audio</h2>
       <div class="power-slider-wrap" style="margin-bottom:6px">
         <span class="ctl-label" style="min-width:40px;font-size:0.62rem">DT GAIN</span>
@@ -358,7 +400,7 @@ select#palette-select {
     </div>
 
     <div class="divider"></div>
-    <div id="voice-tx-controls">
+    <div id="voice-tx-controls" class="zone-tx">
       <h2>SSB Audio</h2>
       <div class="power-slider-wrap" style="margin-bottom:6px">
         <span class="ctl-label" style="min-width:40px;font-size:0.62rem">MIC</span>
@@ -380,6 +422,20 @@ select#palette-select {
           ontouchend="RigControl.sliderRelease('comp', () => RigControl.setComp(document.getElementById('comp-slider').value))">
         <span class="power-value" id="comp-val">0%</span>
       </div>
+      <!-- TX bandwidth presets — CAT menu 110 "SSB TX BPF", radio-native
+           filter width (not a software EQ). Only 3 of the radio's 5 fixed
+           values have a button; see RigctldClient.SSB_TX_BPF_PRESETS. -->
+      <div class="power-slider-wrap" style="margin-top:6px">
+        <span class="ctl-label" style="min-width:40px;font-size:0.62rem">TX BW</span>
+        <span class="seg-row" style="flex:1">
+          <button class="dsp-agc-btn" id="bpf-0" onclick="RigControl.setSsbTxBpf(0)"
+            title="50-3000 Hz — radio default, full-range audio">WIDE</button>
+          <button class="dsp-agc-btn" id="bpf-1" onclick="RigControl.setSsbTxBpf(1)"
+            title="100-2900 Hz — relaxed, natural-sounding ragchew">RAG-CHEW</button>
+          <button class="dsp-agc-btn" id="bpf-3" onclick="RigControl.setSsbTxBpf(3)"
+            title="300-2700 Hz — narrowed to punch through on DX">DX</button>
+        </span>
+      </div>
     </div>
 
     <div class="dsp-toggle-row">
@@ -398,9 +454,11 @@ select#palette-select {
     </div>
     <div class="dsp-toggle-row">
       <span class="slider-label" style="margin:0">AGC</span>
-      <button class="dsp-agc-btn" id="agc-off" onclick="RigControl.setAGC(0)">OFF</button>
-      <button class="dsp-agc-btn" id="agc-fast" onclick="RigControl.setAGC(2)">FAST</button>
-      <button class="dsp-agc-btn" id="agc-slow" onclick="RigControl.setAGC(3)">SLOW</button>
+      <span class="seg-row" style="flex:1">
+        <button class="dsp-agc-btn" id="agc-off" onclick="RigControl.setAGC(0)">OFF</button>
+        <button class="dsp-agc-btn" id="agc-fast" onclick="RigControl.setAGC(2)">FAST</button>
+        <button class="dsp-agc-btn" id="agc-slow" onclick="RigControl.setAGC(3)">SLOW</button>
+      </span>
     </div>
     <div class="dsp-toggle-row">
       <span class="slider-label" style="margin:0">VOL</span>
@@ -545,23 +603,25 @@ select#palette-select {
       <button class="btn" data-band="6m"   data-freq="50313000" onclick="RigControl.setBand(this)">6</button>
     </div>
 
-    <h2>Amp (ACOM 1200S)</h2>
-    <div class="amp-state-row">
-      <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
-      <span class="amp-state-badge" id="amp-atu-badge" style="display:none">ATU &#10003;</span>
-    </div>
-    <div class="meter-row"><span>Fwd Power</span><span class="val good" id="amp-fwd-val">0 W</span></div>
-    <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div></div>
-    <div class="meter-row"><span>SWR</span><span class="val good" id="amp-swr-val">—</span></div>
-    <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-swr-bar" style="width:0%"></div></div>
-    <div class="meter-row"><span>PAM1 Temp</span><span class="val" id="amp-temp-val">— &deg;C</span></div>
-    <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div></div>
-    <div class="meter-row"><span>Drive In</span><span class="val" id="amp-drive-val">— W</span></div>
-    <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-drive-bar" style="width:0%"></div></div>
-    <div class="meter-row mono" style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">
-      <span>HV <span id="amp-hv-val">—</span>V</span>
-      <span>I <span id="amp-current-val">—</span>A</span>
-      <span>Refl <span id="amp-refl-val">—</span>W</span>
+    <div class="zone-amp">
+      <h2>Amp (ACOM 1200S)</h2>
+      <div class="amp-state-row">
+        <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
+        <span class="amp-state-badge" id="amp-atu-badge" style="display:none">ATU &#10003;</span>
+      </div>
+      <div class="meter-row"><span>Fwd Power</span><span class="val good" id="amp-fwd-val">0 W</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>SWR</span><span class="val good" id="amp-swr-val">—</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-swr-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>PAM1 Temp</span><span class="val" id="amp-temp-val">— &deg;C</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>Drive In</span><span class="val" id="amp-drive-val">— W</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-drive-bar" style="width:0%"></div></div>
+      <div class="meter-row mono" style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">
+        <span>HV <span id="amp-hv-val">—</span>V</span>
+        <span>I <span id="amp-current-val">—</span>A</span>
+        <span>Refl <span id="amp-refl-val">—</span>W</span>
+      </div>
     </div>
 
     <div class="divider"></div>
@@ -2057,6 +2117,7 @@ function _applyDNF(on) {
 
 function setAGC(value) { send({ cmd: 'set_agc', value }); }
 function setRxVolume(v) { send({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 }); }
+function setSsbTxBpf(value) { send({ cmd: 'set_ssb_tx_bpf', value }); }
 
 function toggleEQ() { _eqOn = !_eqOn; setEQ(); _applyEQ(_eqOn); }
 function _applyEQ(on) {
@@ -2101,6 +2162,18 @@ function updateDSP(s) {
     if (el) el.classList.add('active');
   }
 
+  // SSB TX BPF — only 3 of the radio's 5 menu values have a button
+  // (WIDE/RAG-CHEW/DX); the other two are still valid radio state but have
+  // no UI toggle, so all buttons correctly show inactive in that case.
+  ['bpf-0', 'bpf-1', 'bpf-3'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active');
+  });
+  if (s.ssb_tx_bpf !== undefined && s.ssb_tx_bpf !== null) {
+    const el = document.getElementById('bpf-' + s.ssb_tx_bpf);
+    if (el) el.classList.add('active');
+  }
+
   if (s.sdr_eq_enabled !== undefined && s.sdr_eq_enabled !== _eqOn) { _eqOn = !!s.sdr_eq_enabled; _applyEQ(_eqOn); }
   if (!isDragging('eq')) {
     const bands = [
@@ -2139,7 +2212,7 @@ return {
   setBand, setMode, setFilterWidthMode, onWidthSlider, setWidth,
   setPower, setPreamp, setOpMode, setMicGain, setComp,
   nextAntenna, inhibitTx, allowTx,
-  toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume,
+  toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume, setSsbTxBpf,
   toggleEQ, setEQ, setDtGain,
   startAbTest, stopAbTest,
 };

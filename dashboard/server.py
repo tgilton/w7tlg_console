@@ -886,6 +886,15 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
+        elif cmd == "set_ssb_tx_bpf":
+            # CAT menu 110 "SSB TX BPF" — one of 5 fixed radio presets (0-4),
+            # not a Hamlib level (raw CAT passthrough, see
+            # RigctldClient.set_ssb_tx_bpf / SSB_TX_BPF_PRESETS).
+            value = int(msg["value"])
+            ok = await bridge.rig.set_ssb_tx_bpf(value)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
         elif cmd == "set_dnf":
             ok = await bridge.rig.set_dnf_on(bool(msg["on"]))
             await ws.send_text(json.dumps({

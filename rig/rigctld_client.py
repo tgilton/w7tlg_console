@@ -157,6 +157,7 @@ class RigState:
     nr_on: bool         = False   # NR func on/off
     dnf_on: bool        = False   # ANF (auto-notch) on/off
     dt_gain: Optional[int] = None  # DATA OUT LEVEL (CAT menu 073), 0-100; None until first poll
+    ssb_tx_bpf: Optional[int] = None  # SSB TX BPF (CAT menu 110), 0-4; None until first poll
 
     # Derived
     is_digital: bool        = False
@@ -192,6 +193,7 @@ class RigState:
             "nr_on":            self.nr_on,
             "dnf_on":           self.dnf_on,
             "dt_gain":          self.dt_gain,
+            "ssb_tx_bpf":       self.ssb_tx_bpf,
             "is_digital":       self.is_digital,
             "near_digital_freq": self.near_digital_freq,
         }
@@ -259,6 +261,7 @@ class RigctldClient:
         self._writer: Optional[asyncio.StreamWriter] = None
         self._cycle = 0
         self._dt_gain_task: Optional[asyncio.Task] = None
+        self._ssb_bpf_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -399,8 +402,15 @@ class RigctldClient:
     async def get_dt_gain(self) -> Optional[int]:
         """Read CAT menu 073 ("DATA OUT LEVEL", the digital-mode TX audio
         drive level operators call "DT GAIN" — not menu 049 "AM DATA GAIN",
-        which is unrelated/AM-only). Range 0-100. Live-verified against the
-        real FT-991A: `w EX073;` returns the rig's raw echo, e.g. "EX073030;".
+        which is unrelated/AM-only). Range 0-100.
+
+        Live-verified against the real FT-991A over a raw socket: `w
+        EX073;` replies with the rig's own echo terminated by a NUL byte
+        — e.g. b'EX073010;\\x00' — NOT a newline, and rigctld does not
+        append its own RPRT line for this passthrough. `readline()` waits
+        for '\\n' and never sees one here, so it silently timed out on
+        every call; `readuntil(b'\\x00')` is what actually matches the
+        wire format.
 
         Uses its OWN short-lived connection rather than the shared poll
         connection/lock: this passthrough can take several seconds under
@@ -418,9 +428,10 @@ class RigctldClient:
         try:
             writer.write(b"w EX073;\n")
             await writer.drain()
-            line = await asyncio.wait_for(reader.readline(), timeout=5.0)
-            reply = line.decode(errors='replace').strip()
-        except (asyncio.TimeoutError, ConnectionResetError, OSError):
+            raw = await asyncio.wait_for(reader.readuntil(b'\x00'), timeout=5.0)
+            reply = raw.decode(errors='replace').rstrip('\x00').strip()
+        except (asyncio.TimeoutError, asyncio.LimitOverrunError,
+                asyncio.IncompleteReadError, ConnectionResetError, OSError):
             return None
         finally:
             writer.close()
@@ -433,13 +444,71 @@ class RigctldClient:
 
     async def set_dt_gain(self, value: int) -> bool:
         """Set DT GAIN (CAT menu 073, "DATA OUT LEVEL"), 0-100.
-        Uses _send_set (reads until RPRT) so the shared-connection buffer
-        is always left clean — send_raw_cmd/_send_get with n_lines=1 leaves
-        the trailing RPRT 0 in the buffer and desyncs the next poll."""
+
+        Uses _send_raw_ex_set, NOT _send_set — see that method's docstring.
+        _send_set reads until an "RPRT" line, which never arrives for this
+        passthrough (see get_dt_gain), so every call used to hang for the
+        full 2s timeout and then mark the whole rig disconnected on every
+        DT GAIN change (silently, since a timed-out slider drag doesn't
+        show an error — but it was tearing down and reconnecting the
+        rigctld link every time)."""
         value = max(0, min(100, int(value)))
-        ok = await self._send_set(f"w EX073{value:03d};\n")
+        ok = await self._send_raw_ex_set(f"w EX073{value:03d};\n")
         if ok:
             self.state.dt_gain = value
+            await self._fire_callbacks()
+        return ok
+
+    # SSB TX BPF (CAT menu 110) — the radio's built-in TX audio bandpass
+    # presets. Confirmed against the FT-991A CAT Operation Reference Manual:
+    #   0: 50-3000 Hz   1: 100-2900 Hz   2: 200-2800 Hz
+    #   3: 300-2700 Hz  4: 400-2600 Hz
+    # Single P2 digit, unlike DT GAIN's three — `EX110{n};` not `EX110{n:03d};`.
+    SSB_TX_BPF_PRESETS = {
+        0: (50, 3000),
+        1: (100, 2900),
+        2: (200, 2800),
+        3: (300, 2700),
+        4: (400, 2600),
+    }
+
+    async def get_ssb_tx_bpf(self) -> Optional[int]:
+        """Read CAT menu 110 ("SSB TX BPF"). Returns 0-4 or None.
+        Own short-lived connection, same rationale as get_dt_gain. Reply
+        framing is the same NUL-terminated-no-newline echo as EX073 —
+        confirmed live: `w EX110;` → b'EX1100;\\x00' — see get_dt_gain."""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port), timeout=2.0)
+        except (OSError, asyncio.TimeoutError):
+            return None
+        try:
+            writer.write(b"w EX110;\n")
+            await writer.drain()
+            raw = await asyncio.wait_for(reader.readuntil(b'\x00'), timeout=5.0)
+            reply = raw.decode(errors='replace').rstrip('\x00').strip()
+        except (asyncio.TimeoutError, asyncio.LimitOverrunError,
+                asyncio.IncompleteReadError, ConnectionResetError, OSError):
+            return None
+        finally:
+            writer.close()
+        if reply and reply.startswith("EX110"):
+            try:
+                return int(reply[5:6])
+            except ValueError:
+                pass
+        return None
+
+    async def set_ssb_tx_bpf(self, value: int) -> bool:
+        """Set SSB TX BPF (CAT menu 110) to one of the 5 radio presets, 0-4.
+        Uses _send_raw_ex_set, NOT _send_set — see that method's docstring
+        (this passthrough never sends an RPRT line, so _send_set always
+        timed out and tore down the rig connection on every click)."""
+        if value not in self.SSB_TX_BPF_PRESETS:
+            return False
+        ok = await self._send_raw_ex_set(f"w EX110{value:01d};\n")
+        if ok:
+            self.state.ssb_tx_bpf = value
             await self._fire_callbacks()
         return ok
 
@@ -694,12 +763,24 @@ class RigctldClient:
                 self._dt_gain_task is None or self._dt_gain_task.done()):
             self._dt_gain_task = asyncio.create_task(self._poll_dt_gain())
 
+        # SSB TX BPF — mirrors DT GAIN above but for voice modes (the menu
+        # item is meaningless in digital modes); same detached-task rationale.
+        if not self.state.is_digital and (
+                self._ssb_bpf_task is None or self._ssb_bpf_task.done()):
+            self._ssb_bpf_task = asyncio.create_task(self._poll_ssb_bpf())
+
         return changed
 
     async def _poll_dt_gain(self):
         val = await self.get_dt_gain()
         if val is not None and val != self.state.dt_gain:
             self.state.dt_gain = val
+            await self._fire_callbacks()
+
+    async def _poll_ssb_bpf(self):
+        val = await self.get_ssb_tx_bpf()
+        if val is not None and val != self.state.ssb_tx_bpf:
+            self.state.ssb_tx_bpf = val
             await self._fire_callbacks()
 
     # ------------------------------------------------------------------
@@ -802,6 +883,39 @@ class RigctldClient:
             except (asyncio.TimeoutError, ConnectionResetError, OSError) as e:
                 logger.warning(f"SET '{cmd.strip()}' failed: {e}")
                 self.state.connected = False
+                return False
+
+    async def _send_raw_ex_set(self, cmd: str) -> bool:
+        """Send a raw CAT passthrough SET command (`w EXnnnv...;`) on the
+        shared connection.
+
+        This is NOT _send_set with different framing — it's a genuinely
+        different reply shape, live-verified over a raw socket against
+        this FT-991A:
+          - GET-style passthrough (`w EX110;`, no parameter) — the radio
+            echoes the current value, NUL-terminated: b'EX1100;\\x00'.
+            No newline, no RPRT. (See get_dt_gain/get_ssb_tx_bpf.)
+          - SET-style passthrough (`w EX1101;`, parameter included) —
+            the radio sends back NOTHING AT ALL. Zero bytes, confirmed
+            over a 6-second wait. But the write DOES take effect —
+            confirmed by immediately reading the value back afterward.
+        So there is nothing to await here: any attempt to read a reply
+        (readline for an RPRT, or readuntil for a NUL) just blocks for
+        the full timeout on every single call, since no bytes ever
+        arrive — that's exactly what was breaking this: _send_set's
+        readline()-until-RPRT loop was hanging 2s and then marking the
+        whole rig disconnected, on every DT GAIN or SSB TX BPF change.
+        This is a fire-and-forget write, matching what the radio
+        actually does with these commands."""
+        async with self._lock:
+            if not self._writer or self._writer.is_closing():
+                return False
+            try:
+                self._writer.write(cmd.encode())
+                await self._writer.drain()
+                return True
+            except (ConnectionResetError, OSError) as e:
+                logger.warning(f"Raw SET '{cmd.strip()}' failed: {e}")
                 return False
 
     async def _fire_callbacks(self):

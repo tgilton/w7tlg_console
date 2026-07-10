@@ -1190,6 +1190,21 @@ input[type=range]::-webkit-slider-thumb:active {
           <span class="power-value" id="comp-val">0%</span>
         </div>
       </div>
+      <!-- TX bandpass presets — CAT menu 110 "SSB TX BPF", one of 5 fixed
+           radio-native filter widths (not a software EQ). RAG-CHEW is the
+           widest usable option next to the full-open WIDE default; DX
+           narrows both ends to punch through a crowded/noisy band. -->
+      <div class="control-row" style="margin-top:6px; flex-direction:column; align-items:stretch; gap:3px">
+        <span class="control-label" style="width:auto">TX BANDWIDTH</span>
+        <div class="dsp-btn-row" id="ssb-bpf-row">
+          <button class="dsp-agc-btn" id="bpf-0" style="flex:1" onclick="setSsbTxBpf(0)"
+            title="50-3000 Hz — radio default, full-range audio">WIDE</button>
+          <button class="dsp-agc-btn" id="bpf-1" style="flex:1" onclick="setSsbTxBpf(1)"
+            title="100-2900 Hz — relaxed, natural-sounding ragchew">RAG-CHEW</button>
+          <button class="dsp-agc-btn" id="bpf-3" style="flex:1" onclick="setSsbTxBpf(3)"
+            title="300-2700 Hz — narrowed to punch through on DX">DX</button>
+        </div>
+      </div>
     </div>
 
     <!-- Digital Audio (DATA-U etc.) — DT GAIN is CAT menu 073 "DATA OUT
@@ -2020,6 +2035,10 @@ function setPreamp(level) {
   send({ cmd: 'set_preamp', level });
 }
 
+function setSsbTxBpf(value) {
+  send({ cmd: 'set_ssb_tx_bpf', value });
+}
+
 function setOpMode(mode) {
   send({ cmd: 'set_mode_op', mode, confirmed: true });
 }
@@ -2180,6 +2199,19 @@ function updateDSP(s) {
   const activeId = agcMap[s.sdr_agc_mode];
   if (activeId) {
     const el = document.getElementById(activeId);
+    if (el) el.classList.add('active');
+  }
+
+  // SSB TX BPF preset buttons — only 3 of the radio's 5 menu values have a
+  // button (WIDE/RAG-CHEW/DX); the other two (200-2800, 400-2600) are still
+  // valid radio state but have no UI toggle, so all buttons correctly show
+  // inactive if the radio is on one of those from front-panel/other-app use.
+  ['bpf-0', 'bpf-1', 'bpf-3'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active');
+  });
+  if (s.ssb_tx_bpf !== undefined && s.ssb_tx_bpf !== null) {
+    const el = document.getElementById('bpf-' + s.ssb_tx_bpf);
     if (el) el.classList.add('active');
   }
 

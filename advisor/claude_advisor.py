@@ -28,7 +28,7 @@ import anthropic
 from config.station_profile import station_profile
 from rig.rigctld_client import RigctldClient
 
-MODEL = "claude-sonnet-4-5"
+MODEL = "claude-sonnet-5"
 
 QSY_TOOL = {
     "name": "qsy_to_band",
@@ -173,7 +173,11 @@ class ClaudeAdvisor:
         messages = self.conversation_history + [{"role": "user", "content": context}]
         full_response: list[str] = []
 
-        kwargs = dict(model=MODEL, max_tokens=1024, system=_system_prompt(), messages=messages)
+        kwargs = dict(
+            model=MODEL, max_tokens=1024, system=_system_prompt(), messages=messages,
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "low"},
+        )
         if auto_qsy:
             kwargs["tools"] = [QSY_TOOL]
             kwargs["tool_choice"] = {"type": "auto"}
