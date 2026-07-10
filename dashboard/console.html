@@ -102,7 +102,6 @@ html, body {
 .status-item { font-size: 0.7rem; color: var(--label); display: flex; align-items: center; font-family: var(--mono); }
 .status-item.on { color: var(--green); }
 .spacer { flex: 1; }
-.freq-summary { font-family: var(--mono); font-size: 0.75rem; color: var(--cyan); }
 .nav-link {
   font-family: var(--mono); font-size: 0.68rem; color: var(--cyan);
   text-decoration: none; border: 1px solid var(--cyan-dim); border-radius: 3px;
@@ -136,8 +135,7 @@ html, body {
   transition: all 0.1s;
 }
 .btn:hover:not(.disabled) { border-color: var(--cyan-dim); color: var(--text); }
-.btn.active { background: #0d2538; border-color: var(--cyan); color: var(--cyan); }
-.btn.active-amber { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
+.btn.active, .btn.active-amber { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
 .btn.active-green { background: var(--green-dim); border-color: var(--green); color: var(--green); }
 .btn.danger { border-color: #6b2020; color: #ff6b6b; background: #2a0d0d; }
 .btn.danger:hover { border-color: var(--red); color: var(--red); }
@@ -208,7 +206,7 @@ input[type=range] { width: 100%; accent-color: var(--cyan); cursor: pointer; }
   background: var(--bg); color: var(--muted); font-family: var(--mono);
   font-size: 0.65rem; font-weight: 600; cursor: pointer;
 }
-.dsp-toggle.active { background: var(--cyan-dim); border-color: var(--cyan); color: var(--cyan); }
+.dsp-toggle.active { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
 .dsp-agc-btn {
   padding: 4px 6px; border-radius: 3px; border: 1px solid var(--border2);
   background: var(--bg); color: var(--muted); font-family: var(--mono);
@@ -342,7 +340,6 @@ select#palette-select {
     <span class="status-item" id="stat-sdr"><span class="dot" id="dot-sdr"></span>SDR</span>
     <span class="status-item" id="stat-wsjtx"><span class="dot" id="dot-wsjtx"></span>WSJT-X</span>
     <span class="spacer"></span>
-    <span class="freq-summary" id="status-summary">— &middot; — &middot; —</span>
     <span class="inhibit-banner" id="inhibit-banner">&#9940; TX INHIBITED &mdash; <span id="inhibit-reason">—</span></span>
     <button class="btn danger" onclick="RigControl.inhibitTx()">&#9940; Inhibit</button>
     <button class="btn active-green" onclick="RigControl.allowTx()">&#10003; Allow</button>
@@ -555,15 +552,6 @@ select#palette-select {
       <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()">Whole Band</button>
       <button class="btn" onclick="Panadapter.recenterView()">Center</button>
       <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()">Audio: Live</button>
-      <!-- Tune/VOX/MOX intentionally NOT wired — there is no existing CAT
-           command for a tuning burst or manual PTT keying independent of
-           the mic/digital source, and the spec explicitly forbids adding a
-           second, competing TX-control path alongside /api/tx. Shown
-           disabled rather than silently omitted, same convention as
-           Loop/Combined above, so the gap is visible rather than hidden. -->
-      <button class="btn disabled" title="No CAT tune-burst command exists yet">Tune Burst</button>
-      <button class="btn disabled" title="No manual-PTT command exists yet — use rig PTT">VOX</button>
-      <button class="btn disabled" title="No manual-PTT command exists yet — use rig PTT">MOX</button>
     </div>
     <div class="center-controls-row">
       <span class="ctl-label">Span</span>
@@ -572,10 +560,13 @@ select#palette-select {
       <label class="ctl-label"><input type="checkbox" id="auto-scale-cb" checked onchange="Panadapter.onAutoScaleToggle(this.checked)"> Auto</label>
       <span class="ctl-label">Floor</span>
       <input type="range" id="floor-slider" min="-160" max="0" value="-90" disabled style="width:60px" oninput="Panadapter.onFloorSlider(this.value)">
+      <span class="span-val" id="floor-val">-90dB</span>
       <span class="ctl-label">Gain</span>
       <input type="range" id="gain-slider" min="0" max="100" value="50" disabled style="width:60px" oninput="Panadapter.onGainSlider(this.value)">
+      <span class="span-val" id="gain-val">50%</span>
       <span class="ctl-label">Avg</span>
       <input type="range" id="avg-slider" min="0" max="100" value="30" style="width:60px" oninput="Panadapter.onAvgSlider(this.value)">
+      <span class="span-val" id="avg-val">30%</span>
       <select id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
         <option value="default">Default</option>
         <option value="linrad">Linrad</option>
@@ -713,11 +704,7 @@ const StatusBar = (function () {
     if (dot) dot.classList.toggle('on', !!ok);
     if (item) item.classList.toggle('on', !!ok);
   }
-  function setSummary(text) {
-    const el = document.getElementById('status-summary');
-    if (el) el.textContent = text;
-  }
-  return { setDot, setSummary };
+  return { setDot };
 })();
 
 function showToast(message, type) {
@@ -1190,6 +1177,7 @@ function onAutoScaleToggle(checked) {
 
 function onFloorSlider(v) {
   manualFloorDb = parseFloat(v);
+  document.getElementById('floor-val').textContent = manualFloorDb + 'dB';
 }
 
 function drawRigMarker(c, w, h, dpr) {
@@ -1221,6 +1209,7 @@ function drawRigMarker(c, w, h, dpr) {
 function onGainSlider(v) {
   const g = parseFloat(v);
   manualRangeDb = 150 - (g / 100) * 140;
+  document.getElementById('gain-val').textContent = g + '%';
 }
 
 function drawSpectrum() {
@@ -1317,7 +1306,10 @@ function onContrastSlider(v) { wfContrast = parseFloat(v) / 10; }
 
 let smoothedSpectrum = null;
 let specAvgAlpha = 0.30;
-function onAvgSlider(v) { specAvgAlpha = parseFloat(v) / 100 * 0.95; }
+function onAvgSlider(v) {
+  specAvgAlpha = parseFloat(v) / 100 * 0.95;
+  document.getElementById('avg-val').textContent = v + '%';
+}
 function applySpectrumSmoothing(points) {
   if (specAvgAlpha < 0.01) return points;
   if (!smoothedSpectrum || smoothedSpectrum.length !== points.length) {
@@ -1703,9 +1695,6 @@ function updateUI(s) {
 
   StatusBar.setDot('rig', !!rig.connected);
   StatusBar.setDot('amp', !!s.amp_connected);
-  StatusBar.setSummary(
-    `${rig.band || '—'} · ${(rig.freq_display || '—').trim()} · ${rig.mode || '—'}`
-  );
 
   const vfoEl = document.getElementById('vfo');
   vfoEl.textContent = rig.freq_display || '  0.000.000';
@@ -1964,7 +1953,19 @@ function updateFilterWidth(rig) {
     pb = (rig.passband_hz && rig.passband_hz >= range.WID[0]) ? rig.passband_hz : range.widDefault;
   } else {
     pb = rig.passband_hz || range.narDefault;
-    which = pb >= range.WID[0] ? 'WID' : 'NAR';
+    // NAR's upper bound and WID's lower bound are the same Hz value (e.g.
+    // USB narDefault === WID[0] === 1800), so a passband sitting exactly on
+    // that boundary can't be classified from the number alone. Stick with
+    // whichever zone was last explicitly selected as long as the reported
+    // passband still fits inside it; only re-derive from the raw value when
+    // it falls outside the current zone (e.g. mode/band change, or a value
+    // set some other way).
+    const curRange = range[_widthMode];
+    if (curRange && pb >= curRange[0] && pb <= curRange[1]) {
+      which = _widthMode;
+    } else {
+      which = pb >= range.WID[0] ? 'WID' : 'NAR';
+    }
   }
   _widthMode = which;
   narBtn.className = 'btn' + (which === 'NAR' ? ' active' : '');
