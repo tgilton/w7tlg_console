@@ -1947,25 +1947,24 @@ function updateFilterWidth(rig) {
   narBtn.classList.remove('disabled');
   widBtn.classList.remove('disabled');
 
-  let pb, which;
-  if (mode === 'PKTUSB') {
-    which = 'WID';
-    pb = (rig.passband_hz && rig.passband_hz >= range.WID[0]) ? rig.passband_hz : range.widDefault;
+  // NAR/WID and the slider always track the rig's actual reported passband
+  // (radio is ground truth) — including in DATA-U/PKTUSB, where clicking
+  // NAR really does narrow the FT-991A's own DATA-U IF filter via CAT, even
+  // though the console's own RX audio comes from the SDR at full width.
+  let which;
+  const pb = rig.passband_hz || range.narDefault;
+  // NAR's upper bound and WID's lower bound are the same Hz value (e.g.
+  // USB narDefault === WID[0] === 1800), so a passband sitting exactly on
+  // that boundary can't be classified from the number alone. Stick with
+  // whichever zone was last explicitly selected as long as the reported
+  // passband still fits inside it; only re-derive from the raw value when
+  // it falls outside the current zone (e.g. mode/band change, or a value
+  // set some other way).
+  const curRange = range[_widthMode];
+  if (curRange && pb >= curRange[0] && pb <= curRange[1]) {
+    which = _widthMode;
   } else {
-    pb = rig.passband_hz || range.narDefault;
-    // NAR's upper bound and WID's lower bound are the same Hz value (e.g.
-    // USB narDefault === WID[0] === 1800), so a passband sitting exactly on
-    // that boundary can't be classified from the number alone. Stick with
-    // whichever zone was last explicitly selected as long as the reported
-    // passband still fits inside it; only re-derive from the raw value when
-    // it falls outside the current zone (e.g. mode/band change, or a value
-    // set some other way).
-    const curRange = range[_widthMode];
-    if (curRange && pb >= curRange[0] && pb <= curRange[1]) {
-      which = _widthMode;
-    } else {
-      which = pb >= range.WID[0] ? 'WID' : 'NAR';
-    }
+    which = pb >= range.WID[0] ? 'WID' : 'NAR';
   }
   _widthMode = which;
   narBtn.className = 'btn' + (which === 'NAR' ? ' active' : '');
