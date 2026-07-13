@@ -22,6 +22,12 @@ Safety: every antenna move re-checks TX state, amp connection, and amp
 fault status (via AcomBridge.goto_antenna) before switching, and a step
 aborts the whole test cleanly — with a clear error message — rather than
 pressing on with a switch that didn't confirm or a reading taken mid-TX.
+
+Manual mode (manual=True): skips AcomBridge entirely — `antennas` is a
+list of free-text labels instead of ACOM port numbers, so any antenna
+can be profiled, not just what's wired into the ACOM's own switch. Each
+step pauses (awaiting_antenna set, status stays "running") until the
+operator physically moves the switch and calls confirm_switch().
 """
 
 import asyncio
@@ -61,7 +67,7 @@ StatusCallback = Callable[[dict], Coroutine]
 @dataclass
 class StepResult:
     round: int
-    antenna: int
+    antenna: int | str
     antenna_name: str
     freq_hz: float
     signal_db_p90: float
@@ -103,11 +109,14 @@ class AntennaAbTest:
         self.csv_path: Optional[Path] = None
         self.current_round = 0
         self.total_rounds = 0
-        self.current_antenna: Optional[int] = None
+        self.current_antenna: Optional[int | str] = None
         self.current_active_channels = 0
         self._task: Optional[asyncio.Task] = None
         self._stop_requested = False
         self._status_callbacks: list[StatusCallback] = []
+        self._manual = False
+        self.awaiting_antenna: Optional[str] = None
+        self._confirm_event: Optional[asyncio.Event] = None
 
     def on_status(self, cb: StatusCallback):
         self._status_callbacks.append(cb)
@@ -124,6 +133,8 @@ class AntennaAbTest:
         return {
             "status": self.status,
             "error": self.error_message,
+            "manual": self._manual,
+            "awaiting_antenna": self.awaiting_antenna,
             "current_round": self.current_round,
             "total_rounds": self.total_rounds,
             "current_antenna": self.current_antenna,
@@ -133,19 +144,27 @@ class AntennaAbTest:
             "csv_path": str(self.csv_path) if self.csv_path else None,
         }
 
-    async def start(self, antennas: list[int], rounds: int,
+    async def start(self, antennas: list[int] | list[str], rounds: int,
                      scan_start_hz: float, scan_stop_hz: float,
                      bandwidth_hz: float = 2400.0,
-                     profile_duration_s: float = 30.0) -> tuple[bool, str]:
+                     profile_duration_s: float = 30.0,
+                     manual: bool = False) -> tuple[bool, str]:
         if self.running:
             return False, "A test is already running"
         if self.sdr is None or not self.sdr.available:
             return False, "SDR unavailable — cannot measure signal strength"
         if len(antennas) < 2:
             return False, "Need at least two antennas to compare"
-        for a in antennas:
-            if a not in ANTENNAS:
-                return False, f"Invalid antenna number: {a}"
+        if manual:
+            antennas = [str(a).strip() for a in antennas]
+            if any(not a for a in antennas):
+                return False, "Antenna labels cannot be blank"
+            if len(set(antennas)) != len(antennas):
+                return False, "Antenna labels must be unique"
+        else:
+            for a in antennas:
+                if a not in ANTENNAS:
+                    return False, f"Invalid antenna number: {a}"
         if rounds < 1:
             return False, "Need at least one round"
         if scan_stop_hz <= scan_start_hz:
@@ -172,6 +191,9 @@ class AntennaAbTest:
         self.current_antenna = None
         self.current_active_channels = 0
         self._stop_requested = False
+        self._manual = manual
+        self.awaiting_antenna = None
+        self._confirm_event = None
 
         self._task = asyncio.create_task(self._run(
             antennas, rounds, scan_start_hz, scan_stop_hz, bandwidth_hz, profile_duration_s))
@@ -183,6 +205,41 @@ class AntennaAbTest:
             return False, "No test running"
         self._stop_requested = True
         return True, "Stop requested"
+
+    def confirm_switch(self) -> tuple[bool, str]:
+        """
+        Manual mode: operator has physically moved the antenna switch —
+        resume the profile step that's waiting on it. No-op error if
+        nothing is currently waiting (e.g. double-click, or auto mode).
+        """
+        if self._confirm_event is None or self.awaiting_antenna is None:
+            return False, "Not awaiting an antenna switch confirmation"
+        self._confirm_event.set()
+        return True, "Switch confirmed"
+
+    async def _await_manual_switch(self, label: str) -> tuple[bool, str]:
+        """
+        No automated switch is sent — pause and wait for confirm_switch()
+        (the console's Confirm button) to signal that the operator has
+        physically moved the switch. Polls _stop_requested so a long wait
+        doesn't block a Stop request indefinitely.
+        """
+        self.awaiting_antenna = label
+        self._confirm_event = asyncio.Event()
+        await self._publish()
+        try:
+            while not self._confirm_event.is_set():
+                if self._stop_requested:
+                    return False, "Stopped while awaiting antenna switch confirmation"
+                try:
+                    await asyncio.wait_for(self._confirm_event.wait(), timeout=0.2)
+                except asyncio.TimeoutError:
+                    continue
+            return True, "ok"
+        finally:
+            self.awaiting_antenna = None
+            self._confirm_event = None
+            await self._publish()
 
     async def _run(self, antennas, rounds, scan_start_hz, scan_stop_hz, bw_hz, duration_s):
         try:
@@ -198,6 +255,8 @@ class AntennaAbTest:
                     ok, msg = await self._profile_antenna(
                         ant, rnd, scan_start_hz, scan_stop_hz, bw_hz, duration_s)
                     if not ok:
+                        if self._stop_requested:
+                            break
                         self.status = "error"
                         self.error_message = msg
                         logger.warning(f"AB test aborted: {msg}")
@@ -220,11 +279,14 @@ class AntennaAbTest:
         self.current_active_channels = 0
         await self._publish()
 
-        ok, msg = await self.bridge.goto_antenna(ant)
+        if self._manual:
+            ok, msg = await self._await_manual_switch(ant)
+        else:
+            ok, msg = await self.bridge.goto_antenna(ant)
         if not ok:
             return False, f"Antenna switch failed: {msg}"
 
-        # Let the relay settle before trusting any reading off it.
+        # Let the relay/connector settle before trusting any reading off it.
         await asyncio.sleep(1.0)
 
         active, floor_db, err = await self._profile_band(
@@ -233,14 +295,14 @@ class AntennaAbTest:
             return False, err
 
         self.current_active_channels = len(active)
-        ant_cfg = ANTENNAS.get(ant)
+        ant_cfg = None if self._manual else ANTENNAS.get(ant)
         ts = time.time()
         if not active:
             # A dead band during this antenna's window is real information
             # (not a failure) — log the floor alone so the round isn't lost.
             result = StepResult(
                 round=rnd, antenna=ant,
-                antenna_name=ant_cfg.name if ant_cfg else f"A{ant}",
+                antenna_name=ant_cfg.name if ant_cfg else str(ant),
                 freq_hz=0.0, signal_db_p90=floor_db, floor_db=floor_db,
                 snr_db=0.0, n_time_samples=0, ts=ts,
             )
@@ -252,7 +314,7 @@ class AntennaAbTest:
         for freq_hz, p90_db, local_floor_db, n in active:
             result = StepResult(
                 round=rnd, antenna=ant,
-                antenna_name=ant_cfg.name if ant_cfg else f"A{ant}",
+                antenna_name=ant_cfg.name if ant_cfg else str(ant),
                 freq_hz=freq_hz,
                 signal_db_p90=round(p90_db, 2),
                 floor_db=round(local_floor_db, 2),

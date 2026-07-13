@@ -974,13 +974,17 @@ async def handle_ws_command(text: str, ws: WebSocket):
         elif cmd == "ab_test_start":
             ok, reply = False, "AB test not initialized"
             if ab_test is not None:
+                manual = bool(msg.get("manual", False))
+                antennas = ([str(a) for a in msg["antennas"]] if manual
+                            else [int(a) for a in msg["antennas"]])
                 ok, reply = await ab_test.start(
-                    antennas=[int(a) for a in msg["antennas"]],
+                    antennas=antennas,
                     rounds=int(msg.get("rounds", 5)),
                     scan_start_hz=float(msg["scan_start_hz"]),
                     scan_stop_hz=float(msg["scan_stop_hz"]),
                     bandwidth_hz=float(msg.get("bandwidth_hz", 2400.0)),
                     profile_duration_s=float(msg.get("profile_duration_s", 30.0)),
+                    manual=manual,
                 )
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
@@ -989,6 +993,13 @@ async def handle_ws_command(text: str, ws: WebSocket):
             ok, reply = False, "AB test not initialized"
             if ab_test is not None:
                 ok, reply = await ab_test.stop()
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "ab_test_confirm_switch":
+            ok, reply = False, "AB test not initialized"
+            if ab_test is not None:
+                ok, reply = ab_test.confirm_switch()
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
 

@@ -73,10 +73,11 @@ html, body {
   grid-template-columns: 215px 1fr 250px;
   grid-template-areas:
     "status   status   status"
-    "modedsp  center   bandamp";
+    "modedsp  center   bandamp"
+    "sysmsgs  sysmsgs  sysmsgs";
   gap: 1px;
   background: var(--border);
-  align-items: start;
+  align-items: stretch;
 }
 
 .panel { background: var(--surface); padding: 12px; min-width: 0; }
@@ -158,23 +159,20 @@ html, body {
 
 /* ── Zoned grouping ─────────────────────────────────────────
    Color-codes which physical signal path a control group affects, so it
-   reads at a glance without re-reading labels. Deliberately not applied
-   panel-wide: panel-modedsp and panel-bandamp each mix several categories
-   of control, so the accent goes on the specific sub-block it actually
-   describes. Everything left unstriped (Mode, Filter, Band, Antenna,
-   Preamp/ATT) is either genuinely neutral or already reads as the app's
-   default cyan interactive style — only categories that need to visually
-   stand OUT from that default get their own stripe. Semantic status colors
-   (SWR/temp good-amber-red) are untouched — this is "what kind of control
-   is this", not "is it okay". */
-.zone-tx, .zone-amp {
+   reads at a glance without re-reading labels. Band/Antenna and Mode are
+   left unstriped — genuinely neutral, or already reads as the app's default
+   cyan interactive style. Everything else in panel-modedsp (Filter through
+   Preamp/ATT) shares one amber zone; panel-bandamp's amp telemetry/controls
+   share one green zone. Semantic status colors (SWR/temp good-amber-red)
+   are untouched — this is "what kind of control is this", not "is it okay". */
+.zone-audio, .zone-amp {
   border-left: 3px solid var(--amber);
   padding-left: 9px;
   margin-left: -9px;
   margin-bottom: 4px;
 }
 .zone-amp { border-left-color: var(--green); }
-.zone-tx h2, .zone-tx .section-label { color: var(--amber); }
+.zone-audio h2, .zone-audio .section-label { color: var(--amber); }
 .zone-amp h2, .zone-amp .section-label { color: var(--green); }
 
 /* Segmented-pill containers for true multi-choice controls (exactly one
@@ -192,7 +190,7 @@ html, body {
 
 /* ── Mode / DSP column ──────────────────────────────────── */
 .panel-modedsp { grid-area: modedsp; }
-.mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 10px; }
+.mode-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 10px; }
 /* DATA-U was wrapping onto a second line ("DATA-" / "U") at the old 190px
    column width, doubling the row height. Widening the column (above) gives
    it room; tightened padding + no-wrap here make that robust rather than
@@ -245,9 +243,9 @@ input[type=range] { width: 100%; accent-color: var(--cyan); cursor: pointer; }
 .tx-meter-value { font-family: var(--mono); font-size: 0.65rem; color: var(--text); }
 
 .scope-box { background: #0a0d11; border: 1px solid var(--border2); border-radius: 4px; position: relative; overflow: hidden; }
-.panadapter-box { height: 130px; margin-bottom: 4px; cursor: grab; }
+.panadapter-box { height: 260px; margin-bottom: 4px; cursor: grab; }
 .panadapter-box.dragging { cursor: grabbing; }
-.waterfall-box { height: 210px; margin-bottom: 6px; }
+.waterfall-box { height: 260px; margin-bottom: 6px; }
 #spectrum-canvas, #waterfall-canvas { width: 100%; height: 100%; display: block; }
 #waterfall-overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
 .freq-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 0.6rem; color: var(--muted); padding: 1px 2px 4px; }
@@ -264,6 +262,13 @@ select#palette-select {
   font-family: var(--mono); font-size: 0.65rem; background: var(--bg); color: var(--text);
   border: 1px solid var(--border2); border-radius: 3px; padding: 2px 4px;
 }
+
+.eq-row { justify-content: flex-start; }
+.eq-square-btn {
+  width: 34px; height: 34px; padding: 0; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.eq-bmt-group { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
 
 /* ── Band / amp column ──────────────────────────────────── */
 .panel-bandamp { grid-area: bandamp; }
@@ -310,6 +315,7 @@ select#palette-select {
 
 .power-slider-wrap { display: flex; align-items: center; gap: 6px; }
 .power-value { font-family: var(--mono); font-size: 0.68rem; color: var(--cyan); min-width: 32px; text-align: right; }
+.power-value-green { color: var(--green); }
 .abt-row { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 0.62rem; margin-bottom: 4px; }
 .abt-row input[type=number] { width: 44px; font-size: 0.62rem; background: var(--bg); color: var(--text); border: 1px solid var(--border2); border-radius: 2px; }
 #abt-results table { width: 100%; border-collapse: collapse; font-size: 0.6rem; }
@@ -317,15 +323,22 @@ select#palette-select {
 
 .scroll-table { max-height: 180px; overflow-y: auto; }
 
-/* ── Toast ──────────────────────────────────────────────── */
-.toast-stack { position: fixed; bottom: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 1100; }
-.toast {
-  font-family: var(--mono); font-size: 0.75rem; padding: 10px 14px; border-radius: 4px;
-  border: 1px solid var(--red); background: #2a0505; color: #ff8888;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4); animation: toast-in 0.15s ease-out; max-width: 320px;
+/* ── System messages (bottom bar) ──────────────────────────── */
+.panel-sysmsgs {
+  grid-area: sysmsgs;
+  display: flex; align-items: flex-start; gap: 16px;
+  padding: 8px 16px;
 }
-.toast.info { border-color: var(--cyan); background: #051a2a; color: var(--cyan); }
-@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.sysmsg-log {
+  flex: 1; display: flex; flex-direction: column; gap: 3px;
+  max-height: 90px; overflow-y: auto;
+  font-family: var(--mono); font-size: 0.68rem;
+}
+.sysmsg-item { display: flex; gap: 8px; color: var(--label); }
+.sysmsg-item .ts { color: var(--muted); flex-shrink: 0; }
+.sysmsg-item.error { color: #ff8888; }
+.sysmsg-item.info { color: var(--cyan); }
+.sysmsg-empty { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -355,12 +368,14 @@ select#palette-select {
     <div class="mode-grid">
       <button class="btn" data-mode="USB"    onclick="RigControl.setMode(this)">USB</button>
       <button class="btn" data-mode="LSB"    onclick="RigControl.setMode(this)">LSB</button>
+      <button class="btn" data-mode="PKTUSB" onclick="RigControl.setMode(this)">DATA-U</button>
       <button class="btn" data-mode="CW"     onclick="RigControl.setMode(this)">CW</button>
       <button class="btn" data-mode="AM"     onclick="RigControl.setMode(this)">AM</button>
-      <button class="btn" data-mode="PKTUSB" onclick="RigControl.setMode(this)">DATA-U</button>
       <button class="btn" data-mode="FM"     onclick="RigControl.setMode(this)">FM</button>
     </div>
 
+    <div class="divider"></div>
+    <div class="zone-audio">
     <h2>Filter</h2>
     <div class="btn-row seg-row" style="margin-bottom:6px">
       <button class="btn" id="filt-NAR" onclick="RigControl.setFilterWidthMode('NAR')">NAR</button>
@@ -375,7 +390,7 @@ select#palette-select {
     <div class="power-value" id="width-val" style="text-align:left;margin-bottom:6px">3000Hz</div>
 
     <div class="divider"></div>
-    <div id="digital-tx-controls" class="zone-tx">
+    <div id="digital-tx-controls">
       <h2>Digital Audio</h2>
       <div class="power-slider-wrap" style="margin-bottom:6px">
         <span class="ctl-label" style="min-width:40px;font-size:0.62rem">DT GAIN</span>
@@ -397,7 +412,7 @@ select#palette-select {
     </div>
 
     <div class="divider"></div>
-    <div id="voice-tx-controls" class="zone-tx">
+    <div id="voice-tx-controls">
       <h2>SSB Audio</h2>
       <div class="power-slider-wrap" style="margin-bottom:6px">
         <span class="ctl-label" style="min-width:40px;font-size:0.62rem">MIC</span>
@@ -435,6 +450,7 @@ select#palette-select {
       </div>
     </div>
 
+    <div class="divider"></div>
     <div class="dsp-toggle-row">
       <button class="dsp-toggle" id="nb-btn" onclick="RigControl.toggleNB()">NB <span id="nb-state">OFF</span></button>
       <button class="dsp-toggle" id="dnf-btn" onclick="RigControl.toggleDNF()">DNF <span id="dnf-state">OFF</span></button>
@@ -449,6 +465,7 @@ select#palette-select {
         ontouchend="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))">
       <span class="dsp-val" id="nr-val">8</span>
     </div>
+    <div class="divider"></div>
     <div class="dsp-toggle-row">
       <span class="slider-label" style="margin:0">AGC</span>
       <span class="seg-row" style="flex:1">
@@ -467,34 +484,15 @@ select#palette-select {
         ontouchend="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))">
       <span class="dsp-val" id="rx-vol-val" style="min-width:34px">400%</span>
     </div>
-    <div class="dsp-toggle-row">
-      <button class="dsp-toggle active" id="eq-btn" onclick="RigControl.toggleEQ()">EQ <span id="eq-state">ON</span></button>
+    <div class="divider"></div>
+    <div class="meter-row"><span>Preamp</span>
+      <span>
+        <button class="btn" id="preamp-ipo" style="padding:2px 5px" onclick="RigControl.setPreamp(0)">IPO</button>
+        <button class="btn" id="preamp-amp1" style="padding:2px 5px" onclick="RigControl.setPreamp(1)">A1</button>
+        <button class="btn" id="preamp-amp2" style="padding:2px 5px" onclick="RigControl.setPreamp(2)">A2</button>
+      </span>
     </div>
-    <div class="dsp-toggle-row" style="gap:3px 6px">
-      <span class="dsp-val">B</span>
-      <input type="range" min="-12" max="12" step="1" value="0" id="eq-bass-slider" class="dsp-slider-mini" style="width:44px"
-        oninput="document.getElementById('eq-bass-val').textContent = this.value"
-        onmousedown="RigControl.setDragging('eq', true)"
-        onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-        ontouchstart="RigControl.setDragging('eq', true)"
-        ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-      <span class="dsp-val" id="eq-bass-val">0</span>
-      <span class="dsp-val">M</span>
-      <input type="range" min="-12" max="12" step="1" value="0" id="eq-mid-slider" class="dsp-slider-mini" style="width:44px"
-        oninput="document.getElementById('eq-mid-val').textContent = this.value"
-        onmousedown="RigControl.setDragging('eq', true)"
-        onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-        ontouchstart="RigControl.setDragging('eq', true)"
-        ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-      <span class="dsp-val" id="eq-mid-val">0</span>
-      <span class="dsp-val">T</span>
-      <input type="range" min="-12" max="12" step="1" value="0" id="eq-treble-slider" class="dsp-slider-mini" style="width:44px"
-        oninput="document.getElementById('eq-treble-val').textContent = this.value"
-        onmousedown="RigControl.setDragging('eq', true)"
-        onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-        ontouchstart="RigControl.setDragging('eq', true)"
-        ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-      <span class="dsp-val" id="eq-treble-val">0</span>
+    <div class="meter-row"><span>ATT</span><span class="mono" id="att-val">OFF</span></div>
     </div>
   </div>
 
@@ -565,8 +563,8 @@ select#palette-select {
       <input type="range" id="gain-slider" min="0" max="100" value="50" disabled style="width:60px" oninput="Panadapter.onGainSlider(this.value)">
       <span class="span-val" id="gain-val">50%</span>
       <span class="ctl-label">Avg</span>
-      <input type="range" id="avg-slider" min="0" max="100" value="30" style="width:60px" oninput="Panadapter.onAvgSlider(this.value)">
-      <span class="span-val" id="avg-val">30%</span>
+      <input type="range" id="avg-slider" min="0" max="100" value="80" style="width:60px" oninput="Panadapter.onAvgSlider(this.value)">
+      <span class="span-val" id="avg-val">80%</span>
       <select id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
         <option value="default">Default</option>
         <option value="linrad">Linrad</option>
@@ -574,6 +572,36 @@ select#palette-select {
         <option value="hot">Hot</option>
         <option value="gqrx">GQRX</option>
       </select>
+    </div>
+
+    <div class="center-controls-row eq-row">
+      <button class="dsp-toggle eq-square-btn active" id="eq-btn" onclick="RigControl.toggleEQ()">EQ</button>
+      <div class="eq-bmt-group">
+        <span class="dsp-val">B</span>
+        <input type="range" min="-12" max="12" step="1" value="0" id="eq-bass-slider" style="flex:1;min-width:60px"
+          oninput="document.getElementById('eq-bass-val').textContent = this.value"
+          onmousedown="RigControl.setDragging('eq', true)"
+          onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+          ontouchstart="RigControl.setDragging('eq', true)"
+          ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+        <span class="dsp-val" id="eq-bass-val">0</span>
+        <span class="dsp-val">M</span>
+        <input type="range" min="-12" max="12" step="1" value="0" id="eq-mid-slider" style="flex:1;min-width:60px"
+          oninput="document.getElementById('eq-mid-val').textContent = this.value"
+          onmousedown="RigControl.setDragging('eq', true)"
+          onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+          ontouchstart="RigControl.setDragging('eq', true)"
+          ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+        <span class="dsp-val" id="eq-mid-val">0</span>
+        <span class="dsp-val">T</span>
+        <input type="range" min="-12" max="12" step="1" value="0" id="eq-treble-slider" style="flex:1;min-width:60px"
+          oninput="document.getElementById('eq-treble-val').textContent = this.value"
+          onmousedown="RigControl.setDragging('eq', true)"
+          onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+          ontouchstart="RigControl.setDragging('eq', true)"
+          ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+        <span class="dsp-val" id="eq-treble-val">0</span>
+      </div>
     </div>
   </div>
 
@@ -600,52 +628,45 @@ select#palette-select {
         <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
         <span class="amp-state-badge" id="amp-atu-badge" style="display:none">ATU &#10003;</span>
       </div>
-      <div class="meter-row"><span>Fwd Power</span><span class="val good" id="amp-fwd-val">0 W</span></div>
+      <div class="meter-row"><span>Fwd P</span><span class="val good" id="amp-fwd-val">0 W</span></div>
       <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>Rev P</span><span class="val" id="amp-refl-val">— W</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-refl-bar" style="width:0%"></div></div>
       <div class="meter-row"><span>SWR</span><span class="val good" id="amp-swr-val">—</span></div>
       <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-swr-bar" style="width:0%"></div></div>
-      <div class="meter-row"><span>PAM1 Temp</span><span class="val" id="amp-temp-val">— &deg;C</span></div>
-      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div></div>
-      <div class="meter-row"><span>Drive In</span><span class="val" id="amp-drive-val">— W</span></div>
+      <div class="meter-row"><span>Drive P</span><span class="val" id="amp-drive-val">— W</span></div>
       <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-drive-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>PAM1 T</span><span class="val" id="amp-temp-val">— &deg;C</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div></div>
       <div class="meter-row mono" style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">
         <span>HV <span id="amp-hv-val">—</span>V</span>
         <span>I <span id="amp-current-val">—</span>A</span>
-        <span>Refl <span id="amp-refl-val">—</span>W</span>
+      </div>
+
+      <div class="divider"></div>
+      <h2>Fault Status</h2>
+      <span class="fault-severity ok" id="fault-severity">OK</span>
+      <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--muted)">No active faults</span></div>
+
+      <div class="divider"></div>
+      <h2>Operating Mode</h2>
+      <div class="opmode-grid">
+        <button class="btn active" id="mode-AMP_OFF" onclick="RigControl.setOpMode('AMP_OFF')">AMP OFF</button>
+        <button class="btn" id="mode-AMP_ON" onclick="RigControl.setOpMode('AMP_ON')">AMP ON</button>
+      </div>
+
+      <div class="divider"></div>
+      <h2>Exciter Drive</h2>
+      <div class="power-slider-wrap">
+        <input type="range" min="5" max="100" value="50" id="rf-power-slider"
+          oninput="document.getElementById('rf-power-val').textContent = this.value + 'W'"
+          onmousedown="RigControl.setDragging('rfPwr', true)"
+          onmouseup="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))"
+          ontouchstart="RigControl.setDragging('rfPwr', true)"
+          ontouchend="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))">
+        <span class="power-value power-value-green" id="rf-power-val">50W</span>
       </div>
     </div>
-
-    <div class="divider"></div>
-    <h2>Fault Status</h2>
-    <span class="fault-severity ok" id="fault-severity">OK</span>
-    <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--muted)">No active faults</span></div>
-
-    <div class="divider"></div>
-    <h2>Operating Mode</h2>
-    <div class="opmode-grid">
-      <button class="btn active" id="mode-AMP_OFF" onclick="RigControl.setOpMode('AMP_OFF')">AMP OFF</button>
-      <button class="btn" id="mode-AMP_ON" onclick="RigControl.setOpMode('AMP_ON')">AMP ON</button>
-    </div>
-
-    <h2>TX Power</h2>
-    <div class="power-slider-wrap" style="margin-bottom:8px">
-      <input type="range" min="5" max="100" value="50" id="rf-power-slider"
-        oninput="document.getElementById('rf-power-val').textContent = this.value + 'W'"
-        onmousedown="RigControl.setDragging('rfPwr', true)"
-        onmouseup="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))"
-        ontouchstart="RigControl.setDragging('rfPwr', true)"
-        ontouchend="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))">
-      <span class="power-value" id="rf-power-val">50W</span>
-    </div>
-
-    <div class="meter-row"><span>Preamp</span>
-      <span>
-        <button class="btn" id="preamp-ipo" style="padding:2px 5px" onclick="RigControl.setPreamp(0)">IPO</button>
-        <button class="btn" id="preamp-amp1" style="padding:2px 5px" onclick="RigControl.setPreamp(1)">A1</button>
-        <button class="btn" id="preamp-amp2" style="padding:2px 5px" onclick="RigControl.setPreamp(2)">A2</button>
-      </span>
-    </div>
-    <div class="meter-row"><span>ATT</span><span class="mono" id="att-val">OFF</span></div>
 
     <div class="divider"></div>
     <h2>Antenna</h2>
@@ -664,9 +685,16 @@ select#palette-select {
     <div class="divider"></div>
     <h2>Antenna A/B Test</h2>
     <div class="abt-row">
+      <label><input type="checkbox" id="abt-manual" onchange="RigControl.toggleAbtManual()"> Manual switching</label>
+    </div>
+    <div class="abt-row" id="abt-auto-ants">
       <label><input type="checkbox" id="abt-ant-1" checked> A1F</label>
       <label><input type="checkbox" id="abt-ant-3" checked> A3R</label>
       <label><input type="checkbox" id="abt-ant-4"> A4R</label>
+    </div>
+    <div class="abt-row" id="abt-manual-ants" style="display:none">
+      <input type="text" id="abt-manual-labels" placeholder="e.g. Vertical, EFHW, Loop"
+        style="width:100%" title="Comma-separated antenna names — you'll be prompted to switch to each one in turn">
     </div>
     <div class="abt-row">
       <span>Rounds</span><input type="number" id="abt-rounds" value="10" min="1" max="100">
@@ -681,13 +709,23 @@ select#palette-select {
       <button class="btn danger" style="flex:1" onclick="RigControl.stopAbTest()">&#9632; Stop</button>
     </div>
     <div class="mono" style="font-size:0.62rem;margin-bottom:4px" id="abt-status">idle</div>
+    <div id="abt-confirm-wrap" class="abt-row" style="display:none;align-items:center">
+      <span class="mono" id="abt-confirm-label" style="color:#ffc107"></span>
+      <button class="btn active-green" style="flex:1" id="abt-confirm-btn" onclick="RigControl.confirmAbtSwitch()">&#9166; Confirm switched</button>
+    </div>
     <div id="abt-summary" class="mono" style="font-size:0.6rem;margin-bottom:4px"></div>
     <div id="abt-results" class="scroll-table"></div>
   </div>
 
-</div><!-- .console -->
+  <!-- ── 5. System messages ───────────────────────────────── -->
+  <div class="panel panel-sysmsgs">
+    <span class="app-name">SYSTEM MSGS</span>
+    <div class="sysmsg-log" id="sysmsg-log">
+      <span class="sysmsg-empty">No messages</span>
+    </div>
+  </div>
 
-<div class="toast-stack" id="toast-stack"></div>
+</div><!-- .console -->
 
 <script>
 'use strict';
@@ -708,12 +746,21 @@ const StatusBar = (function () {
 })();
 
 function showToast(message, type) {
-  const stack = document.getElementById('toast-stack');
+  const log = document.getElementById('sysmsg-log');
+  if (!log) return;
+  const empty = log.querySelector('.sysmsg-empty');
+  if (empty) empty.remove();
   const el = document.createElement('div');
-  el.className = 'toast' + (type === 'info' ? ' info' : '');
-  el.textContent = message;
-  stack.appendChild(el);
-  setTimeout(() => el.remove(), 5000);
+  el.className = 'sysmsg-item' + (type === 'info' ? ' info' : ' error');
+  const ts = document.createElement('span');
+  ts.className = 'ts';
+  ts.textContent = new Date().toLocaleTimeString([], { hour12: false });
+  const msg = document.createElement('span');
+  msg.textContent = message;
+  el.appendChild(ts);
+  el.appendChild(msg);
+  log.prepend(el);
+  while (log.children.length > 50) log.removeChild(log.lastChild);
 }
 
 // Single shared clock — both source pages ran their own redundant copy of
@@ -1305,7 +1352,7 @@ let wfContrast = 1.5;
 function onContrastSlider(v) { wfContrast = parseFloat(v) / 10; }
 
 let smoothedSpectrum = null;
-let specAvgAlpha = 0.30;
+let specAvgAlpha = 0.80 * 0.95;
 function onAvgSlider(v) {
   specAvgAlpha = parseFloat(v) / 100 * 0.95;
   document.getElementById('avg-val').textContent = v + '%';
@@ -1639,12 +1686,28 @@ function connectWs() {
   };
 }
 
+let _abtAwaitingConfirm = false;
+
+function toggleAbtManual() {
+  const manual = document.getElementById('abt-manual').checked;
+  document.getElementById('abt-auto-ants').style.display = manual ? 'none' : '';
+  document.getElementById('abt-manual-ants').style.display = manual ? '' : 'none';
+}
+
 function startAbTest() {
-  const antennas = [1, 3, 4].filter(n => document.getElementById(`abt-ant-${n}`).checked);
-  if (antennas.length < 2) { showToast('Select at least two antennas', 'error'); return; }
+  const manual = document.getElementById('abt-manual').checked;
+  let antennas;
+  if (manual) {
+    antennas = document.getElementById('abt-manual-labels').value
+      .split(',').map(s => s.trim()).filter(s => s);
+  } else {
+    antennas = [1, 3, 4].filter(n => document.getElementById(`abt-ant-${n}`).checked);
+  }
+  if (antennas.length < 2) { showToast('Enter/select at least two antennas', 'error'); return; }
   send({
     cmd: 'ab_test_start',
     antennas,
+    manual,
     rounds: parseInt(document.getElementById('abt-rounds').value, 10),
     profile_duration_s: parseFloat(document.getElementById('abt-dwell').value),
     scan_start_hz: parseFloat(document.getElementById('abt-scan-start').value) * 1e6,
@@ -1654,22 +1717,44 @@ function startAbTest() {
 
 function stopAbTest() { send({ cmd: 'ab_test_stop' }); }
 
+function confirmAbtSwitch() { send({ cmd: 'ab_test_confirm_switch' }); }
+
+// Lets "hit Return" confirm the switch from anywhere, not just a button
+// click — but only while a confirmation is actually pending, so it never
+// steals Enter from the rounds/dwell/label inputs during normal use.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && _abtAwaitingConfirm) confirmAbtSwitch();
+});
+
 function updateAbTestUI(d) {
+  const fmtAnt = (a) => d.manual ? a : `A${a}`;
+
   const statusEl = document.getElementById('abt-status');
   let line = `${d.status}`;
-  if (d.status === 'running') {
-    line += ` — round ${d.current_round}/${d.total_rounds}, antenna A${d.current_antenna}`;
+  if (d.status === 'running' && !d.awaiting_antenna) {
+    line += ` — round ${d.current_round}/${d.total_rounds}, antenna ${fmtAnt(d.current_antenna)}`;
     line += ` (${d.current_active_channels} active)`;
   }
   if (d.status === 'error') line += ` — ${d.error}`;
   statusEl.textContent = line;
 
+  _abtAwaitingConfirm = !!d.awaiting_antenna;
+  const confirmWrap = document.getElementById('abt-confirm-wrap');
+  if (d.awaiting_antenna) {
+    confirmWrap.style.display = 'flex';
+    document.getElementById('abt-confirm-label').textContent =
+      `Switch to ${d.awaiting_antenna}, then confirm (round ${d.current_round}/${d.total_rounds})`;
+  } else {
+    confirmWrap.style.display = 'none';
+  }
+
   const summaryEl = document.getElementById('abt-summary');
   if (d.summary && d.summary.length) {
     summaryEl.innerHTML = d.summary.map(s => {
-      if (!s.n_matched) return `<div style="color:#ffc107">A${s.ref_antenna} vs A${s.compare_antenna}: ${s.note}</div>`;
+      const ref = fmtAnt(s.ref_antenna), cmp = fmtAnt(s.compare_antenna);
+      if (!s.n_matched) return `<div style="color:#ffc107">${ref} vs ${cmp}: ${s.note}</div>`;
       const sign = s.mean_signal_diff_db >= 0 ? 'stronger' : 'weaker';
-      return `<div style="color:#00e5ff">A${s.ref_antenna} vs A${s.compare_antenna}: ` +
+      return `<div style="color:#00e5ff">${ref} vs ${cmp}: ` +
         `${Math.abs(s.mean_signal_diff_db).toFixed(1)}dB ${sign}</div>`;
     }).join('');
   } else {
@@ -1679,7 +1764,7 @@ function updateAbTestUI(d) {
   const resultsEl = document.getElementById('abt-results');
   if (!d.results || !d.results.length) { resultsEl.innerHTML = ''; return; }
   let rows = d.results.map(r =>
-    `<tr><td>${r.round}</td><td>A${r.antenna}</td>` +
+    `<tr><td>${r.round}</td><td>${fmtAnt(r.antenna)}</td>` +
     `<td>${r.signal_db_p90.toFixed(1)}</td><td>${r.snr_db.toFixed(1)}</td></tr>`
   ).join('');
   resultsEl.innerHTML =
@@ -1912,7 +1997,8 @@ function updateAmp(s) {
   const refl= (isStale ? src.amp_refl_w    : s.amp_refl_w)    ?? null;
   document.getElementById('amp-hv-val').textContent = hv > 0 ? hv.toFixed(1) : '—';
   document.getElementById('amp-current-val').textContent = cur > 0 ? (cur / 1000).toFixed(1) : '—';
-  document.getElementById('amp-refl-val').textContent = refl != null ? refl.toFixed(0) : '—';
+  document.getElementById('amp-refl-val').textContent = (refl != null ? refl.toFixed(0) : '—') + ' W';
+  setBar('amp-refl-bar', isStale ? 0 : Math.min(100, ((refl ?? 0) / 300) * 100));
 
   const sevEl = document.getElementById('fault-severity');
   const sev = s.fault_severity || 'OK';
@@ -2124,7 +2210,6 @@ function _applyEQ(on) {
   const btn = document.getElementById('eq-btn');
   if (!btn) return;
   btn.classList.toggle('active', on);
-  document.getElementById('eq-state').textContent = on ? 'ON' : 'OFF';
 }
 function setEQ() {
   send({
@@ -2214,7 +2299,7 @@ return {
   nextAntenna, inhibitTx, allowTx,
   toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume, setSsbTxBpf,
   toggleEQ, setEQ, setDtGain,
-  startAbTest, stopAbTest,
+  startAbTest, stopAbTest, toggleAbtManual, confirmAbtSwitch,
 };
 
 })();
