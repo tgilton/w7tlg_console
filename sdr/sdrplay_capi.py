@@ -65,7 +65,6 @@ Update_Tuner_IfType = 0x00080000
 Update_Ext1_None = 0x00000000
 
 Tuner_A = 1
-Tuner_Neither = 0
 
 # Event IDs (sdrplay_api_callback.h)
 Overload_Detected = 0

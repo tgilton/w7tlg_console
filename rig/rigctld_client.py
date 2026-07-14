@@ -310,7 +310,9 @@ class RigctldClient:
         return ok
 
     async def set_att(self, db: int) -> bool:
-        """Set attenuator: 0=off, 6=6dB, 12=12dB, 18=18dB."""
+        """Set attenuator. FT-991A/hamlib only accepts 0 (off) or 12 (12dB)
+        — confirmed by live testing 2026-07-14; 6 and 18 are RPRT-rejected
+        by rigctld despite being generic attenuator values on other rigs."""
         ok = await self._send_set(f"L ATT {db}\n")
         if ok:
             self.state.att_db = db

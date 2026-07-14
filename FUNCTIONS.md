@@ -177,10 +177,26 @@ annotating the ALC target band directly.
 | Control | Does what | Frequency | Path |
 |---|---|---|---|
 | Preamp — IPO / A1 / A2 | RX preamp stage | SESSION when using rig RX / inert otherwise | FT-991A |
-| ATT | RX attenuator (currently a value with no control) | SESSION when using rig RX / inert otherwise | FT-991A |
+| ATT | RX attenuator — OFF/12dB (hamlib only accepts these two on this rig) | SESSION when using rig RX / inert otherwise | FT-991A |
 
-Only relevant when receiving on the FT-991A rather than the SDR. When the SDR
-is the receive path, this block should dim.
+**[DONE 2026-07-14]** Under this station's SDR Switch wiring the FT-991A's
+own receiver is never actually in the RF path during RX (see
+project_sdr_is_actual_receiver memory) — Preamp and ATT (plus NB and DNF,
+found to have the identical problem) are dimmed at all times with an
+"FT-991A RX" tag, rather than a dynamic SDR-vs-rig detection. They remain
+fully clickable (still real CAT settings) — just visually marked inert.
+
+**[ATTEMPTED, REVERTED 2026-07-14]** NB/DNF have no SDR-audio-chain
+equivalent to redirect to (unlike AGC/DNR/EQ). Tried wiring up the
+RSPdx-R2's own hardware RF notch filters (AM/MW broadcast notch, DAB
+notch) as new SDR-side controls instead — real, unused capability sitting
+in the ctypes bindings. Live-tested click on DAB NOTCH **segfaulted the
+entire console** (crash was inside the vendor's own closed-source
+`sdrplay_api_Update()`, not our code logically — see
+project_ft991a_rx_controls_inert memory for the full crash-report
+analysis). Fully reverted, end to end. Do not re-attempt this the same way
+— needs isolated testing / a different approach before ever touching a
+live session again.
 
 ---
 

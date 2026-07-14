@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>W7TLG Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /*
   Unified single-window console (Phase B — replaces the Phase A iframe
@@ -36,41 +36,55 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  /* High-Contrast Slate — same hue family as before, pushed for contrast:
-     deeper ground, brighter ink, stronger border definition. See
-     ui-redesign/ for the palette comparison this was chosen from. */
-  --bg:        #090c10;
-  --surface:   #141920;
-  --border:    #232a33;
-  --border2:   #3d454f;
-  --cyan:      #2ce0ff;
-  --cyan-dim:  #073542;
-  --amber:     #ffa733;
-  --amber-dim: #4a2c00;
-  --green:     #10f0a3;
-  --green-dim: #003d1f;
-  --red:       #ff5c5c;
-  --red-dim:   #4a0000;
-  --yellow:    #ffe14d;
-  --muted:     #7c8a99;
-  --label:     #a3b0bd;
-  --text:      #eef2f6;
-  --mono:      'JetBrains Mono', monospace;
-  --sans:      'Inter', system-ui, sans-serif;
+  /* DESIGN.md token set (migrated 2026-07-14 from the original ad-hoc
+     palette — see DESIGN.md §2). --state-selected-bg/-ok-bg/-fault-bg are
+     this file's own dim-background companions, not literal DESIGN.md
+     tokens: §6.2 names #2A2113 for the selected-background case, and this
+     extends the same dim-fill-plus-bright-text pattern to ok/fault so
+     badges/buttons across the app share one consistent recipe.
+
+     Known, deliberate deviations from a literal reading of the spec:
+     - PTT-TX and amp opr-tx badges still use --state-selected (amber)
+       rather than --state-fault. DESIGN.md §2.5 wants transmitting to
+       read as red everywhere; operator chose a VFO-only fix for this
+       pass and deferred recoloring these two badges.
+     - The 3-tier amp fault/meter severity (good/warning/alert) collapses
+       to binary here (--state-ok / --state-fault) per operator decision —
+       there is no "warning" hue in the 4-role system. */
+  --chrome-accent: #8A93D9;
+  --chrome-label:  #97A1B0;
+  --chrome-muted:  #5C6675;
+  --border:        #232B38;
+  --bg-0:          #0A0E14;
+  --bg-1:          #0F141C;
+  --bg-2:          #161C26;
+  --fg-0:          #E6EAF0;
+
+  --state-selected:    #E8A33D;
+  --state-selected-bg: #2A2113;
+  --state-ok:          #4ADE80;
+  --state-ok-bg:       #113322;
+  --state-fault:       #F0564A;
+  --state-fault-bg:    #3A1210;
+
+  --data-trace: #67D0F0;
+
+  --mono: 'JetBrains Mono', monospace;
 }
 
 html, body {
   min-height: 100%;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 13px;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   line-height: 1.4;
 }
 
 .console {
   display: grid;
-  grid-template-columns: 215px 1fr 250px;
+  grid-template-columns: 240px 1fr 268px;
   grid-template-areas:
     "status   status   status"
     "modedsp  center   bandamp"
@@ -80,14 +94,15 @@ html, body {
   align-items: stretch;
 }
 
-.panel { background: var(--surface); padding: 12px; min-width: 0; }
+.panel { background: var(--bg-1); padding: 16px; min-width: 0; }
 .panel h2, .section-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--label);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--chrome-accent);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1em;
   margin-bottom: 8px;
+  text-align: center;
 }
 
 /* ── Status bar ─────────────────────────────────────────── */
@@ -97,52 +112,50 @@ html, body {
   padding: 8px 16px;
   flex-wrap: wrap;
 }
-.app-name { font-family: var(--mono); font-weight: 700; font-size: 0.9rem; color: var(--cyan); letter-spacing: 0.1em; }
-.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--red); }
-.dot.on { background: var(--green); }
-.status-item { font-size: 0.7rem; color: var(--label); display: flex; align-items: center; font-family: var(--mono); }
-.status-item.on { color: var(--green); }
+.app-name { font-weight: 500; color: var(--chrome-accent); letter-spacing: 0.1em; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--state-fault); }
+.dot.on { background: var(--state-ok); }
+.status-item { color: var(--chrome-label); display: flex; align-items: center; }
+.status-item.on { color: var(--state-ok); }
 .spacer { flex: 1; }
 .nav-link {
-  font-family: var(--mono); font-size: 0.68rem; color: var(--cyan);
-  text-decoration: none; border: 1px solid var(--cyan-dim); border-radius: 3px;
+  color: var(--chrome-label);
+  text-decoration: none; border: 1px solid var(--border); border-radius: 3px;
   padding: 3px 8px;
 }
-.nav-link:hover { background: var(--cyan-dim); }
+.nav-link:hover { color: var(--fg-0); border-color: var(--chrome-label); }
 
 .inhibit-banner {
   display: none;
-  font-family: var(--mono); font-size: 0.7rem; color: var(--red);
-  border: 1px solid var(--red); border-radius: 3px; padding: 3px 8px;
+  color: var(--state-fault);
+  border: 1px solid var(--state-fault); border-radius: 3px; padding: 3px 8px;
   animation: pulse-border 1.5s infinite;
 }
 .inhibit-banner.visible { display: inline-block; }
-@keyframes pulse-border { 0%,100% { border-color: var(--red); } 50% { border-color: #ff8888; } }
+@keyframes pulse-border { 0%,100% { border-color: var(--state-fault); } 50% { border-color: #F58C84; } }
 
 /* ── Buttons ────────────────────────────────────────────── */
 .btn {
-  font-family: var(--mono);
-  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.03em;
   padding: 5px 8px;
   border-radius: 3px;
-  border: 1px solid var(--border2);
-  background: var(--bg);
-  color: var(--label);
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--chrome-label);
   cursor: pointer;
   text-align: center;
   user-select: none;
   transition: all 0.1s;
 }
-.btn:hover:not(.disabled) { border-color: var(--cyan-dim); color: var(--text); }
-.btn.active, .btn.active-amber { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
-.btn.active-green { background: var(--green-dim); border-color: var(--green); color: var(--green); }
-.btn.danger { border-color: #6b2020; color: #ff6b6b; background: #2a0d0d; }
-.btn.danger:hover { border-color: var(--red); color: var(--red); }
-.btn.active-green:hover { border-color: var(--green); color: var(--green); }
+.btn:hover:not(.disabled) { border-color: var(--chrome-label); color: var(--fg-0); }
+.btn.active, .btn.active-amber { background: var(--state-selected-bg); border-color: var(--state-selected); color: var(--state-selected); }
+.btn.active-green { background: var(--state-ok-bg); border-color: var(--state-ok); color: var(--state-ok); }
+.btn.danger { border-color: var(--state-fault); color: var(--state-fault); background: var(--state-fault-bg); }
+.btn.danger:hover { border-color: var(--state-fault); color: var(--fg-0); }
+.btn.active-green:hover { border-color: var(--state-ok); color: var(--state-ok); }
 .btn.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-.btn-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 
 /* Inhibit/Allow — the highest-consequence control pair in the app (see
    FUNCTIONS.md §8/3): amp-fault recovery loop. Deliberately the largest,
@@ -151,56 +164,61 @@ html, body {
    fills solid and pulses (alarm), Allow fills solid and steadies (the fix) —
    JS toggles .tx-blocked on both from state.tx_inhibited. */
 .btn-critical {
-  font-size: 0.85rem;
+  font-size: 14px;
   font-weight: 700;
-  padding: 12px 10px;
+  padding: 16px 10px;
   border-width: 2px;
   letter-spacing: 0.04em;
 }
 .btn.danger.btn-critical.tx-blocked {
-  background: var(--red); color: #1a0000; border-color: var(--red);
+  background: var(--state-fault); color: var(--bg-0); border-color: var(--state-fault);
   animation: pulse-tx 0.6s infinite;
 }
 .btn.active-green.btn-critical.tx-blocked {
-  background: var(--green); color: #04210f; border-color: var(--green);
+  background: var(--state-ok); color: var(--bg-0); border-color: var(--state-ok);
 }
 
 .badge {
-  font-family: var(--mono); font-size: 0.65rem; font-weight: 600;
+  font-weight: 600;
   padding: 2px 6px; border-radius: 3px; letter-spacing: 0.04em;
 }
-.badge-band   { background: var(--cyan-dim); color: var(--cyan); }
-.badge-mode   { background: #1e2a38; color: #7db8d8; }
-.badge-ptt-rx { background: var(--green-dim); color: var(--green); }
-.badge-ptt-tx { background: var(--amber-dim); color: var(--amber); animation: pulse-tx 0.8s infinite; }
-.badge-digital { background: #1a2a1a; color: #4f8; }
-.badge-digital-audio-active { background: #1a2a1a; color: #4f8; }
-.badge-digital-audio-inactive { background: #2a1a1a; color: #f88; }
-.badge-split { background: #3a2a00; color: #f90; animation: pulse-tx 1.2s infinite; }
+/* badge-band/-mode/-split echo the currently-active choice already shown in
+   their own ButtonGroup (band-grid / mode-grid / the split toggle) — same
+   --state-selected treatment DESIGN.md §2.2 uses everywhere else "selected"
+   is shown, so it's one color rule learned once, not a badge-specific one. */
+.badge-band, .badge-mode, .badge-split { background: var(--state-selected-bg); color: var(--state-selected); }
+.badge-split { animation: pulse-tx 1.2s infinite; }
+.badge-ptt-rx { background: var(--state-ok-bg); color: var(--state-ok); }
+/* Deferred from the DESIGN.md §2.5 TX-color migration (2026-07-14, operator
+   decision): stays amber+pulse rather than moving to --state-fault like the
+   VFO did. Revisit together with amp-state-badge.opr-tx below. */
+.badge-ptt-tx { background: var(--state-selected-bg); color: var(--state-selected); animation: pulse-tx 0.8s infinite; }
+.badge-digital { background: var(--state-ok-bg); color: var(--state-ok); }
+.badge-digital-audio-active { background: var(--state-ok-bg); color: var(--state-ok); }
+.badge-digital-audio-inactive { background: var(--state-fault-bg); color: var(--state-fault); }
 /* Not a fault (see FUNCTIONS.md §7) — solid fill, not the dim-bg/bright-text
    look every other badge uses here, so it never blends in as "just another
    status chip" next to Band/Mode/RX. No animation: it's a standing
-   condition to notice once and keep noticing, not an alarm to react to. */
-.badge-dummy-load { background: var(--yellow); color: #2a1f00; font-weight: 700; }
+   condition to notice once and keep noticing, not an alarm to react to.
+   Reuses --state-selected: the dummy load being in circuit *is* the
+   selected antenna-port state, same rule as badge-band. */
+.badge-dummy-load { background: var(--state-selected); color: var(--bg-0); font-weight: 700; }
 @keyframes pulse-tx { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 
 /* ── Zoned grouping ─────────────────────────────────────────
-   Color-codes which physical signal path a control group affects, so it
-   reads at a glance without re-reading labels. Band/Antenna and Mode are
-   left unstriped — genuinely neutral, or already reads as the app's default
-   cyan interactive style. Everything else in panel-modedsp (Filter through
-   Preamp/ATT) shares one amber zone; panel-bandamp's amp telemetry/controls
-   share one green zone. Semantic status colors (SWR/temp good-amber-red)
-   are untouched — this is "what kind of control is this", not "is it okay". */
-.zone-audio, .zone-amp {
-  border-left: 3px solid var(--amber);
-  padding-left: 9px;
-  margin-left: -9px;
-  margin-bottom: 4px;
+   Group identity is proximity + divider + --chrome-accent header only, per
+   DESIGN.md §2.4 ("grouping is structural, not chromatic") — this used to
+   tint panel-modedsp's Filter-through-Preamp/ATT controls amber and
+   panel-bandamp's amp telemetry green (predates DESIGN.md, added in
+   234af9b); the tint is gone, the hairline/margin grouping stays.
+   zone-amp itself is gone (2026-07-14, Band moved into panel-modedsp under
+   panel-modedsp's Mode grid, Amp is now the first thing in panel-bandamp so
+   there's nothing above it to separate from). */
+.zone-audio {
+  padding-top: 8px;
+  margin-top: 8px;
+  border-top: 0.5px solid var(--border);
 }
-.zone-amp { border-left-color: var(--green); }
-.zone-audio h2, .zone-audio .section-label { color: var(--amber); }
-.zone-amp h2, .zone-amp .section-label { color: var(--green); }
 
 /* Segmented-pill containers for true multi-choice controls (exactly one
    of N is ever active) — Mode, Filter, AGC, Band. Individual .btn/.dsp-
@@ -208,53 +226,66 @@ html, body {
    the bordered pill around the group so it reads as one control with N
    settings rather than N independent buttons. */
 .mode-grid, .band-grid, .seg-row {
-  background: var(--bg);
-  border: 1px solid var(--border2);
+  background: var(--bg-0);
+  border: 1px solid var(--border);
   border-radius: 7px;
-  padding: 3px;
+  padding: 4px;
 }
-.seg-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ── Mode / DSP column ──────────────────────────────────── */
 .panel-modedsp { grid-area: modedsp; }
-.mode-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 10px; }
+.mode-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 16px; }
 /* DATA-U was wrapping onto a second line ("DATA-" / "U") at the old 190px
    column width, doubling the row height. Widening the column (above) gives
    it room; tightened padding + no-wrap here make that robust rather than
    "just barely fits" if content or font ever changes. */
 .mode-grid .btn { padding: 5px 4px; white-space: nowrap; }
-.slider-label { font-size: 0.65rem; color: var(--label); margin: 6px 0 3px; text-transform: uppercase; letter-spacing: 0.06em; }
-input[type=range] { width: 100%; accent-color: var(--cyan); cursor: pointer; }
-.dsp-toggle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; margin-top: 6px; }
+.slider-label { color: var(--chrome-label); margin: 6px 0 3px; text-transform: uppercase; letter-spacing: 0.1em; }
+input[type=range] { width: 100%; accent-color: var(--data-trace); cursor: pointer; }
+/* Disabled sliders (Floor/Gain while AUTO is checked) barely differ from
+   active ones by default — accent-color survives :disabled in Chrome, so a
+   gated control looked identical to a working one (operator feedback
+   2026-07-14: "the Floor and Gain sliders do not work" — they were simply
+   disabled with no visible sign of it). Dimming the whole .field-group
+   (label + slider + value together), not just the track, is what actually
+   reads as "this entire control is off right now". */
+input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allowed; }
+.field-group:has(input:disabled) { opacity: 0.4; }
+.dsp-toggle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 6px; }
 .dsp-toggle {
-  padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border2);
-  background: var(--bg); color: var(--muted); font-family: var(--mono);
-  font-size: 0.65rem; font-weight: 600; cursor: pointer;
+  padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border);
+  background: var(--bg-2); color: var(--chrome-muted); cursor: pointer;
+  font-weight: 600;
 }
-.dsp-toggle.active { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
+.dsp-toggle.active { background: var(--state-selected-bg); border-color: var(--state-selected); color: var(--state-selected); }
 .dsp-agc-btn {
-  padding: 4px 6px; border-radius: 3px; border: 1px solid var(--border2);
-  background: var(--bg); color: var(--muted); font-family: var(--mono);
-  font-size: 0.62rem; font-weight: 600; cursor: pointer;
+  padding: 4px 6px; border-radius: 3px; border: 1px solid var(--border);
+  background: var(--bg-2); color: var(--chrome-muted); font-weight: 600; cursor: pointer;
 }
-.dsp-agc-btn.active { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
-.dsp-val { font-family: var(--mono); font-size: 0.65rem; color: var(--muted); min-width: 16px; text-align: right; }
+.dsp-agc-btn.active { background: var(--state-selected-bg); border-color: var(--state-selected); color: var(--state-selected); }
+.dsp-val { color: var(--chrome-muted); min-width: 16px; text-align: right; }
 .dsp-slider-mini { width: 60px; }
 
 /* ── Center column ──────────────────────────────────────── */
 .panel-center { grid-area: center; }
-.freq-readout { font-family: var(--mono); font-size: 3.2rem; font-weight: 700; color: var(--green); letter-spacing: 0.03em; transition: color 0.15s; text-align: center; }
-.freq-readout.tx { color: var(--amber); }
+/* DESIGN.md §2.5: RX is a fact (--fg-0, near-white), TX is the one state
+   where misreading is expensive (--state-fault, red + the shell border in
+   RigControl's TX handling). Badge-level TX indicators (PTT-TX badge,
+   amp-state-badge.opr-tx) are intentionally NOT part of this migration yet
+   — see the note by .badge-ptt-tx above. */
+.freq-readout { font-size: 56px; font-weight: 500; color: var(--fg-0); letter-spacing: 0.03em; transition: color 0.15s; text-align: center; }
+.freq-readout.tx { color: var(--state-fault); }
 .vfo-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 8px; }
 
-.smeter-bar-wrap { position: relative; height: 14px; background: #0a0d11; border: 1px solid var(--border2); border-radius: 3px; overflow: hidden; margin-bottom: 2px; }
-.smeter-bar { height: 100%; width: 0%; background: var(--green); transition: width 0.15s ease-out, background-color 0.15s ease-out; }
-.smeter-bar.over-s9 { background: var(--red); }
-.smeter-readout { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 0.68rem; color: var(--muted); margin-bottom: 8px; }
-.smeter-readout .val { color: var(--cyan); font-weight: 600; }
+.smeter-bar-wrap { position: relative; height: 14px; background: var(--bg-0); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; margin-bottom: 2px; }
+.smeter-bar { height: 100%; width: 0%; background: var(--data-trace); transition: width 0.15s ease-out, background-color 0.15s ease-out; }
+.smeter-bar.over-s9 { background: var(--state-fault); }
+.smeter-readout { display: flex; justify-content: space-between; align-items: center; color: var(--chrome-muted); margin-bottom: 8px; }
+.smeter-readout .val { color: var(--data-trace); font-weight: 600; }
 #s9-cal-input {
-  font-family: var(--mono); font-size: 0.65rem; background: #0a0d11;
-  border: 1px solid var(--border2); color: var(--text); padding: 1px 4px;
+  background: var(--bg-0);
+  border: 1px solid var(--border); color: var(--fg-0); padding: 1px 4px;
   border-radius: 2px; width: 40px;
 }
 
@@ -265,35 +296,50 @@ input[type=range] { width: 100%; accent-color: var(--cyan); cursor: pointer; }
    the 8px elsewhere) reads them as one instrument rather than two stacked
    ones. See FUNCTIONS.md §8: VOL/ALC/WSJT-X power are one tuning loop. */
 .vol-alc-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 2px; }
-.vol-slider-full { width: 100%; accent-color: var(--cyan); margin: 3px 0 2px; }
-.tx-meter-label { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.tx-meter-bar-wrap { height: 10px; background: #0a0d11; border: 1px solid var(--border2); border-radius: 2px; overflow: hidden; margin: 2px 0; }
+.vol-slider-full { width: 100%; accent-color: var(--data-trace); margin: 3px 0 2px; }
+.tx-meter-label { color: var(--chrome-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.tx-meter-bar-wrap { height: 10px; background: var(--bg-0); border: 1px solid var(--border); border-radius: 2px; overflow: hidden; margin: 2px 0; }
 .tx-meter-bar { height: 100%; width: 0%; border-radius: 2px; transition: width 0.12s ease-out; }
-.tx-meter-bar.alc, .tx-meter-bar.po { background: var(--cyan); }
-.meter-good  { background: var(--green) !important; }
-.meter-warn  { background: var(--yellow) !important; }
-.meter-alert { background: var(--red) !important; }
-.tx-meter-value { font-family: var(--mono); font-size: 0.65rem; color: var(--text); }
+.tx-meter-bar.alc, .tx-meter-bar.po { background: var(--data-trace); }
+/* MeterRow (DESIGN.md §6.3) is binary: --data-trace fill, or --state-fault
+   in an alarm band. meter-good restates the default explicitly rather than
+   removing the class (JS still toggles it); the former 3rd "warning" tier
+   (meter-warn, was --yellow) collapses into the same fault treatment as
+   meter-alert per operator decision — no warning hue exists in this palette. */
+.meter-good  { background: var(--data-trace) !important; }
+.meter-warn  { background: var(--state-fault) !important; }
+.meter-alert { background: var(--state-fault) !important; }
+.tx-meter-value { color: var(--fg-0); }
 
-.scope-box { background: #0a0d11; border: 1px solid var(--border2); border-radius: 4px; position: relative; overflow: hidden; }
+.scope-box { background: var(--bg-0); border: 1px solid var(--border); border-radius: 4px; position: relative; overflow: hidden; }
 .panadapter-box { height: 260px; margin-bottom: 4px; cursor: grab; }
 .panadapter-box.dragging { cursor: grabbing; }
 .waterfall-box { height: 260px; margin-bottom: 6px; }
 #spectrum-canvas, #waterfall-canvas { width: 100%; height: 100%; display: block; }
 #waterfall-overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-.freq-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 0.6rem; color: var(--muted); padding: 1px 2px 4px; }
+.freq-axis { display: flex; justify-content: space-between; color: var(--chrome-muted); padding: 1px 2px 4px; }
 
 .center-controls-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
-.center-controls-row .ctl-label { font-size: 0.62rem; color: var(--label); text-transform: uppercase; letter-spacing: 0.05em; }
+/* Unscoped (was .center-controls-row .ctl-label) — S9 Cal reuses this
+   class from .smeter-readout, outside that row, and needs the same
+   uppercase treatment. */
+.ctl-label { color: var(--chrome-label); text-transform: uppercase; letter-spacing: 0.1em; }
+/* Tuning is one action cluster (freq entry + 4 buttons that work
+   together) — centered as a unit. Display is 6 independent parameters —
+   DESIGN.md §9 wants those "distributed across the available width," so
+   each .field-group (label+slider+value) is spaced edge-to-edge instead. */
+.row-tuning { justify-content: center; }
+.row-display { justify-content: space-between; }
+.field-group { display: flex; align-items: center; gap: 6px; }
 #freq-input {
-  font-family: var(--mono); font-size: 0.75rem; font-weight: 700; background: #0a0d11;
-  border: 1px solid var(--border2); color: var(--green); padding: 3px 6px; border-radius: 3px; width: 100px;
+  font-weight: 700; background: var(--bg-0);
+  border: 1px solid var(--border); color: var(--fg-0); padding: 3px 6px; border-radius: 3px; width: 100px;
 }
-.span-val { font-family: var(--mono); color: var(--cyan); font-size: 0.68rem; min-width: 56px; display: inline-block; }
-#span-slider { width: 90px; }
+.span-val { color: var(--data-trace); min-width: 56px; display: inline-block; }
+.display-slider { width: 150px; }
 select#palette-select {
-  font-family: var(--mono); font-size: 0.65rem; background: var(--bg); color: var(--text);
-  border: 1px solid var(--border2); border-radius: 3px; padding: 2px 4px;
+  background: var(--bg-2); color: var(--fg-0);
+  border: 1px solid var(--border); border-radius: 3px; padding: 2px 4px;
 }
 
 .eq-row { justify-content: flex-start; }
@@ -301,18 +347,43 @@ select#palette-select {
   width: 34px; height: 34px; padding: 0; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
 }
-.eq-bmt-group { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
+/* 24px between bands (DESIGN.md §4's "between controls" tier, one step up
+   from the 6px used *within* a band's own label+slider+value) — tight
+   internal grouping vs. clear separation between Bass/Mid/Treble was the
+   whole point (operator feedback 2026-07-14: a value sitting right next to
+   the next band's label read as ambiguous about which slider it belonged
+   to). */
+.eq-bmt-group { flex: 1; display: flex; align-items: center; justify-content: center; gap: 32px; }
+.eq-bmt-group .display-slider { width: 165px; }
+/* Bass/Mid/Treble get more visual weight than every other slider in the app
+   (operator request, 2026-07-14) — scaling the native control keeps the
+   same browser-rendered look as every other input[type=range] here, just
+   1.5x taller, rather than introducing a one-off custom-themed track/thumb
+   that would look like a different control language. */
+.eq-bmt-group input[type=range] { transform: scaleY(1.5); }
 
 /* ── Band / amp column ──────────────────────────────────── */
 .panel-bandamp { grid-area: bandamp; }
-.band-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 10px; }
-.divider { height: 1px; background: var(--border2); margin: 10px 0; }
-.meter-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.72rem; padding: 2px 0; }
-.meter-row .val { font-family: var(--mono); }
-.meter-row .val.status-green, .meter-row .val.good { color: var(--green); }
-.meter-row .val.status-amber, .meter-row .val.warn { color: var(--yellow); }
-.meter-row .val.status-red, .meter-row .val.alert { color: var(--red); }
-.meter-bar-wrap { height: 4px; background: #0a0d11; border-radius: 2px; overflow: hidden; margin: 3px 0 6px; }
+.band-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 16px; }
+.divider { height: 0.5px; background: var(--border); margin: 16px 0; }
+.meter-row { display: flex; justify-content: space-between; align-items: center; padding: 2px 0; }
+/* House style (2026-07-14, operator decision): control/meter labels are
+   uppercase everywhere, same as .slider-label/.tx-meter-label/.ctl-label —
+   amends DESIGN.md §3's original "section headers only" wording. Values
+   (.val/.mono) are untouched; :first-child assumes the label is always the
+   first span in a .meter-row, true for every instance in this file. */
+.meter-row span:first-child { text-transform: uppercase; letter-spacing: 0.1em; }
+.meter-row .val.status-green, .meter-row .val.good { color: var(--state-ok); }
+/* Binary MeterRow (see .meter-good/-warn/-alert note above): the former
+   amber "warning" tier for a numeric value now reads as fault too. */
+.meter-row .val.status-amber, .meter-row .val.warn { color: var(--state-fault); }
+.meter-row .val.status-red, .meter-row .val.alert { color: var(--state-fault); }
+/* DESIGN.md §6.3: "An empty track with no scale communicates nothing" —
+   this was the only one of the three meter-track classes with no border
+   (smeter-bar-wrap and tx-meter-bar-wrap both already have one), so at 0%
+   fill it was the same color as its own background and read as absent
+   rather than empty. */
+.meter-bar-wrap { height: 4px; background: var(--bg-0); border: 1px solid var(--border); border-radius: 2px; overflow: hidden; margin: 3px 0 6px; }
 .meter-bar { height: 100%; border-radius: 2px; transition: width 0.2s ease-out; }
 
 /* HV/I — troubleshooting-only, demoted out of the Fwd P..PAM1 T drift stack
@@ -321,53 +392,64 @@ select#palette-select {
    not lower it). */
 .amp-diag-row {
   display: flex; align-items: center; gap: 10px;
-  font-family: var(--mono); font-size: 0.62rem; color: var(--muted);
+  color: var(--chrome-muted);
   padding: 2px 0;
 }
 .amp-diag-label {
-  font-size: 0.55rem; letter-spacing: 0.08em;
-  border: 1px solid var(--border2); border-radius: 2px;
-  padding: 0 4px; color: var(--muted);
+  letter-spacing: 0.1em;
+  border: 1px solid var(--border); border-radius: 2px;
+  padding: 0 4px; color: var(--chrome-muted);
 }
 
+/* Preamp/ATT/NB/DNF are real FT-991A CAT settings with zero audible effect
+   under this station's SDR Switch wiring — the radio's own receiver isn't
+   in the RF path during RX (see project_sdr_is_actual_receiver memory).
+   Dimmed, not disabled: the controls still work at the CAT level, they're
+   just inert for what you're actually hearing through the SDR. */
+.rx-inert { opacity: 0.4; }
+
 .amp-state-badge {
-  font-family: var(--mono); font-size: 0.65rem; font-weight: 600; padding: 2px 7px;
-  border-radius: 3px; border: 1px solid var(--border2); background: #0a0d11; color: var(--muted);
+  font-weight: 600; padding: 2px 7px;
+  border-radius: 3px; border: 1px solid var(--border); background: var(--bg-0); color: var(--chrome-muted);
 }
-.amp-state-badge.standby { border-color: #2a3a4a; color: #4a7a9b; }
-.amp-state-badge.opr-rx  { border-color: var(--green-dim); color: var(--green); }
-.amp-state-badge.opr-tx  { border-color: var(--amber-dim); color: var(--amber); animation: pulse-tx 0.8s infinite; }
-.amp-state-badge.disconn { border-color: #4a2020; color: #884444; }
+.amp-state-badge.standby { border-color: var(--border); color: var(--chrome-muted); }
+.amp-state-badge.opr-rx  { border-color: var(--state-ok); color: var(--state-ok); }
+/* Deferred from the DESIGN.md §2.5 TX-color migration, same as
+   .badge-ptt-tx above — see that note. */
+.amp-state-badge.opr-tx  { border-color: var(--state-selected); color: var(--state-selected); animation: pulse-tx 0.8s infinite; }
+.amp-state-badge.disconn { border-color: var(--state-fault); color: var(--state-fault); }
 .amp-state-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 
 .opmode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
 .ant-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 6px; }
-.ant-indicator { cursor: default; pointer-events: none; font-size: 0.62rem; }
-.ant-alias { display: block; font-size: 0.56rem; font-weight: 400; color: var(--muted); margin-top: 2px; }
+.ant-indicator { cursor: default; pointer-events: none; }
+.ant-alias { display: block; font-weight: 400; color: var(--chrome-muted); margin-top: 2px; }
 
 .fault-severity {
-  font-family: var(--mono); font-size: 0.62rem; font-weight: 700; padding: 2px 6px;
+  font-weight: 700; padding: 2px 6px;
   border-radius: 3px; display: inline-block; margin-bottom: 4px;
 }
-.fault-severity.ok { background: var(--green-dim); color: var(--green); }
-.fault-severity.warning { background: #3a2a00; color: var(--yellow); }
-.fault-severity.fault { background: var(--red-dim); color: var(--red); animation: pulse-tx 1s infinite; }
-.fault-messages { font-family: var(--mono); font-size: 0.62rem; color: var(--text); margin-bottom: 8px; }
-.fault-item { color: var(--red); }
-.fault-item.soft { color: var(--yellow); }
-.fault-item.warn { color: var(--muted); }
+.fault-severity.ok { background: var(--state-ok-bg); color: var(--state-ok); }
+/* Warning tier collapses into fault (no 3rd hue in this palette — see the
+   .meter-warn note above; same operator decision applies here). */
+.fault-severity.warning { background: var(--state-fault-bg); color: var(--state-fault); }
+.fault-severity.fault { background: var(--state-fault-bg); color: var(--state-fault); animation: pulse-tx 1s infinite; }
+.fault-messages { color: var(--fg-0); margin-bottom: 8px; }
+.fault-item { color: var(--state-fault); }
+.fault-item.soft { color: var(--state-fault); }
+.fault-item.warn { color: var(--chrome-muted); }
 
-.dummy-timer-wrap { display: none; align-items: center; gap: 5px; margin-top: 4px; }
+.dummy-timer-wrap { display: none; align-items: center; gap: 6px; margin-top: 4px; }
 .dummy-timer-wrap.visible { display: flex; }
-.dummy-timer { font-family: var(--mono); font-weight: 700; color: var(--yellow); font-size: 0.9rem; }
-.dummy-timer.critical { color: var(--red); animation: pulse-tx 0.4s infinite; }
+.dummy-timer { font-weight: 700; color: var(--fg-0); font-size: 14px; }
+.dummy-timer.critical { color: var(--state-fault); animation: pulse-tx 0.4s infinite; }
 
 .power-slider-wrap { display: flex; align-items: center; gap: 6px; }
-.power-value { font-family: var(--mono); font-size: 0.68rem; color: var(--cyan); min-width: 32px; text-align: right; }
-.power-value-green { color: var(--green); }
-.abt-row { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 0.62rem; margin-bottom: 4px; }
-.abt-row input[type=number] { width: 44px; font-size: 0.62rem; background: var(--bg); color: var(--text); border: 1px solid var(--border2); border-radius: 2px; }
-#abt-results table { width: 100%; border-collapse: collapse; font-size: 0.6rem; }
+.power-value { color: var(--data-trace); min-width: 32px; text-align: right; }
+.power-value-green { color: var(--state-ok); }
+.abt-row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-bottom: 4px; }
+.abt-row input[type=number] { width: 44px; background: var(--bg-2); color: var(--fg-0); border: 1px solid var(--border); border-radius: 2px; }
+#abt-results table { width: 100%; border-collapse: collapse; }
 #abt-results th, #abt-results td { padding: 2px 0; border-bottom: 1px solid var(--border); }
 
 .scroll-table { max-height: 180px; overflow-y: auto; }
@@ -379,15 +461,16 @@ select#palette-select {
   padding: 8px 16px;
 }
 .sysmsg-log {
-  flex: 1; display: flex; flex-direction: column; gap: 3px;
+  flex: 1; display: flex; flex-direction: column; gap: 4px;
   max-height: 90px; overflow-y: auto;
-  font-family: var(--mono); font-size: 0.68rem;
 }
-.sysmsg-item { display: flex; gap: 8px; color: var(--label); }
-.sysmsg-item .ts { color: var(--muted); flex-shrink: 0; }
-.sysmsg-item.error { color: #ff8888; }
-.sysmsg-item.info { color: var(--cyan); }
-.sysmsg-empty { color: var(--muted); }
+.sysmsg-item { display: flex; gap: 8px; color: var(--chrome-label); }
+.sysmsg-item .ts { color: var(--chrome-muted); flex-shrink: 0; }
+.sysmsg-item.error { color: var(--state-fault); }
+/* Informational log text — not a measured value, so it stays chrome rather
+   than moving to --data-trace (that role is reserved for actual readings). */
+.sysmsg-item.info { color: var(--chrome-label); }
+.sysmsg-empty { color: var(--chrome-muted); }
 </style>
 </head>
 <body>
@@ -421,11 +504,26 @@ select#palette-select {
     </div>
 
     <div class="divider"></div>
+    <h2>Band</h2>
+    <div class="band-grid">
+      <button class="btn" data-band="160m" data-freq="1840000"  onclick="RigControl.setBand(this)">160</button>
+      <button class="btn" data-band="80m"  data-freq="3573000"  onclick="RigControl.setBand(this)">80</button>
+      <button class="btn" data-band="60m"  data-freq="5357000"  onclick="RigControl.setBand(this)">60</button>
+      <button class="btn" data-band="40m"  data-freq="7074000"  onclick="RigControl.setBand(this)">40</button>
+      <button class="btn" data-band="30m"  data-freq="10136000" onclick="RigControl.setBand(this)">30</button>
+      <button class="btn" data-band="20m"  data-freq="14074000" onclick="RigControl.setBand(this)">20</button>
+      <button class="btn" data-band="17m"  data-freq="18100000" onclick="RigControl.setBand(this)">17</button>
+      <button class="btn" data-band="15m"  data-freq="21074000" onclick="RigControl.setBand(this)">15</button>
+      <button class="btn" data-band="12m"  data-freq="24915000" onclick="RigControl.setBand(this)">12</button>
+      <button class="btn" data-band="10m"  data-freq="28074000" onclick="RigControl.setBand(this)">10</button>
+      <button class="btn" data-band="6m"   data-freq="50313000" onclick="RigControl.setBand(this)">6</button>
+    </div>
+
     <div class="zone-audio">
     <h2>Filter</h2>
     <div class="btn-row seg-row" style="margin-bottom:6px">
-      <button class="btn" id="filt-NAR" onclick="RigControl.setFilterWidthMode('NAR')">NAR</button>
-      <button class="btn active" id="filt-WID" onclick="RigControl.setFilterWidthMode('WID')">WID</button>
+      <button class="btn" id="filt-NAR" onclick="RigControl.setFilterWidthMode('NAR')" style="flex:1">NARROW</button>
+      <button class="btn active" id="filt-WID" onclick="RigControl.setFilterWidthMode('WID')" style="flex:1">WIDE</button>
     </div>
     <input type="range" min="200" max="3000" step="50" value="3000" id="width-slider"
       oninput="RigControl.onWidthSlider(this.value)"
@@ -439,7 +537,7 @@ select#palette-select {
     <div id="digital-tx-controls">
       <h2>Digital Audio</h2>
       <div class="power-slider-wrap" style="margin-bottom:6px">
-        <span class="ctl-label" style="min-width:40px;font-size:0.62rem">DT GAIN</span>
+        <span class="ctl-label" style="min-width:40px">DT GAIN</span>
         <input type="range" min="0" max="100" value="15" id="dt-gain-slider"
           oninput="document.getElementById('dt-gain-val').textContent = this.value"
           onmousedown="RigControl.setDragging('dtGain', true)"
@@ -461,7 +559,7 @@ select#palette-select {
     <div id="voice-tx-controls">
       <h2>SSB Audio</h2>
       <div class="power-slider-wrap" style="margin-bottom:6px">
-        <span class="ctl-label" style="min-width:40px;font-size:0.62rem">MIC</span>
+        <span class="ctl-label" style="min-width:40px">MIC</span>
         <input type="range" min="0" max="100" value="50" id="mic-gain-slider"
           oninput="document.getElementById('mic-gain-val').textContent = this.value + '%'"
           onmousedown="RigControl.setDragging('micGain', true)"
@@ -471,7 +569,7 @@ select#palette-select {
         <span class="power-value" id="mic-gain-val">50%</span>
       </div>
       <div class="power-slider-wrap">
-        <span class="ctl-label" style="min-width:40px;font-size:0.62rem">COMP</span>
+        <span class="ctl-label" style="min-width:40px">COMP</span>
         <input type="range" min="0" max="100" value="0" id="comp-slider"
           oninput="document.getElementById('comp-val').textContent = this.value + '%'"
           onmousedown="RigControl.setDragging('comp', true)"
@@ -484,7 +582,7 @@ select#palette-select {
            filter width (not a software EQ). Only 3 of the radio's 5 fixed
            values have a button; see RigctldClient.SSB_TX_BPF_PRESETS. -->
       <div class="power-slider-wrap" style="margin-top:6px">
-        <span class="ctl-label" style="min-width:40px;font-size:0.62rem">TX BW</span>
+        <span class="ctl-label" style="min-width:40px">TX BW</span>
         <span class="seg-row" style="flex:1">
           <button class="dsp-agc-btn" id="bpf-0" onclick="RigControl.setSsbTxBpf(0)"
             title="50-3000 Hz — radio default, full-range audio">WIDE</button>
@@ -497,12 +595,13 @@ select#palette-select {
     </div>
 
     <div class="divider"></div>
-    <div class="dsp-toggle-row">
-      <button class="dsp-toggle" id="nb-btn" onclick="RigControl.toggleNB()">NB <span id="nb-state">OFF</span></button>
-      <button class="dsp-toggle" id="dnf-btn" onclick="RigControl.toggleDNF()">DNF <span id="dnf-state">OFF</span></button>
+    <div class="dsp-toggle-row rx-inert" title="FT-991A's own receiver isn't in the RF path while the SDR handles RX (see FUNCTIONS.md §4) — these have no audible effect right now">
+      <span class="amp-diag-label">FT-991A RX</span>
+      <button class="dsp-toggle" id="nb-btn" onclick="RigControl.toggleNB()">NB</button>
+      <button class="dsp-toggle" id="dnf-btn" onclick="RigControl.toggleDNF()">DNF</button>
     </div>
     <div class="dsp-toggle-row">
-      <button class="dsp-toggle" id="nr-btn" onclick="RigControl.toggleNR()">DNR <span id="nr-state">OFF</span></button>
+      <button class="dsp-toggle" id="nr-btn" onclick="RigControl.toggleNR()">DNR</button>
       <input type="range" min="1" max="15" step="1" value="8" id="nr-slider" class="dsp-slider-mini"
         oninput="RigControl.onNRChange(this.value)"
         onmousedown="RigControl.setDragging('nr', true)"
@@ -521,14 +620,22 @@ select#palette-select {
       </span>
     </div>
     <div class="divider"></div>
-    <div class="meter-row"><span>Preamp</span>
-      <span>
-        <button class="btn" id="preamp-ipo" style="padding:2px 5px" onclick="RigControl.setPreamp(0)">IPO</button>
-        <button class="btn" id="preamp-amp1" style="padding:2px 5px" onclick="RigControl.setPreamp(1)">A1</button>
-        <button class="btn" id="preamp-amp2" style="padding:2px 5px" onclick="RigControl.setPreamp(2)">A2</button>
-      </span>
+    <div class="rx-inert" title="FT-991A's own receiver isn't in the RF path while the SDR handles RX (see FUNCTIONS.md §4) — these have no audible effect right now">
+      <span class="amp-diag-label">FT-991A RX</span>
+      <div class="meter-row"><span>Preamp</span>
+        <span>
+          <button class="btn" id="preamp-ipo" style="padding:2px 5px" onclick="RigControl.setPreamp(0)">IPO</button>
+          <button class="btn" id="preamp-amp1" style="padding:2px 5px" onclick="RigControl.setPreamp(1)">A1</button>
+          <button class="btn" id="preamp-amp2" style="padding:2px 5px" onclick="RigControl.setPreamp(2)">A2</button>
+        </span>
+      </div>
+      <div class="meter-row"><span>ATT</span>
+        <span>
+          <button class="btn" id="att-0" style="padding:2px 5px" onclick="RigControl.setAtt(0)">OFF</button>
+          <button class="btn" id="att-12" style="padding:2px 5px" onclick="RigControl.setAtt(12)">12</button>
+        </span>
+      </div>
     </div>
-    <div class="meter-row"><span>ATT</span><span class="mono" id="att-val">OFF</span></div>
     </div>
   </div>
 
@@ -549,7 +656,10 @@ select#palette-select {
     <div class="smeter-readout">
       <span class="val" id="smeter-label">S0</span>
       <span id="smeter-db">— dBFS</span>
-      <span>S9 Cal <input type="number" id="s9-cal-input" value="-75" step="1" oninput="RigControl.onS9CalInput(this.value)"></span>
+      <span class="field-group">
+        <span class="ctl-label">S9 Cal</span>
+        <input type="number" id="s9-cal-input" value="-75" step="1" oninput="RigControl.onS9CalInput(this.value)">
+      </span>
     </div>
 
     <!-- VOL sits directly above ALC, column-aligned with it via the same
@@ -603,85 +713,92 @@ select#palette-select {
       <canvas id="waterfall-overlay-canvas"></canvas>
     </div>
 
-    <div class="center-controls-row">
+    <h2>Tuning</h2>
+    <div class="center-controls-row row-tuning">
       <input type="text" id="freq-input" value="14.074000">
-      <button class="btn" onclick="Panadapter.tuneToInput()">Tune</button>
+      <button class="btn" onmousedown="event.preventDefault()" onclick="Panadapter.tuneToInput()">Tune</button>
       <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()">Whole Band</button>
       <button class="btn" onclick="Panadapter.recenterView()">Center</button>
-      <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()">Audio: Live</button>
-    </div>
-    <div class="center-controls-row">
-      <span class="ctl-label">Span</span>
-      <input type="range" id="span-slider" min="0" max="1000" value="500" oninput="Panadapter.onSpanSlider(this.value)">
-      <span class="span-val" id="span-val">15.0 kHz</span>
-      <label class="ctl-label"><input type="checkbox" id="auto-scale-cb" checked onchange="Panadapter.onAutoScaleToggle(this.checked)"> Auto</label>
-      <span class="ctl-label">Floor</span>
-      <input type="range" id="floor-slider" min="-160" max="0" value="-90" disabled style="width:60px" oninput="Panadapter.onFloorSlider(this.value)">
-      <span class="span-val" id="floor-val">-90dB</span>
-      <span class="ctl-label">Gain</span>
-      <input type="range" id="gain-slider" min="0" max="100" value="50" disabled style="width:60px" oninput="Panadapter.onGainSlider(this.value)">
-      <span class="span-val" id="gain-val">50%</span>
-      <span class="ctl-label">Avg</span>
-      <input type="range" id="avg-slider" min="0" max="100" value="80" style="width:60px" oninput="Panadapter.onAvgSlider(this.value)">
-      <span class="span-val" id="avg-val">80%</span>
-      <select id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
-        <option value="default">Default</option>
-        <option value="linrad">Linrad</option>
-        <option value="grayscale">Grayscale</option>
-        <option value="hot">Hot</option>
-        <option value="gqrx">GQRX</option>
-      </select>
+      <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()">Audio</button>
     </div>
 
+    <div class="divider"></div>
+    <h2>Spectrum &amp; Waterfall</h2>
+    <div class="center-controls-row row-display">
+      <span class="field-group">
+        <span class="ctl-label">Span</span>
+        <input type="range" class="display-slider" id="span-slider" min="0" max="1000" value="500" oninput="Panadapter.onSpanSlider(this.value)">
+        <span class="span-val" id="span-val">15.0 kHz</span>
+      </span>
+      <label class="ctl-label field-group"><input type="checkbox" id="auto-scale-cb" checked onchange="Panadapter.onAutoScaleToggle(this.checked)"> Auto</label>
+      <span class="field-group">
+        <span class="ctl-label">Floor</span>
+        <input type="range" class="display-slider" id="floor-slider" min="-160" max="0" value="-90" disabled oninput="Panadapter.onFloorSlider(this.value)">
+        <span class="span-val" id="floor-val">-90dB</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">Gain</span>
+        <input type="range" class="display-slider" id="gain-slider" min="0" max="100" value="50" disabled oninput="Panadapter.onGainSlider(this.value)">
+        <span class="span-val" id="gain-val">50%</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">Avg</span>
+        <input type="range" class="display-slider" id="avg-slider" min="0" max="100" value="80" oninput="Panadapter.onAvgSlider(this.value)">
+        <span class="span-val" id="avg-val">80%</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">WF Palette</span>
+        <select id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
+          <option value="default">Default</option>
+          <option value="linrad">Linrad</option>
+          <option value="grayscale">Grayscale</option>
+          <option value="hot">Hot</option>
+          <option value="gqrx">GQRX</option>
+        </select>
+      </span>
+    </div>
+
+    <div class="divider"></div>
+    <h2>Audio EQ</h2>
     <div class="center-controls-row eq-row">
       <button class="dsp-toggle eq-square-btn active" id="eq-btn" onclick="RigControl.toggleEQ()">EQ</button>
       <div class="eq-bmt-group">
-        <span class="dsp-val">B</span>
-        <input type="range" min="-12" max="12" step="1" value="0" id="eq-bass-slider" style="flex:1;min-width:60px"
-          oninput="document.getElementById('eq-bass-val').textContent = this.value"
-          onmousedown="RigControl.setDragging('eq', true)"
-          onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-          ontouchstart="RigControl.setDragging('eq', true)"
-          ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-        <span class="dsp-val" id="eq-bass-val">0</span>
-        <span class="dsp-val">M</span>
-        <input type="range" min="-12" max="12" step="1" value="0" id="eq-mid-slider" style="flex:1;min-width:60px"
-          oninput="document.getElementById('eq-mid-val').textContent = this.value"
-          onmousedown="RigControl.setDragging('eq', true)"
-          onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-          ontouchstart="RigControl.setDragging('eq', true)"
-          ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-        <span class="dsp-val" id="eq-mid-val">0</span>
-        <span class="dsp-val">T</span>
-        <input type="range" min="-12" max="12" step="1" value="0" id="eq-treble-slider" style="flex:1;min-width:60px"
-          oninput="document.getElementById('eq-treble-val').textContent = this.value"
-          onmousedown="RigControl.setDragging('eq', true)"
-          onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-          ontouchstart="RigControl.setDragging('eq', true)"
-          ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-        <span class="dsp-val" id="eq-treble-val">0</span>
+        <span class="field-group">
+          <span class="ctl-label">Bass</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-bass-slider"
+            oninput="document.getElementById('eq-bass-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq', true)"
+            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+            ontouchstart="RigControl.setDragging('eq', true)"
+            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+          <span class="dsp-val" id="eq-bass-val">0</span>
+        </span>
+        <span class="field-group">
+          <span class="ctl-label">Mid</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-mid-slider"
+            oninput="document.getElementById('eq-mid-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq', true)"
+            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+            ontouchstart="RigControl.setDragging('eq', true)"
+            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+          <span class="dsp-val" id="eq-mid-val">0</span>
+        </span>
+        <span class="field-group">
+          <span class="ctl-label">Treble</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-treble-slider"
+            oninput="document.getElementById('eq-treble-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq', true)"
+            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+            ontouchstart="RigControl.setDragging('eq', true)"
+            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+          <span class="dsp-val" id="eq-treble-val">0</span>
+        </span>
       </div>
     </div>
   </div>
 
   <!-- ── 4. Band / amp ────────────────────────────────────── -->
   <div class="panel panel-bandamp">
-    <h2>Band</h2>
-    <div class="band-grid">
-      <button class="btn" data-band="160m" data-freq="1840000"  onclick="RigControl.setBand(this)">160</button>
-      <button class="btn" data-band="80m"  data-freq="3573000"  onclick="RigControl.setBand(this)">80</button>
-      <button class="btn" data-band="60m"  data-freq="5357000"  onclick="RigControl.setBand(this)">60</button>
-      <button class="btn" data-band="40m"  data-freq="7074000"  onclick="RigControl.setBand(this)">40</button>
-      <button class="btn" data-band="30m"  data-freq="10136000" onclick="RigControl.setBand(this)">30</button>
-      <button class="btn" data-band="20m"  data-freq="14074000" onclick="RigControl.setBand(this)">20</button>
-      <button class="btn" data-band="17m"  data-freq="18100000" onclick="RigControl.setBand(this)">17</button>
-      <button class="btn" data-band="15m"  data-freq="21074000" onclick="RigControl.setBand(this)">15</button>
-      <button class="btn" data-band="12m"  data-freq="24915000" onclick="RigControl.setBand(this)">12</button>
-      <button class="btn" data-band="10m"  data-freq="28074000" onclick="RigControl.setBand(this)">10</button>
-      <button class="btn" data-band="6m"   data-freq="50313000" onclick="RigControl.setBand(this)">6</button>
-    </div>
-
-    <div class="zone-amp">
       <h2>Amp (ACOM 1200S)</h2>
       <div class="amp-state-row">
         <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
@@ -718,7 +835,7 @@ select#palette-select {
       <div class="fault-group">
         <h2>Fault Status</h2>
         <span class="fault-severity ok" id="fault-severity">OK</span>
-        <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--muted)">No active faults</span></div>
+        <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--chrome-muted)">No active faults</span></div>
         <span class="inhibit-banner" id="inhibit-banner">&#9940; TX INHIBITED &mdash; <span id="inhibit-reason">—</span></span>
         <div class="btn-row" style="margin-top:6px">
           <button class="btn danger btn-critical" id="btn-inhibit" style="flex:1" onclick="RigControl.inhibitTx()">&#9940; Inhibit</button>
@@ -744,7 +861,6 @@ select#palette-select {
           ontouchend="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))">
         <span class="power-value power-value-green" id="rf-power-val">50W</span>
       </div>
-    </div>
 
     <div class="divider"></div>
     <h2>Antenna</h2>
@@ -756,7 +872,7 @@ select#palette-select {
     </div>
     <button class="btn" style="width:100%" onclick="RigControl.nextAntenna()">&#8635; NEXT ANT</button>
     <div class="dummy-timer-wrap" id="dummy-timer-wrap">
-      <span class="muted mono" style="font-size:0.6rem;color:var(--muted)">DUMMY LOAD:</span>
+      <span class="muted mono" style="color:var(--chrome-muted)">DUMMY LOAD:</span>
       <span class="dummy-timer" id="dummy-timer">10.0s</span>
     </div>
 
@@ -786,12 +902,12 @@ select#palette-select {
       <button class="btn active-green" style="flex:1" onclick="RigControl.startAbTest()">&#9654; Start</button>
       <button class="btn danger" style="flex:1" onclick="RigControl.stopAbTest()">&#9632; Stop</button>
     </div>
-    <div class="mono" style="font-size:0.62rem;margin-bottom:4px" id="abt-status">idle</div>
+    <div class="mono" style="margin-bottom:4px" id="abt-status">idle</div>
     <div id="abt-confirm-wrap" class="abt-row" style="display:none;align-items:center">
-      <span class="mono" id="abt-confirm-label" style="color:#ffc107"></span>
+      <span class="mono" id="abt-confirm-label" style="color:var(--state-selected)"></span>
       <button class="btn active-green" style="flex:1" id="abt-confirm-btn" onclick="RigControl.confirmAbtSwitch()">&#9166; Confirm switched</button>
     </div>
-    <div id="abt-summary" class="mono" style="font-size:0.6rem;margin-bottom:4px"></div>
+    <div id="abt-summary" class="mono" style="margin-bottom:4px"></div>
     <div id="abt-results" class="scroll-table"></div>
   </div>
 
@@ -975,6 +1091,13 @@ function connectWs() {
       rigMode = rig.mode || rigMode;
       rigPassbandHz = rig.passband_hz ?? rigPassbandHz;
       if (!rigPtt) rigIsDigital = !!rig.is_digital;
+      // Whole Band's view is silently overridden on the very next tick by
+      // handleDigitalViewMode() whenever the rig is in DATA-U/digital mode
+      // (it locks span/center every state update regardless of
+      // wholeBandView) — dimmed rather than left clickable-but-futile, same
+      // reasoning as the Floor/Gain fix earlier (operator feedback
+      // 2026-07-14).
+      document.getElementById('whole-band-btn').classList.toggle('disabled', rigIsDigital);
 
       if (!wholeBandApplied && rigBand && latestFrame) {
         wholeBandApplied = true;
@@ -1313,7 +1436,7 @@ function drawRigMarker(c, w, h, dpr) {
   if (x < 0 || x > w) return;
 
   c.save();
-  c.strokeStyle = 'rgba(255, 214, 10, 0.85)';
+  c.strokeStyle = 'rgba(138, 147, 217, 0.85)'; // --chrome-accent
   c.lineWidth = 1.5 * dpr;
   c.setLineDash([4, 4]);
   c.beginPath();
@@ -1324,7 +1447,7 @@ function drawRigMarker(c, w, h, dpr) {
   c.setLineDash([]);
   const label = (rigFreqHz / 1e6).toFixed(4) + ' MHz';
   c.font = `${11 * dpr}px monospace`;
-  c.fillStyle = '#ffd60a';
+  c.fillStyle = '#8A93D9'; // --chrome-accent
   const labelW = c.measureText(label).width;
   const labelX = (x + labelW + 6 > w) ? x - labelW - 6 : x + 6;
   c.fillText(label, labelX, h - 4 * dpr);
@@ -1373,13 +1496,13 @@ function drawSpectrum() {
     ctx.lineTo(xs[drawPoints.length - 1], h);
     ctx.lineTo(xs[0], h);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(0, 212, 255, 0.25)';
+    ctx.fillStyle = 'rgba(103, 208, 240, 0.25)'; // --data-trace
     ctx.fill();
 
     ctx.beginPath();
     ctx.moveTo(xs[0], ys[0]);
     for (let i = 1; i < drawPoints.length; i++) ctx.lineTo(xs[i], ys[i]);
-    ctx.strokeStyle = '#00d4ff';
+    ctx.strokeStyle = '#67D0F0'; // --data-trace
     ctx.lineWidth = 1.5 * dpr;
     ctx.stroke();
 
@@ -1397,7 +1520,7 @@ function drawCursorCrosshair(c, w, h, dpr) {
   if (cx < 0 || cx > w) return;
 
   c.save();
-  c.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+  c.strokeStyle = 'rgba(230, 234, 240, 0.4)'; // --fg-0, dimmed
   c.lineWidth = 1;
   c.beginPath();
   c.moveTo(cx, 0);
@@ -1406,7 +1529,7 @@ function drawCursorCrosshair(c, w, h, dpr) {
 
   const label = (cursorFreqHz / 1e6).toFixed(4) + ' MHz';
   c.font = `${11 * dpr}px monospace`;
-  c.fillStyle = '#ffffff';
+  c.fillStyle = '#5C6675'; // --chrome-muted
   const labelW = c.measureText(label).width;
   const labelX = (cx + labelW + 6 > w) ? cx - labelW - 6 : cx + 6;
   c.fillText(label, labelX, 12 * dpr);
@@ -1567,7 +1690,6 @@ function sendAudioTargetFromRig(force) {
 function enableAudio() {
   audioMuted = false;
   const btn = document.getElementById('mute-btn');
-  btn.textContent = 'Audio: Live';
   btn.classList.add('active');
   ensureAudioWorklet().then(() => {
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
@@ -1580,7 +1702,6 @@ function enableAudio() {
 function disableAudio() {
   audioMuted = true;
   const btn = document.getElementById('mute-btn');
-  btn.textContent = 'Audio: Muted';
   btn.classList.remove('active');
   send({ cmd: 'set_audio_enabled', enabled: false });
 }
@@ -1755,7 +1876,7 @@ function connectWs() {
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'state') { state = msg.data; updateUI(state); }
-    else if (msg.type === 'cmd_response' && !msg.ok) showToast('Error: ' + msg.message, 'error');
+    else if (msg.type === 'cmd_response' && !msg.ok) showToast('Error: ' + (msg.message || (msg.cmd + ' rejected by rig')), 'error');
     else if (msg.type === 'ab_test_status') updateAbTestUI(msg.data);
     // WSJT-X link status only — no TX/safety relevance, so it's fine to
     // piggyback on this module's existing connection rather than opening a
@@ -1830,9 +1951,9 @@ function updateAbTestUI(d) {
   if (d.summary && d.summary.length) {
     summaryEl.innerHTML = d.summary.map(s => {
       const ref = fmtAnt(s.ref_antenna), cmp = fmtAnt(s.compare_antenna);
-      if (!s.n_matched) return `<div style="color:#ffc107">${ref} vs ${cmp}: ${s.note}</div>`;
+      if (!s.n_matched) return `<div style="color:var(--state-fault)">${ref} vs ${cmp}: ${s.note}</div>`;
       const sign = s.mean_signal_diff_db >= 0 ? 'stronger' : 'weaker';
-      return `<div style="color:#00e5ff">${ref} vs ${cmp}: ` +
+      return `<div style="color:var(--data-trace)">${ref} vs ${cmp}: ` +
         `${Math.abs(s.mean_signal_diff_db).toFixed(1)}dB ${sign}</div>`;
     }).join('');
   } else {
@@ -1946,8 +2067,11 @@ function updateUI(s) {
     document.getElementById(id).className = 'btn' + (preamp === i ? ' active' : '');
   });
 
-  document.getElementById('att-val').textContent =
-    (rig.att_db && rig.att_db > 0) ? rig.att_db + 'dB' : 'OFF';
+  const attDb = rig.att_db ?? 0;
+  ['att-0', 'att-12'].forEach(id => {
+    const db = parseInt(id.split('-')[1], 10);
+    document.getElementById(id).className = 'btn' + (attDb === db ? ' active' : '');
+  });
 
   document.querySelectorAll('[data-band]').forEach(btn => {
     btn.className = 'btn' + (btn.dataset.band === (rig.band || '') ? ' active' : '');
@@ -2103,7 +2227,7 @@ function updateAmp(s) {
     ...(s.fault_warnings || []).map(f => `<div class="fault-item warn">${f}</div>`),
   ];
   faultMsgs.innerHTML = all.length ? all.join('')
-    : '<span class="muted" style="color:var(--muted)">No active faults</span>';
+    : '<span class="muted" style="color:var(--chrome-muted)">No active faults</span>';
 }
 
 function updateFilterWidth(rig) {
@@ -2257,6 +2381,7 @@ function setWidth(val) {
 
 function setPower(val) { send({ cmd: 'set_rf_power', pct: parseInt(val, 10) }); }
 function setPreamp(level) { send({ cmd: 'set_preamp', level }); }
+function setAtt(db) { send({ cmd: 'set_att', db }); }
 function setOpMode(mode) { send({ cmd: 'set_mode_op', mode, confirmed: true }); }
 function setMicGain(val) { send({ cmd: 'set_mic_gain', level: parseFloat(val) / 100 }); }
 function setComp(val) { send({ cmd: 'set_comp', level: parseFloat(val) / 100 }); }
@@ -2271,7 +2396,6 @@ function _applyNB(on) {
   const btn = document.getElementById('nb-btn');
   if (!btn) return;
   btn.classList.toggle('active', on);
-  document.getElementById('nb-state').textContent = on ? 'ON' : 'OFF';
 }
 
 function toggleNR() { _nrOn = !_nrOn; send({ cmd: 'set_audio_nr', on: _nrOn }); _applyNR(_nrOn); }
@@ -2279,7 +2403,6 @@ function _applyNR(on) {
   const btn = document.getElementById('nr-btn');
   if (!btn) return;
   btn.classList.toggle('active', on);
-  document.getElementById('nr-state').textContent = on ? 'ON' : 'OFF';
 }
 function onNRChange(val) { document.getElementById('nr-val').textContent = val; }
 function setNR(val) { send({ cmd: 'set_audio_nr', on: _nrOn, level: parseInt(val, 10) }); }
@@ -2289,7 +2412,6 @@ function _applyDNF(on) {
   const btn = document.getElementById('dnf-btn');
   if (!btn) return;
   btn.classList.toggle('active', on);
-  document.getElementById('dnf-state').textContent = on ? 'ON' : 'OFF';
 }
 
 function setAGC(value) { send({ cmd: 'set_agc', value }); }
@@ -2386,7 +2508,7 @@ function init() {
 return {
   init, setDragging, sliderRelease, onS9CalInput,
   setBand, setMode, setFilterWidthMode, onWidthSlider, setWidth,
-  setPower, setPreamp, setOpMode, setMicGain, setComp,
+  setPower, setPreamp, setAtt, setOpMode, setMicGain, setComp,
   nextAntenna, inhibitTx, allowTx,
   toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume, setSsbTxBpf,
   toggleEQ, setEQ, setDtGain,

@@ -101,7 +101,12 @@ Three sizes, with real separation between them. Timid scales read as mush.
 | Section header | 12px, `letter-spacing: 0.1em` | 400 |
 | Everything else | 12px | 400 |
 
-Section headers are the only uppercase text in the app.
+Section headers and control/meter labels (VOL, DT GAIN, ALC, Fwd P, SWR,
+etc.) are uppercase. Values, readouts, and descriptive text (antenna
+aliases, system messages) are not — uppercase marks "what is this control,"
+never "what is its value." (Amended 2026-07-14; originally read "Section
+headers are the only uppercase text in the app," but labels had already
+drifted uppercase in practice before this doc caught up.)
 
 ---
 
@@ -129,7 +134,14 @@ should appear four times, because there are exactly four questions:
 | Where is the radio tuned? | Hero readout | 56px, `--fg-0` / `--state-fault` |
 | What is under my cursor? | Plot cursor line | 12px, `--chrome-muted` |
 | What is the frequency scale? | Plot axis ticks | 12px, `--chrome-muted` |
-| Let me enter a frequency | Hero, click-to-edit | — |
+| Let me enter a frequency | TUNING box field, separate from the hero | — |
+
+(Amended 2026-07-14: operator decision to keep frequency entry as its own
+field in the TUNING box rather than merging it into the hero VFO — see §8.
+Day-to-day band tuning happens on the radio's own knob; the console field
+is only for occasional jump-to-frequency, so the SDR#/SDRuno-style
+prominence the click-to-edit hero pattern buys doesn't actually matter
+here.)
 
 Delete the span-start overlays in the corners of the spectrum and waterfall.
 The leftmost axis tick already answers that question.
@@ -219,14 +231,26 @@ Run this against every screen. Each line is a violation to be fixed.
 
 ## 8. Interaction
 
-**Click-to-edit hero.** Click the VFO readout, it becomes an input. Enter
-commits, Escape reverts, blur reverts. This is the standard pattern in
-SDR#, SDRuno and SmartSDR — discoverable, and it removes the frequency
-entry field from the display-control row where it does not belong.
+**Click-to-edit hero — decided against (2026-07-14).** Considered folding
+the TUNING box's frequency field into the hero VFO (the SDR#/SDRuno/SmartSDR
+pattern), but the operator tunes primarily with the radio's own knob — the
+console field is only for occasional jump-to-frequency, so the hero pattern's
+main benefit (discoverability/prominence) doesn't apply here. Frequency
+entry stays where it is, in the TUNING box, permanently.
 
 **Polled fields must yield to the editor.** The rig-state WebSocket handler
 must not write to a field that currently has focus. Unconditional writes
-from the poll loop overwrite keystrokes and make the field appear dead.
+from the poll loop overwrite keystrokes and make the field appear dead —
+confirmed live 2026-07-14 as a real bug, not hypothetical: the TUNING box's
+Tune button appeared to silently fail because the field's live-telemetry
+refresh (a `requestAnimationFrame` loop, not just a poll handler) raced the
+button's focus-stealing click and clobbered the typed value first. A bare
+`document.activeElement === input` check is not sufficient against a
+continuously-scheduled refresh — the actual fix used was
+`onmousedown="event.preventDefault()"` on the tune button (stops it from
+ever taking focus off the field, so the guard holds for the whole
+interaction), not the focus/blur-flag pattern below, though that pattern is
+still correct guidance for a poll/websocket-driven refresh specifically:
 
 ```javascript
 let editing = false;
