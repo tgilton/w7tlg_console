@@ -140,8 +140,30 @@ html, body {
 .btn.active-green { background: var(--green-dim); border-color: var(--green); color: var(--green); }
 .btn.danger { border-color: #6b2020; color: #ff6b6b; background: #2a0d0d; }
 .btn.danger:hover { border-color: var(--red); color: var(--red); }
+.btn.active-green:hover { border-color: var(--green); color: var(--green); }
 .btn.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 .btn-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+
+/* Inhibit/Allow — the highest-consequence control pair in the app (see
+   FUNCTIONS.md §8/3): amp-fault recovery loop. Deliberately the largest,
+   boldest buttons anywhere on the page — everything else here maxes out
+   around 0.68rem/1px border. When tx_inhibited actually goes true, Inhibit
+   fills solid and pulses (alarm), Allow fills solid and steadies (the fix) —
+   JS toggles .tx-blocked on both from state.tx_inhibited. */
+.btn-critical {
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 12px 10px;
+  border-width: 2px;
+  letter-spacing: 0.04em;
+}
+.btn.danger.btn-critical.tx-blocked {
+  background: var(--red); color: #1a0000; border-color: var(--red);
+  animation: pulse-tx 0.6s infinite;
+}
+.btn.active-green.btn-critical.tx-blocked {
+  background: var(--green); color: #04210f; border-color: var(--green);
+}
 
 .badge {
   font-family: var(--mono); font-size: 0.65rem; font-weight: 600;
@@ -155,6 +177,11 @@ html, body {
 .badge-digital-audio-active { background: #1a2a1a; color: #4f8; }
 .badge-digital-audio-inactive { background: #2a1a1a; color: #f88; }
 .badge-split { background: #3a2a00; color: #f90; animation: pulse-tx 1.2s infinite; }
+/* Not a fault (see FUNCTIONS.md §7) — solid fill, not the dim-bg/bright-text
+   look every other badge uses here, so it never blends in as "just another
+   status chip" next to Band/Mode/RX. No animation: it's a standing
+   condition to notice once and keep noticing, not an alarm to react to. */
+.badge-dummy-load { background: var(--yellow); color: #2a1f00; font-weight: 700; }
 @keyframes pulse-tx { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 
 /* ── Zoned grouping ─────────────────────────────────────────
@@ -295,6 +322,7 @@ select#palette-select {
 .opmode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
 .ant-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 6px; }
 .ant-indicator { cursor: default; pointer-events: none; font-size: 0.62rem; }
+.ant-alias { display: block; font-size: 0.56rem; font-weight: 400; color: var(--muted); margin-top: 2px; }
 
 .fault-severity {
   font-family: var(--mono); font-size: 0.62rem; font-weight: 700; padding: 2px 6px;
@@ -353,9 +381,6 @@ select#palette-select {
     <span class="status-item" id="stat-sdr"><span class="dot" id="dot-sdr"></span>SDR</span>
     <span class="status-item" id="stat-wsjtx"><span class="dot" id="dot-wsjtx"></span>WSJT-X</span>
     <span class="spacer"></span>
-    <span class="inhibit-banner" id="inhibit-banner">&#9940; TX INHIBITED &mdash; <span id="inhibit-reason">—</span></span>
-    <button class="btn danger" onclick="RigControl.inhibitTx()">&#9940; Inhibit</button>
-    <button class="btn active-green" onclick="RigControl.allowTx()">&#10003; Allow</button>
     <span class="nav-link"><a href="/monitor" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Monitor &#8599;</a></span>
     <span class="nav-link"><a href="/propagation" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Propagation &#8599;</a></span>
     <span class="nav-link"><a href="/spotseek" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Spot/Seek &#8599;</a></span>
@@ -506,6 +531,7 @@ select#palette-select {
       <span class="badge badge-split" id="badge-split" style="display:none">&#9888; SPLIT</span>
       <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
       <span class="badge badge-digital-audio-inactive" id="badge-digital-audio" style="display:none">DIGI AUDIO</span>
+      <span class="badge badge-dummy-load" id="badge-dummy-load" style="display:none">DUMMY LOAD</span>
     </div>
 
     <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter-bar"></div></div>
@@ -644,9 +670,16 @@ select#palette-select {
       </div>
 
       <div class="divider"></div>
-      <h2>Fault Status</h2>
-      <span class="fault-severity ok" id="fault-severity">OK</span>
-      <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--muted)">No active faults</span></div>
+      <div class="fault-group">
+        <h2>Fault Status</h2>
+        <span class="fault-severity ok" id="fault-severity">OK</span>
+        <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--muted)">No active faults</span></div>
+        <span class="inhibit-banner" id="inhibit-banner">&#9940; TX INHIBITED &mdash; <span id="inhibit-reason">—</span></span>
+        <div class="btn-row" style="margin-top:6px">
+          <button class="btn danger btn-critical" id="btn-inhibit" style="flex:1" onclick="RigControl.inhibitTx()">&#9940; Inhibit</button>
+          <button class="btn active-green btn-critical" id="btn-allow" style="flex:1" onclick="RigControl.allowTx()">&#10003; Allow</button>
+        </div>
+      </div>
 
       <div class="divider"></div>
       <h2>Operating Mode</h2>
@@ -671,10 +704,10 @@ select#palette-select {
     <div class="divider"></div>
     <h2>Antenna</h2>
     <div class="ant-grid">
-      <div class="btn ant-indicator" id="ant-1">A1F</div>
-      <div class="btn ant-indicator disabled" id="ant-2">A2F</div>
-      <div class="btn ant-indicator" id="ant-3">A3R</div>
-      <div class="btn ant-indicator" id="ant-4">A4R</div>
+      <div class="btn ant-indicator" id="ant-1">A1F<br><span class="ant-alias" id="ant-alias-1"></span></div>
+      <div class="btn ant-indicator disabled" id="ant-2">A2F<br><span class="ant-alias" id="ant-alias-2"></span></div>
+      <div class="btn ant-indicator" id="ant-3">A3R<br><span class="ant-alias" id="ant-alias-3"></span></div>
+      <div class="btn ant-indicator" id="ant-4">A4R<br><span class="ant-alias" id="ant-alias-4"></span></div>
     </div>
     <button class="btn" style="width:100%" onclick="RigControl.nextAntenna()">&#8635; NEXT ANT</button>
     <div class="dummy-timer-wrap" id="dummy-timer-wrap">
@@ -1795,6 +1828,12 @@ function updateUI(s) {
   document.getElementById('badge-split').style.display = rig.split ? 'inline-block' : 'none';
   document.getElementById('badge-digital').style.display = rig.near_digital_freq ? 'inline-block' : 'none';
 
+  // Persistent — not tied to TX or the dummy_load_active cutoff timer below.
+  // A4R is a legitimate, frequently-correct selection, not a fault; this must
+  // stay visible for as long as it's selected, on RX or TX.
+  document.getElementById('badge-dummy-load').style.display =
+    s.selected_antenna === 4 ? 'inline-block' : 'none';
+
   // Both SSB Audio and Digital Audio stay visible at all times now (Digital
   // Audio stacked above SSB Audio in the left column) — no longer hidden by
   // rig.is_digital. DT GAIN still only makes sense to sync while actually
@@ -1900,9 +1939,14 @@ function updateUI(s) {
 
   [1, 2, 3, 4].forEach(n => {
     const btn = document.getElementById('ant-' + n);
-    if (!btn || btn.classList.contains('disabled')) return;
-    btn.className = btn.className.replace(' active', '').replace(' active-amber', '') +
-      (s.selected_antenna === n ? ' active' : '');
+    if (btn && !btn.classList.contains('disabled')) {
+      btn.className = btn.className.replace(' active', '').replace(' active-amber', '') +
+        (s.selected_antenna === n ? ' active' : '');
+    }
+    // Alias is set regardless of enabled/disabled — A2F ("Unconnected") still
+    // needs its label, it's just not selectable.
+    const aliasEl = document.getElementById('ant-alias-' + n);
+    if (aliasEl && s.antenna_names) aliasEl.textContent = s.antenna_names[n] || '';
   });
 
   const dtp = document.getElementById('dummy-timer-wrap');
@@ -1926,6 +1970,8 @@ function updateUI(s) {
   const banner = document.getElementById('inhibit-banner');
   banner.className = 'inhibit-banner' + (s.tx_inhibited ? ' visible' : '');
   document.getElementById('inhibit-reason').textContent = s.tx_inhibit_reason || '—';
+  document.getElementById('btn-inhibit').classList.toggle('tx-blocked', !!s.tx_inhibited);
+  document.getElementById('btn-allow').classList.toggle('tx-blocked', !!s.tx_inhibited);
 
   updateDSP(rig);
 }

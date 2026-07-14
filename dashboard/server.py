@@ -25,7 +25,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from amplifier.acom_bridge import AcomBridge, OperatingMode, StationState
+from amplifier.acom_bridge import AcomBridge, ANTENNAS, OperatingMode, StationState
 from amplifier.acom_serial import AcomSerial, find_acom_port
 from amplifier.antenna_ab_test import AntennaAbTest
 from amplifier.trend_csv_logger import TrendCsvLogger
@@ -227,6 +227,12 @@ async def _propagation_poll_loop():
         await asyncio.sleep(180.0)
 
 
+# Port aliases for display — sourced from acom_bridge.ANTENNAS (the same
+# config that drives the A4R dummy-load TX cutoff) so the console never
+# carries a second, driftable copy of these names.
+ANTENNA_NAMES = {a.number: a.name for a in ANTENNAS.values()}
+
+
 def build_state_payload(state: StationState) -> dict:
     data = state.to_dict()
     data["rig"] = dict(data["rig"])   # copy — to_dict() hands back the live StationState.rig dict by reference
@@ -254,6 +260,7 @@ def build_state_payload(state: StationState) -> dict:
                 if db_fs is not None:
                     data["rig"]["sdr_strength_db"] = db_fs
     data["station_profile"] = station_profile.to_dict()
+    data["antenna_names"] = ANTENNA_NAMES
     return data
 
 
