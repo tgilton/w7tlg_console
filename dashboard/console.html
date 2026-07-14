@@ -260,6 +260,12 @@ input[type=range] { width: 100%; accent-color: var(--cyan); cursor: pointer; }
 
 .tx-meters { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; transition: opacity 0.15s; }
 .tx-meters.inactive { opacity: 0.35; }
+/* Same 3-column grid as .tx-meters, same gap — VOL's column lines up exactly
+   with ALC's below it, and the near-zero margin between the two blocks (vs.
+   the 8px elsewhere) reads them as one instrument rather than two stacked
+   ones. See FUNCTIONS.md §8: VOL/ALC/WSJT-X power are one tuning loop. */
+.vol-alc-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 2px; }
+.vol-slider-full { width: 100%; accent-color: var(--cyan); margin: 3px 0 2px; }
 .tx-meter-label { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .tx-meter-bar-wrap { height: 10px; background: #0a0d11; border: 1px solid var(--border2); border-radius: 2px; overflow: hidden; margin: 2px 0; }
 .tx-meter-bar { height: 100%; width: 0%; border-radius: 2px; transition: width 0.12s ease-out; }
@@ -308,6 +314,21 @@ select#palette-select {
 .meter-row .val.status-red, .meter-row .val.alert { color: var(--red); }
 .meter-bar-wrap { height: 4px; background: #0a0d11; border-radius: 2px; overflow: hidden; margin: 3px 0 6px; }
 .meter-bar { height: 100%; border-radius: 2px; transition: width 0.2s ease-out; }
+
+/* HV/I — troubleshooting-only, demoted out of the Fwd P..PAM1 T drift stack
+   (see FUNCTIONS.md §6/8). No bar, smallest text on the panel, a bordered
+   DIAG tag instead of a section header (a header would raise its weight,
+   not lower it). */
+.amp-diag-row {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: 0.62rem; color: var(--muted);
+  padding: 2px 0;
+}
+.amp-diag-label {
+  font-size: 0.55rem; letter-spacing: 0.08em;
+  border: 1px solid var(--border2); border-radius: 2px;
+  padding: 0 4px; color: var(--muted);
+}
 
 .amp-state-badge {
   font-family: var(--mono); font-size: 0.65rem; font-weight: 600; padding: 2px 7px;
@@ -499,16 +520,6 @@ select#palette-select {
         <button class="dsp-agc-btn" id="agc-slow" onclick="RigControl.setAGC(3)">SLOW</button>
       </span>
     </div>
-    <div class="dsp-toggle-row">
-      <span class="slider-label" style="margin:0">VOL</span>
-      <input type="range" min="0" max="1000" step="10" value="400" id="rx-vol-slider" class="dsp-slider-mini"
-        oninput="document.getElementById('rx-vol-val').textContent = this.value + '%'"
-        onmousedown="RigControl.setDragging('rxVol', true)"
-        onmouseup="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))"
-        ontouchstart="RigControl.setDragging('rxVol', true)"
-        ontouchend="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))">
-      <span class="dsp-val" id="rx-vol-val" style="min-width:34px">400%</span>
-    </div>
     <div class="divider"></div>
     <div class="meter-row"><span>Preamp</span>
       <span>
@@ -539,6 +550,28 @@ select#palette-select {
       <span class="val" id="smeter-label">S0</span>
       <span id="smeter-db">— dBFS</span>
       <span>S9 Cal <input type="number" id="s9-cal-input" value="-75" step="1" oninput="RigControl.onS9CalInput(this.value)"></span>
+    </div>
+
+    <!-- VOL sits directly above ALC, column-aligned with it via the same
+         3-column grid as #tx-meters (matching width = visually "one loop"),
+         but in its own container so it's exempt from that block's TX-only
+         dimming — VOL (SDR RX volume) must stay fully visible during RX too.
+         Moved from the left column DSP panel per FUNCTIONS.md §8:
+         VOL/ALC/WSJT-X power are one tuning loop and were previously on
+         opposite sides of the screen. -->
+    <div class="vol-alc-group">
+      <div class="vol-control">
+        <div class="tx-meter-label">VOL</div>
+        <input type="range" min="0" max="1000" step="10" value="400" id="rx-vol-slider" class="vol-slider-full"
+          oninput="document.getElementById('rx-vol-val').textContent = this.value + '%'"
+          onmousedown="RigControl.setDragging('rxVol', true)"
+          onmouseup="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))"
+          ontouchstart="RigControl.setDragging('rxVol', true)"
+          ontouchend="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))">
+        <div class="tx-meter-value" id="rx-vol-val">400%</div>
+      </div>
+      <div></div>
+      <div></div>
     </div>
 
     <div class="tx-meters inactive" id="tx-meters">
@@ -664,7 +697,19 @@ select#palette-select {
       <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-drive-bar" style="width:0%"></div></div>
       <div class="meter-row"><span>PAM1 T</span><span class="val" id="amp-temp-val">— &deg;C</span></div>
       <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div></div>
-      <div class="meter-row mono" style="font-family:var(--mono);font-size:0.65rem;color:var(--muted)">
+
+      <!-- Fwd P/Rev P/SWR/Drive P/PAM1 T above are watched continuously for
+           drift (see FUNCTIONS.md §6/8) — trend charts for exactly those
+           already exist on /monitor (dashboard/monitor.html's StripChart,
+           fed by the same bridge.on_trend_sample data), so this console
+           doesn't need to duplicate that view, just link to it (see header).
+           HV/I below are troubleshooting-only (RARE) and demoted out of
+           that stack: a divider breaks the visual run, and the DIAG tag
+           marks them as a separate, lower-priority readout rather than a
+           sixth thing to watch for drift. -->
+      <div class="divider"></div>
+      <div class="amp-diag-row" title="Troubleshooting only — not watched during normal operation">
+        <span class="amp-diag-label">DIAG</span>
         <span>HV <span id="amp-hv-val">—</span>V</span>
         <span>I <span id="amp-current-val">—</span>A</span>
       </div>

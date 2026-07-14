@@ -311,41 +311,61 @@ Ranked by impact. Note that none of these are styling fixes — they came out of
 describing the actual operating workflow, and no amount of restyling would have
 surfaced them.
 
-1. **Inhibit / Allow must sit with FAULT STATUS.** They are one control loop
-   currently split across the screen. This is the highest-value fix in the list
-   and it is a workflow defect, not a cosmetic one.
+1. **[DONE] Inhibit / Allow must sit with FAULT STATUS.** They are one control
+   loop currently split across the screen. This is the highest-value fix in the
+   list and it is a workflow defect, not a cosmetic one. Moved into a fault
+   group in the right column and styled as the heaviest-weight control pair in
+   the app, escalating to a solid pulsing alarm on `tx_inhibited`.
 
-2. **The dummy load must be unmistakable.** A4R is a 1500 W resistor. The
+2. **[DONE] The dummy load must be unmistakable.** A4R is a 1500 W resistor. The
    console currently presents it exactly like an antenna, and shows perfect SWR
-   while the operator transmits into it.
+   while the operator transmits into it. Port aliases now surfaced from
+   `acom_bridge.ANTENNAS`; persistent `DUMMY LOAD` badge shows near the VFO
+   whenever A4R is selected, independent of TX state.
 
 3. **Nothing hides, nothing moves.** All controls stay visible and in fixed
    positions across all three modes. Hierarchy comes from size, weight, and
    grouping. This is a constraint on every other decision here.
 
-4. **The amp stack is a drift monitor, not a readout.** Fwd P, Rev P, both SWRs,
-   Drive P, PAM1 T are watched continuously for *change*, not value. Show trend.
-   Demote HV / I — they are troubleshooting instruments, not operating ones.
+4. **[PARTIAL] The amp stack is a drift monitor, not a readout.** Fwd P, Rev P,
+   both SWRs, Drive P, PAM1 T are watched continuously for *change*, not value.
+   HV/I demoted below a divider with a DIAG tag — no longer competing with the
+   drift-watched stack. Trend charting itself isn't duplicated here: `/monitor`
+   already has StripCharts for fwd/refl/swr/temp/drive/current, fed by the same
+   `bridge.on_trend_sample` data — the header's Monitor link covers "show trend."
 
-5. **VOL belongs next to ALC.** They form one control loop with the WSJT-X power
-   slider. They are currently on opposite sides of the screen.
+5. **[DONE] VOL belongs next to ALC.** They form one control loop with the
+   WSJT-X power slider. Moved from the left column into its own row directly
+   above the ALC meter, column-aligned with it, exempt from the TX-only
+   dimming so it stays usable during RX.
 
-6. **CW controls are missing entirely.** Keyer speed, break-in, sidetone, CW
-   filter. Either they belong here or CW is driven from the rig's front panel —
-   but the current state (a CW mode button and nothing else) is incoherent.
+6. **[DEFERRED] CW controls are missing entirely.** Keyer speed, break-in,
+   sidetone, CW filter. Either they belong here or CW is driven from the rig's
+   front panel — but the current state (a CW mode button and nothing else) is
+   incoherent. Revisit once the operator has a clearer idea of how they want to
+   operate CW from this console.
 
-7. **Tune should be one action.** Switch to CW, key the amp, restore prior mode.
-   The console can own that sequence instead of making the operator drive it.
+7. **[DEFERRED] Tune should be one action.** Switch to CW, key the amp, restore
+   prior mode. The console can own that sequence instead of making the operator
+   drive it. Revisit alongside CW controls above — same open question about
+   desired operating workflow.
 
-8. **Startup needs a state summary.** "Is everything in order?" is currently
-   answered by manually sweeping three columns. It should be one glance —
-   including a plain statement when a fault (e.g. ATU Unassigned Error) must be
-   cleared on the amp's own front panel.
+8. **[DEFERRED] Startup needs a state summary.** "Is everything in order?" is
+   currently answered by manually sweeping three columns. It should be one
+   glance — including a plain statement when a fault (e.g. ATU Unassigned
+   Error) must be cleared on the amp's own front panel. Revisit once the
+   operator has a clearer idea of what "nominal" should check.
 
-9. **Annotate the antenna ports.** Port names are fixed by the amp, but a local
-   alias map makes the column readable: `A1F — SS25 vertical`, `A3R — 40m EFHW`,
-   `A4R — DUMMY LOAD`.
+9. **[DONE] Annotate the antenna ports.** Port names are fixed by the amp, but a
+   local alias map makes the column readable: `A1F — SS25 vertical`, `A3R — 40m
+   EFHW`, `A4R — DUMMY LOAD`. Sourced from the existing `acom_bridge.ANTENNAS`
+   config rather than a second, driftable copy.
 
-10. **The A/B test wants room.** It is a real experimental instrument, used
-    deliberately and not infrequently. It should sit near the antenna group and
-    have space to breathe, not be crushed into the bottom of a column.
+10. **[ATTEMPTED, REVERTED] The A/B test wants room.** It is a real
+    experimental instrument, used deliberately and not infrequently. Tried
+    pulling it into its own full-width row below the main columns — both the
+    initial version (giant Start/Stop buttons) and the follow-up
+    (space-between-distributed fields) looked worse than the original cramped
+    column, per operator review. Reverted to its original spot. Revisit with a
+    different approach later (e.g. an actual FieldGrid redesign, per DESIGN.md
+    §6.4, rather than just widening the container).
