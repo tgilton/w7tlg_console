@@ -40,10 +40,14 @@ Usage:
 
     python3 tools/qso_asymmetry_power_estimate.py /path/to/correlation.csv
         Explicit input path.
+
+    python3 tools/qso_asymmetry_power_estimate.py --predict-w 100
+        Also prints the expected mean asymmetry at 100W (pooled and
+        per-band), extrapolating the same fit rather than refitting.
 """
 
+import argparse
 import csv
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -130,8 +134,33 @@ def binned_means(power: np.ndarray, asym: np.ndarray, bins: list[int]) -> list[t
     return out
 
 
+def predict_asymmetry(power_w: float, pooled: dict, fe: dict) -> tuple[float, dict[str, Optional[float]]]:
+    """Extrapolates the already-fit models to a given power. Returns
+    (pooled_prediction, {band: per_band_prediction}) — per-band predictions
+    use the fixed-effects model's shared slope with that band's own
+    intercept, and are None for bands below MIN_BAND_N."""
+    pooled_pred = pooled["slope"] * power_w + pooled["intercept"]
+    per_band_pred = {}
+    for b, info in fe["per_band"].items():
+        if info["n"] < MIN_BAND_N:
+            per_band_pred[b] = None
+            continue
+        per_band_pred[b] = fe["power_coef"] * power_w + info["intercept"]
+    return pooled_pred, per_band_pred
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("input", nargs="?", type=Path, default=DEFAULT_INPUT,
+                    help="Path to qso_propagation_correlation.csv")
+    p.add_argument("--predict-w", type=float, default=None,
+                    help="Also predict expected mean asymmetry (dB) at this TX power")
+    return p
+
+
 def main():
-    input_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_INPUT
+    args = build_arg_parser().parse_args()
+    input_path = args.input
     if not input_path.exists():
         print(f"No input file at {input_path}")
         return
@@ -166,6 +195,15 @@ def main():
     print("Binned means (pooled, sanity check against the fit):")
     for lo, hi, n, mean_a, std_a in binned_means(power, asym, POWER_BINS_W):
         print(f"  {lo:>4}-{hi:<4}W: n={n:>4}  mean asymmetry={mean_a:+6.2f} dB  std={std_a:5.2f}")
+
+    if args.predict_w is not None:
+        pooled_pred, per_band_pred = predict_asymmetry(args.predict_w, pooled, fe)
+        print(f"\nPredicted mean asymmetry at {args.predict_w:.0f}W (extrapolated, not refit):")
+        print(f"  pooled: {pooled_pred:+.2f} dB")
+        for b, pred in sorted(per_band_pred.items(), key=lambda kv: -fe["per_band"][kv[0]]["n"]):
+            n = fe["per_band"][b]["n"]
+            pred_str = f"{pred:+.2f} dB" if pred is not None else "n/a (too few rows)"
+            print(f"  {b:>5} (n={n:>3}): {pred_str}")
 
 
 if __name__ == "__main__":
