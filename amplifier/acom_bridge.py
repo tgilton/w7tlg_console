@@ -7,7 +7,9 @@ Responsibilities:
   - Surfaces a passive SWR warning (>2.5) from ACOM telemetry — never inhibits
   - Mirrors the amp's own hard/soft fault bits (message 0x21) into TX inhibit —
     real safety enforcement lives in the amp's firmware, not console heuristics
-  - Enforces A4R (dummy load) 10-second TX hard cutoff
+  - Enforces A4R (dummy load) power/duration limits from its own spec-plate
+    curve — no separate absolute ceiling; the amp's own internal protection
+    is the backstop for anything beyond what the curve models
   - Publishes unified station state for WebSocket broadcast
 
 Operating Modes:
@@ -16,15 +18,16 @@ Operating Modes:
             explicit operator confirmation before engaging
 
 Antenna Configuration (w7tlg station):
-  A1F — SS-25 / future DXF   1500W  all bands   unlimited
+  A1F — SS-25 / future DXF   1200W  all bands   unlimited
   A2F — unconnected           0W    disabled
   A3R — 40m EFHW multiband  300W   all HF
-  A4R — dummy load          1500W   any         10s hard TX cutoff
+  A4R — dummy load          1200W   any         power/duration curve (spec-plate derived)
 """
 
 import asyncio
 from collections import deque
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -58,6 +61,8 @@ class TrendSample:
     drive_w: float
     current_a: float    # amps (not mA)
     is_tx: bool
+    alc: float = 0.0            # rig.state.alc, 0.0-1.0 (1.0 = pegged)
+    rf_power_pct: int = 0       # rig.state.rf_power_pct, the FT-991A ceiling
 
     def to_list(self) -> list:
         """Compact list format for WebSocket transfer."""
@@ -70,10 +75,12 @@ class TrendSample:
             round(self.drive_w, 1),
             round(self.current_a, 2),
             1 if self.is_tx else 0,
+            round(self.alc, 3),
+            self.rf_power_pct,
         ]
 
 TREND_FIELDS = ["ts", "fwd_w", "refl_w", "swr", "temp_c",
-                "drive_w", "current_a", "is_tx"]
+                "drive_w", "current_a", "is_tx", "alc", "rf_power_pct"]
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +125,7 @@ ANTENNAS: dict[int, AntennaConfig] = {
     1: AntennaConfig(
         port="A1F", number=1,
         name="SS-25 / DXF Vertical",
-        max_power_w=1500, bands=[], enabled=True,
+        max_power_w=1200, bands=[], enabled=True,   # amp's real top end (ACOM 1200S)
         dummy_load=False,
     ),
     2: AntennaConfig(
@@ -136,14 +143,62 @@ ANTENNAS: dict[int, AntennaConfig] = {
     4: AntennaConfig(
         port="A4R", number=4,
         name="Dummy Load",
-        max_power_w=1500, bands=[], enabled=True,
+        max_power_w=1200, bands=[], enabled=True,   # amp's real top end — see DUMMY_LOAD_CURVE
+                                                     # for the load's own, much lower, rating
         dummy_load=True,
     ),
 }
 
-DUMMY_LOAD_MAX_TX_S = 10.0
+# Dummy load pulse-power rating — (seconds, watts) anchor points hand-read
+# off the load's own "POWER CAPABILITY" spec plate (max sustained forward
+# watts for a continuous transmission of a given duration). Not exact
+# manufacturer data (read from a photo, not a datasheet table), so
+# DUMMY_LOAD_CURVE_MARGIN derates it before comparing against live power.
+DUMMY_LOAD_CURVE: list[tuple[float, float]] = [
+    (10, 1500),
+    (30, 750),
+    (40, 500),
+    (50, 350),
+    (60, 250),
+    (120, 150),
+    (300, 110),
+    (600, 100),
+]
+DUMMY_LOAD_CURVE_MARGIN = 0.85
+
 SWR_WARNING_THRESHOLD = 2.5
 SWR_WARNING_CLEAR_THRESHOLD = 2.3
+
+
+def _dummy_load_curve_watts(elapsed_s: float) -> float:
+    """Manufacturer-rated max sustained forward watts at this elapsed
+    duration, log-log interpolated between the digitized spec-plate
+    points. Unmargined — callers apply DUMMY_LOAD_CURVE_MARGIN themselves."""
+    pts = DUMMY_LOAD_CURVE
+    if elapsed_s <= pts[0][0]:
+        return pts[0][1]
+    if elapsed_s >= pts[-1][0]:
+        return pts[-1][1]
+    for (t0, p0), (t1, p1) in zip(pts, pts[1:]):
+        if t0 <= elapsed_s <= t1:
+            frac = (math.log(elapsed_s) - math.log(t0)) / (math.log(t1) - math.log(t0))
+            return math.exp(math.log(p0) + frac * (math.log(p1) - math.log(p0)))
+    return pts[-1][1]   # unreachable given the bounds checks above
+
+
+def _dummy_load_curve_duration_s(watts: float) -> float:
+    """Inverse of _dummy_load_curve_watts: how long the curve allows
+    sustaining this many watts. Unmargined."""
+    pts = DUMMY_LOAD_CURVE
+    if watts >= pts[0][1]:
+        return pts[0][0]
+    if watts <= pts[-1][1]:
+        return pts[-1][0]
+    for (t0, p0), (t1, p1) in zip(pts, pts[1:]):
+        if p1 <= watts <= p0:
+            frac = (math.log(watts) - math.log(p0)) / (math.log(p1) - math.log(p0))
+            return math.exp(math.log(t0) + frac * (math.log(t1) - math.log(t0)))
+    return pts[-1][0]   # unreachable given the bounds checks above
 
 # ---------------------------------------------------------------------------
 # Unified station state
@@ -178,6 +233,12 @@ class StationState:
     dummy_load_remaining_s: float = 0.0
     swr_warning_active: bool = False
     swr_warning_peak: float = 0.0
+    txp_enabled: bool = False
+    txp_target_w: float = 0.0
+    txp_tolerance_pct: float = 10.0
+    txp_mode: str = "off"   # off | armed | correcting | holding | halted
+    txp_ceiling_w: float = 0.0
+    txp_halt_reason: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -208,6 +269,12 @@ class StationState:
             "dummy_load_remaining_s": self.dummy_load_remaining_s,
             "swr_warning_active":     self.swr_warning_active,
             "swr_warning_peak":       self.swr_warning_peak,
+            "txp_enabled":            self.txp_enabled,
+            "txp_target_w":           self.txp_target_w,
+            "txp_tolerance_pct":      self.txp_tolerance_pct,
+            "txp_mode":               self.txp_mode,
+            "txp_ceiling_w":          self.txp_ceiling_w,
+            "txp_halt_reason":        self.txp_halt_reason,
         }
 
 
@@ -471,17 +538,30 @@ class AcomBridge:
         self.station.dummy_load_remaining_s = 0.0
 
     async def _dummy_load_watchdog(self):
+        """Tracks dummy_load_active/dummy_load_remaining_s for the UI
+        countdown while the dummy load is in use. The actual power/duration
+        safety trip runs at telemetry cadence (~100ms) in _on_telemetry, not
+        here — this loop's own 250ms cadence is fine for a countdown
+        display, but was too slow as the enforcement point (a clean carrier
+        can reach full output well within one 250ms tick)."""
         start = self._dummy_tx_start
         self.station.dummy_load_active = True
         while self._dummy_tx_start == start and self._tx_was_active:
             elapsed = time.monotonic() - start
-            remaining = DUMMY_LOAD_MAX_TX_S - elapsed
-            self.station.dummy_load_remaining_s = max(0.0, remaining)
+            fwd_w = self.station.amp_fwd_w
+
+            # Remaining time before the *current* power level would exceed
+            # the curve's rating — recomputed every tick since power can
+            # change mid-transmission (e.g. during a calibration sweep).
+            # Uses the same margin as the _on_telemetry trip check so the
+            # displayed countdown never disagrees with when TX actually
+            # gets cut.
+            if fwd_w > 0:
+                allowed_duration_s = _dummy_load_curve_duration_s(fwd_w / DUMMY_LOAD_CURVE_MARGIN)
+            else:
+                allowed_duration_s = DUMMY_LOAD_CURVE[-1][0]
+            self.station.dummy_load_remaining_s = max(0.0, allowed_duration_s - elapsed)
             await self._publish()
-            if elapsed >= DUMMY_LOAD_MAX_TX_S:
-                logger.warning("Dummy load 10s limit — inhibiting TX")
-                await self.inhibit_tx("Dummy load 10s limit reached")
-                break
             await asyncio.sleep(0.25)
         self.station.dummy_load_active = False
         self.station.dummy_load_remaining_s = 0.0
@@ -564,6 +644,26 @@ class AcomBridge:
         self.station.amp_ptt_active = t.flag_keyin
         self.station.amp_atu_tuned  = t.flag_atu_tuned
 
+        # Dummy load power/duration limit — checked every telemetry frame
+        # (~100ms) rather than on the separate 250ms watchdog poll, since a
+        # clean carrier (e.g. WSJT-X Tune) can reach full output almost
+        # instantly and every extra 100ms of reaction time is real
+        # overshoot. Gated on _dummy_tx_start (set synchronously in
+        # _on_tx_start, before the watchdog task even starts) rather than
+        # station.dummy_load_active, to avoid a race against that task's
+        # own startup. inhibit_tx() no-ops if already inhibited, so this is
+        # safe to evaluate on every frame.
+        if self._dummy_tx_start is not None:
+            elapsed = time.monotonic() - self._dummy_tx_start
+            effective_limit_w = _dummy_load_curve_watts(elapsed) * DUMMY_LOAD_CURVE_MARGIN
+            if t.fwd_power_w > effective_limit_w:
+                logger.warning(
+                    f"Dummy load: {t.fwd_power_w:.0f}W at {elapsed:.1f}s exceeds "
+                    f"allowed {effective_limit_w:.0f}W — inhibiting TX")
+                await self.inhibit_tx(
+                    f"Dummy load power/time limit exceeded "
+                    f"({t.fwd_power_w:.0f}W at {elapsed:.1f}s, limit {effective_limit_w:.0f}W)")
+
         # SWR is purely a passive notification to the operator — never an
         # auto-inhibit. The amp's own firmware-computed fault bits (handled
         # in _on_fault) are the real, robust protection; this is just a
@@ -587,6 +687,7 @@ class AcomBridge:
             ts=now, fwd_w=t.fwd_power_w, refl_w=t.refl_power_w,
             swr=t.swr, temp_c=t.pam1_temp_c, drive_w=t.input_power_w,
             current_a=t.id1_ma / 1000.0, is_tx=is_tx,
+            alc=self.rig.state.alc, rf_power_pct=self.rig.state.rf_power_pct,
         )
         self._trend_buffer.append(sample)
         self._duty_samples.append((now, is_tx))
