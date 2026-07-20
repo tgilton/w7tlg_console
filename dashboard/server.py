@@ -28,10 +28,12 @@ from pydantic import BaseModel
 from amplifier.acom_bridge import AcomBridge, ANTENNAS, OperatingMode, StationState
 from amplifier.acom_serial import AcomSerial, find_acom_port
 from amplifier.antenna_ab_test import AntennaAbTest
+from amplifier.tx_power_calibration import TxPowerCalibration
 from amplifier.trend_csv_logger import TrendCsvLogger
 from config.station_profile import station_profile
 from rig.rigctld_client import RigctldClient, RigState
 from sdr.sdr_client import SdrClient
+from session.session_manager import SessionManager
 from wsjtx.udp_listener import wsjtx_listener
 from wsjtx.protocol import Status as WsjtxStatus, LoggedAdif
 from wsjtx.qso_logger import qso_telemetry_logger
@@ -166,6 +168,8 @@ audio_manager = AudioConnectionManager()
 bridge: Optional[AcomBridge] = None
 sdr: Optional[SdrClient] = None
 ab_test: Optional[AntennaAbTest] = None
+tx_cal: Optional[TxPowerCalibration] = None
+session_manager: Optional[SessionManager] = None
 claude_advisor: Optional["ClaudeAdvisor"] = None
 trend_csv = TrendCsvLogger()
 
@@ -188,6 +192,14 @@ async def _monitor_liveness_watcher():
 
 async def on_ab_test_status(status: dict):
     await manager.broadcast({"type": "ab_test_status", "data": status})
+
+
+async def on_tx_cal_status(status: dict):
+    await manager.broadcast({"type": "tx_cal_status", "data": status})
+
+
+async def on_session_status(status: dict):
+    await manager.broadcast({"type": "session_status", "data": status})
 
 
 async def _propagation_poll_loop():
@@ -448,7 +460,7 @@ async def on_rig_state_for_audio_mode(rig_state: RigState):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bridge, sdr, ab_test, claude_advisor
+    global bridge, sdr, ab_test, tx_cal, session_manager, claude_advisor
     logger.info("Starting W7TLG Console...")
 
     # Tighter than the original 0.5s — the panadapter's rig-frequency marker
@@ -492,6 +504,12 @@ async def lifespan(app: FastAPI):
     ab_test = AntennaAbTest(bridge=bridge, sdr=sdr)
     ab_test.on_status(on_ab_test_status)
 
+    tx_cal = TxPowerCalibration(bridge=bridge)
+    tx_cal.on_status(on_tx_cal_status)
+
+    session_manager = SessionManager(bridge=bridge, sdr=sdr, wsjtx_listener=wsjtx_listener)
+    session_manager.on_status(on_session_status)
+
     # WSJT-X UDP listener — passive third listener on the same multicast
     # group RUMLogNG/GridTracker2 already use (224.0.0.1:2237, lo0). See
     # wsjtx/udp_listener.py docstring. Failure here (e.g. port already
@@ -499,6 +517,10 @@ async def lifespan(app: FastAPI):
     # rest of the console — it's a nice-to-have data feed, not part of
     # rig/amp safety paths.
     wsjtx_listener.on_status(on_wsjtx_status)
+    # Additive registration — on_status() supports multiple callbacks —
+    # gives SessionManager its own liveness clock rather than reusing
+    # wsjtx_listener.connected (sticky/naive, see session_manager.py).
+    wsjtx_listener.on_status(session_manager.on_wsjtx_status)
     wsjtx_listener.on_logged_adif(qso_telemetry_logger.on_logged_adif)
     # Award tracker reads WSJT-X's local ADIF log — re-read it after every
     # newly logged QSO so "missing states" reflects what was just worked,
@@ -1016,10 +1038,49 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
 
+        elif cmd == "cal_start":
+            ok, reply = False, "Calibration not initialized"
+            if tx_cal is not None:
+                steps = [int(s) for s in msg["steps"]] if "steps" in msg else None
+                ok, reply = await tx_cal.start(steps=steps)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "cal_stop":
+            ok, reply = False, "Calibration not initialized"
+            if tx_cal is not None:
+                ok, reply = await tx_cal.stop()
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "cal_status":
+            if tx_cal is not None:
+                await ws.send_text(json.dumps({
+                    "type": "tx_cal_status", "data": tx_cal.get_status()}))
+
         elif cmd == "ab_test_status":
             if ab_test is not None:
                 await ws.send_text(json.dumps({
                     "type": "ab_test_status", "data": ab_test.get_status()}))
+
+        elif cmd == "session_switch":
+            ok, reply = False, "Session manager not initialized"
+            if session_manager is not None:
+                ok, reply = await session_manager.switch(msg["session_id"])
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "session_confirm_quit":
+            ok, reply = False, "Session manager not initialized"
+            if session_manager is not None:
+                ok, reply = session_manager.confirm_quit()
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "session_status":
+            if session_manager is not None:
+                await ws.send_text(json.dumps({
+                    "type": "session_status", "data": session_manager.get_status()}))
 
         else:
             await ws.send_text(json.dumps({

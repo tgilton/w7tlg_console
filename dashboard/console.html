@@ -504,6 +504,11 @@ select#palette-select {
     </div>
 
     <div class="divider"></div>
+    <h2>Session</h2>
+    <div class="mode-grid" id="session-grid"></div>
+    <div class="mono" id="session-step" style="margin-bottom:8px"></div>
+
+    <div class="divider"></div>
     <h2>Band</h2>
     <div class="band-grid">
       <button class="btn" data-band="160m" data-freq="1840000"  onclick="RigControl.setBand(this)">160</button>
@@ -1871,13 +1876,14 @@ function smeterLabel(strengthDb) {
 
 function connectWs() {
   ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => { send({ cmd: 'monitor_heartbeat' }); };
+  ws.onopen = () => { send({ cmd: 'monitor_heartbeat' }); send({ cmd: 'session_status' }); };
   ws.onclose = () => { setTimeout(connectWs, 2000); };
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'state') { state = msg.data; updateUI(state); }
     else if (msg.type === 'cmd_response' && !msg.ok) showToast('Error: ' + (msg.message || (msg.cmd + ' rejected by rig')), 'error');
     else if (msg.type === 'ab_test_status') updateAbTestUI(msg.data);
+    else if (msg.type === 'session_status') updateSessionUI(msg.data);
     // WSJT-X link status only — no TX/safety relevance, so it's fine to
     // piggyback on this module's existing connection rather than opening a
     // dedicated socket just for a status dot.
@@ -1968,6 +1974,36 @@ function updateAbTestUI(d) {
   ).join('');
   resultsEl.innerHTML =
     `<table><tr><th>R</th><th>A</th><th>Sig</th><th>SNR</th></tr>${rows}</table>`;
+}
+
+let _sessionProfiles = [];
+
+function setSession(id) { send({ cmd: 'session_switch', session_id: id }); }
+
+function confirmSessionQuit() { send({ cmd: 'session_confirm_quit' }); }
+
+function updateSessionUI(d) {
+  const grid = document.getElementById('session-grid');
+  const profiles = d.profiles || _sessionProfiles;
+  _sessionProfiles = profiles;
+  if (grid.children.length !== profiles.length) {
+    grid.innerHTML = profiles.map(p =>
+      `<button class="btn" data-session="${p.id}" onclick="RigControl.setSession('${p.id}')">${p.name}</button>`
+    ).join('');
+  }
+  document.querySelectorAll('[data-session]').forEach(btn => {
+    const id = btn.dataset.session;
+    const isCurrent = id === d.current_session_id;
+    const isTarget = id === d.target_session_id && d.status === 'switching';
+    // Selected/transitioning state is color-only (DESIGN.md §1) — the
+    // button label never changes to report status.
+    btn.className = 'btn' + (isTarget ? ' active pulse-tx' : (isCurrent ? ' active' : ''));
+  });
+
+  const stepEl = document.getElementById('session-step');
+  if (d.status === 'error') stepEl.textContent = 'Error: ' + d.error;
+  else if (d.awaiting_confirm) stepEl.textContent = `Confirm quitting ${d.awaiting_confirm}… `;
+  else stepEl.textContent = d.step || '';
 }
 
 function send(obj) {
@@ -2513,6 +2549,7 @@ return {
   toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume, setSsbTxBpf,
   toggleEQ, setEQ, setDtGain,
   startAbTest, stopAbTest, toggleAbtManual, confirmAbtSwitch,
+  setSession, confirmSessionQuit,
 };
 
 })();
