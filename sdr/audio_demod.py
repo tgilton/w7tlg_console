@@ -514,8 +514,6 @@ class AudioDemodulator:
         return enhanced_16k[-hop:] if len(enhanced_16k) >= hop else enhanced_16k
 
     def _run(self):
-        if self.nr_enabled and self._nr_model is None and not self._nr_load_failed:
-            self._load_nr_model()
         next_drop_log = time.monotonic() + 5.0
         last_logged_drops = 0
         while not self._stop_event.is_set():
@@ -640,9 +638,15 @@ class AudioDemodulator:
             audio64, self._eq_zi = sosfilt(self._eq_sos, audio.astype(np.float64), zi=self._eq_zi)
             audio = audio64.astype(np.float32)
 
-        # Noise reduction — buffered, see _apply_nr. Returns None while it's
-        # still accumulating toward its next output hop; the caller (_run)
-        # already treats a None return as "nothing to publish this cycle".
+        # Noise reduction — buffered, see _apply_nr. Lazy-loaded here (not
+        # once at thread start) since nr_enabled defaults off and only flips
+        # on later via the UI toggle — loading only at thread start meant
+        # the model never loaded at all once the operator turned NR on mid-
+        # session. Returns None while still accumulating toward its next
+        # output hop; the caller (_run) already treats a None return as
+        # "nothing to publish this cycle".
+        if self.nr_enabled and self._nr_model is None and not self._nr_load_failed:
+            self._load_nr_model()
         if self.nr_enabled and self._nr_model is not None:
             audio = self._apply_nr(audio)
             if audio is None:
