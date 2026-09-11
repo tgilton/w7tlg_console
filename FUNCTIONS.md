@@ -321,7 +321,36 @@ controls. Strong candidate for its own view.
 
 ---
 
-## 8. Design consequences
+## 8. RX2 — second receiver
+
+Added 2026-09-11 with the RSPduo swap (two independent tuners, antenna 1
+fixed as the only TX-capable chain — see DESIGN.md §10 for the layout).
+RX2 is an always-visible second receiver, not a mode: it can be tuned
+anywhere on its own antenna while RX1 stays where it is, or transmits.
+
+| Control | Does what | Frequency | Path |
+|---|---|---|---|
+| Link to RX1 | RX2 continuously follows RX1's frequency/mode/filter width | HOT if used at all — it's the default state | client-side, `Panadapter2` |
+| Copy RX1 → RX2 | One-shot snapshot of RX1's current tuning + view onto RX2 — "exactly what the radio does with the A=B knob" (operator's own framing) | RARE | client-side |
+| Freq entry + Tune | Same as RX1's — disabled while Link is on, since it would just get overwritten on the next RX1 tick | HOT only with Link off | client-side, SDR retune |
+| Whole Band / Center | Same as RX1's own — view-only, doesn't move what's being demodulated | SESSION | client-side |
+| RX2 Filter (NARROW/WIDE + width) | Same UI as RX1's, own per-mode defaults — RX2's filter is SDR-side and continuous, not snapped to the FT-991A's own hardware CAT steps the way RX1's is | SESSION | SDR-side |
+| RX2 AGC/NR, RX2 Audio EQ | Fully independent of RX1's — RX2's column can be hidden entirely and RX1 stays completely operable | SESSION/RARE | SDR-side |
+| Digital Audio source (left column) | Picks which receiver's demodulated audio feeds the single BlackHole cable to WSJT-X/JS8Call — RX1 or RX2 | SESSION | client-side swap |
+
+**Startup default is Link on**, RX2 inheriting RX1's frequency, mode,
+filter width and view the moment the page connects — not RX2's own bare
+15kHz-span default, which is what a page reload used to always leave it
+at regardless of what RX1 was showing.
+
+**Known gap**: RX2's Mode buttons include CW/AM/FM/DATA-U for Link/Copy
+parity with RX1, but there is no real CW/AM/FM demodulator behind them
+yet on either receiver — see §1's "CW controls are missing" for the same
+gap on RX1.
+
+---
+
+## 9. Design consequences
 
 Ranked by impact. Note that none of these are styling fixes — they came out of
 describing the actual operating workflow, and no amount of restyling would have

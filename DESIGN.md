@@ -63,16 +63,30 @@ mode, antenna, AGC, filter, preamp — one rule, learned once.
 
 ### 2.4 Grouping is structural, not chromatic
 
-Group identity is carried by **proximity, dividers, and column rules** —
-never by tinting the controls inside the group. Two column rules only:
+Group identity is carried by **proximity and borders**, never by tinting
+the controls inside the group. If you find yourself wanting a third accent
+color to distinguish a group, the group needs a border, not a color.
 
-- Left column (rig + DSP): 2px `--chrome-accent` left rule
-- Right column (amplifier + antenna): 2px `--chrome-accent` left rule
+(Amended 2026-08-30: originally read "hairline + header only, never a box
+around a group." Operator decision — this console runs alongside RUNlogNG,
+two terminals, and WSJT-X's two windows across two monitors, and a function
+group needs to be locatable by eye without reading labels. Every `<h2>`
+section (or, per §9, small related group of them) is now wrapped in a
+`.section-box`: 2px solid white, 7px radius, 16px padding — the same
+uniform-bordered-module look a classic transceiver control panel uses,
+which reads as uncluttered *because* every region is delineated the same
+way, not because it has fewer controls. The two column rules this section
+used to specify are superseded by the boxes themselves.
 
-Sections *within* a column separate with a `0.5px --border` hairline and a
-`--chrome-accent` header. No further hue differentiation. If you find
-yourself wanting a third accent color to distinguish a group, the group
-needs a divider, not a color.
+A `.section-box` may also be `.collapsible`: its `<h2>` becomes a
+disclosure toggle (chevron, no label change — the header text is still the
+function, per §1), collapse state persists per-browser in `localStorage`.
+Used sparingly, for sections that are large and used occasionally (Antenna
+A/B Test) or that are only worth a glance when something's wrong (Fault
+Status, which collapses to just its severity badge — the badge itself
+stays outside the collapsing body and force-expands the section the moment
+severity leaves OK, so collapsing it can never hide an actual fault). Not a
+general-purpose decluttering tool — most sections stay always-expanded.)
 
 ### 2.5 TX state
 
@@ -269,8 +283,8 @@ unparsed value to `rigctld`.
 
 ## 9. Bottom strip
 
-Three zones, each with a `--chrome-accent` header and a hairline between.
-They are currently three unrelated rows sharing a space.
+Three zones, each its own `.section-box` per §2.4 (amended 2026-08-30 —
+was header + hairline).
 
 | Zone | Contents |
 |---|---|
@@ -286,7 +300,69 @@ it is a Palette selector and must say so.
 
 ---
 
-## 10. Known defects (as of this writing)
+## 10. Dual-receiver layout (RX1/RX2)
+
+Added 2026-09-11 for the RSPduo swap: a genuine dual-tuner SDR gives two
+independent, simultaneous receive antennas on one device (antenna 1 is
+fixed as the only TX-capable chain — wiring, not software). The console
+runs both receivers side by side, always visible, not as a mode you
+switch into.
+
+**Four columns, not three**: `modedsp` (global, left) | `center` (RX1) |
+`center2` (RX2) | `bandamp` (TX, right). Only the two outer columns
+collapse/resize (`COLUMN_CLASS_NAME`/`COLUMN_VAR_NAME`, generalized from
+the original 2-column version's ternary logic).
+
+**RX1 and RX2 are each fully self-contained** — own VFO, S-meter, AF/RF
+gain, Mode, a merged Spectrum+Waterfall+Tuning box, and a merged
+Filter+AGC/NR+Audio EQ box (Filter and AGC/NR side by side within it).
+Hiding RX2's column must leave RX1 completely operable — nothing RX-
+specific may leak into the other RX's column or into the global/TX
+columns. This was corrected mid-build: an earlier 5-column version gave
+RX2 its own small DSP column that sat visually between RX1's controls and
+RX1's own spectrum, reading as if it belonged to RX1.
+
+**Alignment is pixel-exact, not "close"**: RX1's and RX2's spectrum/
+waterfall/filter/AGC rows must land on the same pixel row, verified with
+`getBoundingClientRect()`, not eyeballed. Two techniques, chosen by
+what's actually asymmetric:
+- A row whose height differs because of a content difference that never
+  changes at runtime (RX1's `.smeter-readout` has an S9 Cal input RX2
+  doesn't; RX1's Mode grid briefly had more rows than RX2's) — pin an
+  explicit `min-height` on both sides, sized to the taller one.
+- A row whose height differs because it can *wrap* differently at
+  different widths (RX2's Tuning row has 2 more buttons than RX1's, for
+  Link/Copy) — a min-height guess breaks again the moment either row
+  wraps to a different line count than assumed (confirmed live: RX1
+  itself wraps at some widths too). Use `flex-wrap: nowrap; overflow-x:
+  auto` instead — constant one-line height always, scrolling instead of
+  wrapping in the rare case content doesn't fit.
+
+**Link vs. Copy** (RX2 Tuning box): "Link" is continuous — RX2 follows
+RX1's frequency/mode/filter width live, using the same margin-gated
+recenter RX1 already uses to follow its own CAT frequency (don't retune
+hardware or pan the view on every tick, only once the tuned point
+actually drifts out of the current view). "Copy" is the one-shot version
+— Terry's own framing: "exactly what the radio does with the A=B knob."
+Copy (and Link's own first application) also mirrors RX1's *current view*
+(span and center), not just what it's tuned to — deliberately not the
+same thing, since RX1's own view can be centered somewhere other than its
+own dial frequency (e.g. right after Whole Band, which centers on the
+band midpoint).
+
+**RX2 has no CAT** — its "ground truth" is whichever of (a) the operator's
+own tuning or (b) Link makes it, tracked entirely client-side. `Panadapter2`
+is deliberately fresh code, not a refactor of `Panadapter` — RX1's module
+turned out to be too deeply woven around following the rig's own CAT
+frequency/mode to safely share. Startup default: Link to RX1 is ON: RX2
+also independently reaches Whole Band on startup the same way RX1 does
+(once its own first frame arrives) rather than trying to copy RX1's span
+at a fixed moment, which raced against RX1's own async startup snap and
+wasn't reliable.
+
+---
+
+## 11. Known defects (as of this writing)
 
 - `VOL 400%` — likely a scaling bug, not a styling issue. Verify.
 - Text clipped at the right window edge — layout overflow. Verify.
