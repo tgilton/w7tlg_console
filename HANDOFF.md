@@ -73,7 +73,7 @@
    - `~/start_rigctld.sh` (`RIG_PORT`)
    - `~/Library/LaunchAgents/com.hamlib.rigctld.plist` (`-r` path, and the `-p`
      PTT path). Reload with `launchctl unload/load` if you use the launchd job.
-   Verify: `rigctl -m 1035 -r <port> -s 9600 f` returns the dial frequency.
+   Verify: `rigctl -m 1035 -r <port> -s 38400 f` returns the dial frequency.
 
 4. **Recreate the venv** — do NOT copy `.venv` (it is bound to the MacBook's
    Homebrew paths; Python 3.12 required):
