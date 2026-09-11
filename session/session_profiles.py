@@ -31,7 +31,7 @@ class SessionProfile:
     passband_hz: int                   # 0 = rig default
     app_bundle_id: Optional[str]       # macOS bundle id for `open -b`; None = no external app (SSB)
     app_display_name: str = ""         # for progress messages, e.g. "Launching WSJT-X…"
-    liveness: str = "none"             # "none" | "wsjtx_udp" — how to confirm the app actually came up
+    liveness: str = "none"             # "none" | "wsjtx_udp" | "js8call_tcp" — how to confirm the app actually came up
     quit_needs_confirm: bool = False   # real gate (see SessionManager) — unused by any profile yet
     extra_rig_settings: bool = False   # apply the DATA-U known-good baseline (AGC/NB/DNF/preamp/NR/EQ)
 
@@ -48,6 +48,24 @@ PROFILES: dict[str, SessionProfile] = {
         id="ft8", name="FT8 (WSJT-X)", rig_mode="PKTUSB", passband_hz=3000,
         app_bundle_id="F6VY59P28F.org.ko3f.wsjtx", app_display_name="WSJT-X",
         liveness="wsjtx_udp", extra_rig_settings=True,
+    ),
+    # Bundle id confirmed live on this station via
+    # `mdls -name kMDItemCFBundleIdentifier /Applications/JS8Call.app` —
+    # the JS8Call-improved fork kept the original KN4CRD bundle id.
+    # liveness="js8call_tcp" probes JS8Call's own JSON API TCP port
+    # (2442, NOT WSJT-X's UDP protocol — JS8Call also has a separate
+    # "WSJTXProtocolEnabled" broadcast setting that mimics WSJT-X's wire
+    # format, confirmed present and already ON in this station's
+    # JS8Call.ini, but a live 18s capture on :2237 showed it emits
+    # nothing on an idle radio — event-driven, not a WSJT-X-style
+    # periodic Heartbeat — so it's not a usable "did the app come up"
+    # signal). Requires "Enable TCP Server" checked in JS8Call's
+    # File > Settings > Reporting > API section (127.0.0.1:2442, the
+    # default port shown there even while disabled).
+    "js8": SessionProfile(
+        id="js8", name="JS8Call", rig_mode="PKTUSB", passband_hz=3000,
+        app_bundle_id="org.kn4crd.js8call", app_display_name="JS8Call",
+        liveness="js8call_tcp", extra_rig_settings=True,
     ),
 }
 

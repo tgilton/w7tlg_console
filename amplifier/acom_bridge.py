@@ -99,6 +99,12 @@ MODE_DRIVE_LIMITS = {
 
 AMP_ACTIVE_MODES = {OperatingMode.AMP_ON}
 
+# Bands wired direct to the FT-991A's own VHF/UHF antenna jack — the ACOM
+# never sees this RF, so its OPERATE/STANDBY drive caps don't apply. 50W is
+# the FT-991A's actual VHF/UHF ceiling (well below its 100W HF/6m max).
+DIRECT_TO_RIG_BANDS = {"2m", "70cm"}
+DIRECT_TO_RIG_MAX_W = 50
+
 # ---------------------------------------------------------------------------
 # Antenna definitions
 # ---------------------------------------------------------------------------
@@ -223,6 +229,7 @@ class StationState:
     fault_soft: list = field(default_factory=list)
     fault_warnings: list = field(default_factory=list)
     operating_mode: str = OperatingMode.AMP_OFF.value
+    amp_in_path: bool = True
     selected_antenna: int = 4
     drive_limit_w: int = 100
     tx_inhibited: bool = False
@@ -259,6 +266,7 @@ class StationState:
             "fault_soft":             self.fault_soft,
             "fault_warnings":         self.fault_warnings,
             "operating_mode":         self.operating_mode,
+            "amp_in_path":            self.amp_in_path,
             "selected_antenna":       self.selected_antenna,
             "drive_limit_w":          self.drive_limit_w,
             "tx_inhibited":           self.tx_inhibited,
@@ -354,6 +362,8 @@ class AcomBridge:
 
     async def set_operating_mode(self, mode: OperatingMode,
                                   confirmed: bool = False) -> tuple[bool, str]:
+        if not self.station.amp_in_path:
+            return False, "Amp not in RF path for this band"
         self._mode = mode
         self._high_power_confirmed = True
 
@@ -389,6 +399,8 @@ class AcomBridge:
         amp's own ANT_BAND_INFO (0x27) feedback to learn which antenna it
         landed on (see _on_antenna_change).
         """
+        if not self.station.amp_in_path:
+            return False, "Amp not in RF path for this band"
         await self.amp.send(cmd_next_antenna())
         logger.info("Sent NEXT ANTENNA (front-panel ANT button equivalent)")
         return True, "Antenna cycle requested"
@@ -407,6 +419,8 @@ class AcomBridge:
         """
         if target not in ANTENNAS:
             return False, f"Invalid antenna number: {target}"
+        if not self.station.amp_in_path:
+            return False, "Amp not in RF path for this band"
 
         for _hop in range(4):  # at most 4 hops to reach any antenna from any start
             if self._selected_antenna == target:
@@ -503,7 +517,10 @@ class AcomBridge:
             return
         self._current_acom_band = new_band
         if new_band is None:
-            logger.warning(f"Frequency {freq_hz} Hz out of ACOM band range")
+            if band_name in DIRECT_TO_RIG_BANDS:
+                logger.debug(f"Band → {band_name}: direct to rig, amp not in RF path")
+            else:
+                logger.warning(f"Frequency {freq_hz} Hz out of ACOM band range")
             return
         # Don't send band select until the amp has fully initialized (first
         # telemetry received). An early ANT_BAND_SELECT command while the ATU
@@ -775,7 +792,11 @@ class AcomBridge:
         self.station.tx_inhibited      = self._tx_inhibited
         self.station.tx_inhibit_reason = self._tx_inhibit_reason
         self.station.operating_mode    = self._mode.value
-        self.station.drive_limit_w     = MODE_DRIVE_LIMITS[self._mode]
+        self.station.amp_in_path       = (
+            self.station.rig.get("band") not in DIRECT_TO_RIG_BANDS)
+        self.station.drive_limit_w     = (
+            DIRECT_TO_RIG_MAX_W if not self.station.amp_in_path
+            else MODE_DRIVE_LIMITS[self._mode])
         self.station.selected_antenna  = self._selected_antenna
         for cb in self._state_callbacks:
             try:

@@ -43,6 +43,7 @@ class Band(Enum):
     B10M    = "10m"
     B6M     = "6m"
     B2M     = "2m"
+    B70CM   = "70cm"
     UNKNOWN = "??"
 
 BAND_EDGES = [
@@ -58,20 +59,28 @@ BAND_EDGES = [
     (28_000_000,  29_700_000,  Band.B10M),
     (50_000_000,  54_000_000,  Band.B6M),
     (144_000_000, 148_000_000, Band.B2M),
+    (432_000_000, 450_000_000, Band.B70CM),
 ]
 
-DIGITAL_FREQS = {
-    Band.B160M: 1_840_000,
-    Band.B80M:  3_573_000,
-    Band.B60M:  5_357_000,
-    Band.B40M:  7_074_000,
-    Band.B30M:  10_136_000,
-    Band.B20M:  14_074_000,
-    Band.B17M:  18_100_000,
-    Band.B15M:  21_074_000,
-    Band.B12M:  24_915_000,
-    Band.B10M:  28_074_000,
-    Band.B6M:   50_313_000,
+# Each band lists every standard-calling-frequency digital mode this
+# station operates there — FT8 always, plus JS8Call's published dial
+# frequencies (js8call.com) on the HF bands where JS8 has one. Tuple
+# rather than a single value so the "near digital freq" badge lights up
+# for either mode's calling channel, not just FT8's.
+DIGITAL_FREQS: dict[Band, tuple[int, ...]] = {
+    Band.B160M: (1_840_000, 1_842_000),
+    Band.B80M:  (3_573_000, 3_578_000),
+    Band.B60M:  (5_357_000,),
+    Band.B40M:  (7_074_000, 7_078_000),
+    Band.B30M:  (10_136_000, 10_130_000),
+    Band.B20M:  (14_074_000, 14_078_000),
+    Band.B17M:  (18_100_000, 18_104_000),
+    Band.B15M:  (21_074_000, 21_078_000),
+    Band.B12M:  (24_915_000, 24_922_000),
+    Band.B10M:  (28_074_000, 28_078_000),
+    Band.B6M:   (50_313_000, 50_318_000),
+    Band.B2M:   (144_174_000,),
+    Band.B70CM: (432_174_000,),
 }
 
 BAND_DEFAULT_FREQ = {
@@ -87,7 +96,15 @@ BAND_DEFAULT_FREQ = {
     Band.B10M:  28_074_000,
     Band.B6M:   50_313_000,
     Band.B2M:   144_200_000,
+    Band.B70CM: 432_100_000,
 }
+
+# Bands where this rig's Hamlib backend doesn't implement ATT-level or
+# NR/ANF-function queries at all — confirmed live 2026-07-22 via direct
+# rigctld query: RPRT -9 (ENAVAIL) in BOTH FM and USB while on 2m, so this
+# is a band capability gap (likely a separate VHF/UHF front-end module
+# without an attenuator), not a mode-specific one.
+NO_ATT_NR_ANF_BANDS = {Band.B2M.value, Band.B70CM.value}
 
 def freq_to_band(freq_hz: int) -> Band:
     for lo, hi, band in BAND_EDGES:
@@ -211,10 +228,10 @@ class RigState:
         digital_modes = {"PKTUSB", "PKTLSB"}
         self.is_digital = self.mode in digital_modes
 
-        std_freq = DIGITAL_FREQS.get(band_enum)
+        std_freqs = DIGITAL_FREQS.get(band_enum, ())
         self.near_digital_freq = bool(
-            std_freq and self.freq_hz > 0
-            and abs(self.freq_hz - std_freq) < 2000)
+            self.freq_hz > 0
+            and any(abs(self.freq_hz - f) < 2000 for f in std_freqs))
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +254,13 @@ CONTROL_EVERY = 10  # Every 10 cycles (~5s)
 # mean the reply stream has drifted out of alignment (see _poll_state).
 FREQ_SANITY_MIN_HZ = 10_000
 FREQ_SANITY_MAX_HZ = 500_000_000
+
+# rigctld's own daemon-level response cache (see _set_daemon_cache_timeout) —
+# default 1000ms made knob tuning feel like it updated once a second. Low
+# enough to track the knob smoothly, well above 0 so a burst of near-
+# simultaneous queries within one poll cycle can still share one real serial
+# read rather than each forcing its own.
+RIGCTLD_DAEMON_CACHE_MS = 50
 
 
 class RigctldClient:
@@ -538,11 +562,32 @@ class RigctldClient:
             self.state.connected = True
             self._cycle = 0
             logger.info(f"Connected to rigctld at {self.host}:{self.port}")
+            await self._set_daemon_cache_timeout()
             await self._fire_callbacks()
             return True
         except (ConnectionRefusedError, asyncio.TimeoutError, OSError) as e:
             logger.warning(f"Cannot connect to rigctld: {e}")
             return False
+
+    async def _set_daemon_cache_timeout(self):
+        """Hamlib's rigctld daemon caches get_freq/get_mode/etc. replies for
+        --get_cache/--set_cache msecs (distinct from, and layered on top of,
+        the per-rig-backend 'cache_timeout' conf param) — default 1000ms on
+        this rigctld build. That cache is what made the knob feel like it
+        was updating once a second while a console-initiated SET (which
+        writes straight through the cache) felt instant — confirmed live
+        2026-08-30 by measuring get_freq cadence directly against rigctld,
+        bypassing this app's own poll loop entirely. There's no startup CLI
+        flag for it, so it has to be set over the wire on every connection —
+        it resets to the daemon default whenever rigctld itself restarts."""
+        try:
+            self._writer.write(f"\\set_cache {RIGCTLD_DAEMON_CACHE_MS}\n".encode())
+            await self._writer.drain()
+            reply = await asyncio.wait_for(self._reader.readline(), timeout=2.0)
+            if reply.decode(errors='replace').strip() != "RPRT 0":
+                logger.warning(f"rigctld set_cache reply unexpected: {reply!r}")
+        except (asyncio.TimeoutError, ConnectionResetError, OSError) as e:
+            logger.warning(f"Could not set rigctld daemon cache timeout: {e}")
 
     async def _disconnect(self):
         if self._writer:
@@ -701,8 +746,12 @@ class RigctldClient:
                 self.state.preamp = preamp
                 changed = True
 
-        # ATT
-        val = await self._get_level("ATT")
+        # ATT — see NO_ATT_NR_ANF_BANDS: this rig's Hamlib backend returns
+        # RPRT -9 (ENAVAIL) for this on 2m/70cm regardless of mode, same
+        # "unsupported here" class as the MICGAIN/COMP-in-digital-mode skip
+        # above; skip it rather than eat a client-side timeout waiting on
+        # an answer that will always be "not available" on these bands.
+        val = None if self.state.band in NO_ATT_NR_ANF_BANDS else await self._get_level("ATT")
         if val is not None:
             att = int(val)
             if att != self.state.att_db:
@@ -743,8 +792,13 @@ class RigctldClient:
                 self.state.agc = agc
                 changed = True
 
-        # NB and ANF funcs
+        # NB and ANF funcs — NR/ANF confirmed live (2026-07-22) RPRT -9
+        # (ENAVAIL) on 2m/70cm on this rig, same skip rationale as ATT
+        # above. NB's func query works fine on these bands, so it isn't
+        # skipped — see NO_ATT_NR_ANF_BANDS.
         for attr, func_name in [('nb_on', 'NB'), ('nr_on', 'NR'), ('dnf_on', 'ANF')]:
+            if func_name in ('NR', 'ANF') and self.state.band in NO_ATT_NR_ANF_BANDS:
+                continue
             val = await self._get_func(func_name)
             if val is not None:
                 on = val > 0

@@ -46,6 +46,16 @@ _LIVENESS_TIMEOUT_S = 20.0
 _LIVENESS_POLL_S = 0.5
 _WSJTX_STALE_S = 15.0   # mirrors console.html's WsjtxLink WSJTX_STALE_MS
 
+# JS8Call's own JSON API TCP port (File > Settings > Reporting > API >
+# "Enable TCP Server", default 127.0.0.1:2442) — confirmed live from this
+# station's ~/Library/Preferences/JS8Call.ini (TCPServer=127.0.0.1,
+# TCPServerPort=2442). Distinct from JS8Call's separate UDP JSON API,
+# which defaults to port 2242 — easy to transpose the two, and also NOT
+# WSJT-X's binary UDP protocol; see session_profiles.py's note on the
+# "js8" profile for why that path doesn't work here.
+_JS8CALL_TCP_HOST = "127.0.0.1"
+_JS8CALL_TCP_PORT = 2442
+
 
 class SessionManager:
 
@@ -218,6 +228,16 @@ class SessionManager:
                         return await self._fail(
                             f"{target.app_display_name} launched but no UDP status "
                             f"received within {_LIVENESS_TIMEOUT_S:.0f}s")
+                elif target.liveness == "js8call_tcp":
+                    self.step = f"Waiting for {target.app_display_name}…"
+                    await self._publish()
+                    ok = await self._wait_for_js8call_liveness()
+                    if not ok:
+                        return await self._fail(
+                            f"{target.app_display_name} launched but its API port "
+                            f"({_JS8CALL_TCP_PORT}) never came up within "
+                            f"{_LIVENESS_TIMEOUT_S:.0f}s — check 'Enable TCP Server' "
+                            f"in JS8Call's Settings > Reporting tab")
 
             # Step 4: verify port 4532 didn't end up with a stray rigctld —
             # the exact failure mode that started this feature. Checked on
@@ -272,6 +292,24 @@ class SessionManager:
                 return True
             await asyncio.sleep(_LIVENESS_POLL_S)
         return self.wsjtx_is_live()
+
+    async def _wait_for_js8call_liveness(self) -> bool:
+        """Poll JS8Call's own JSON API TCP port with a bare connect — no
+        need to speak the JSON protocol just to confirm the app is up and
+        its API server is accepting connections. Each attempt opens and
+        immediately closes its own short-lived socket rather than holding
+        one open, mirroring the wsjtx path's stateless poll loop."""
+        deadline = time.monotonic() + _LIVENESS_TIMEOUT_S
+        while time.monotonic() < deadline:
+            try:
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(_JS8CALL_TCP_HOST, _JS8CALL_TCP_PORT),
+                    timeout=1.0)
+                writer.close()
+                return True
+            except (OSError, asyncio.TimeoutError):
+                await asyncio.sleep(_LIVENESS_POLL_S)
+        return False
 
     # ------------------------------------------------------------------
     # Internal: app launch/quit — real timeouts, non-blocking by
