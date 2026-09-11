@@ -1,17 +1,35 @@
 """
-SDRplay RSPdx-R2 Client — IQ capture + FFT pipeline
+SDRplay RSPduo Client — IQ capture + FFT pipeline
 
 Owns the SDRplay device session and turns its IQ stream into spectrum
 frames for the panadapter. See ARCHITECTURE.md for the thread-bridge
 design rationale (native vendor callback thread -> bounded queue ->
 dedicated consumer thread -> asyncio via run_coroutine_threadsafe).
 
-Confirmed against the real RSPdx-R2 (Phase 0 spike, 5-minute soak):
-~2.0Msps sustained with zero real overloads, and a naive per-callback
-queue handoff comfortably outpaces the display's actual frame-rate need
-even though it can't keep up with the full raw sample rate — so the
-consumer here only computes a fresh FFT frame once per display tick,
-discarding everything else, by design.
+Confirmed against the real RSPdx-R2, this client's original hardware
+(Phase 0 spike, 5-minute soak): ~2.0Msps sustained with zero real
+overloads, and a naive per-callback queue handoff comfortably outpaces
+the display's actual frame-rate need even though it can't keep up with
+the full raw sample rate — so the consumer here only computes a fresh
+FFT frame once per display tick, discarding everything else, by design.
+
+RSPduo replaces the RSPdx-R2 as of the dual-antenna receive project
+(2026-09-10): two independently-tunable tuners sharing one ADC clock,
+opened in Dual Tuner mode (see sdrplay_capi.RspDuoMode_Dual_Tuner).
+Antenna routing is now fixed by physical wiring per tuner — Tuner 1 /
+Ant A is TX-capable (the only antenna the amp can key), Tuner 2 / Ant B
+is receive-only — instead of the RSPdx-R2's single-tuner, software-
+switched 3-port model, which is why _antenna_for_freq-style band
+switching is gone.
+
+Dual-tuner rollout is staged: this pass (Phase 0) proves Dual Tuner mode
+actually brings up two live, simultaneous IQ streams from real hardware
+— Channel A drives the existing single-channel FFT/audio/digital-audio
+pipeline unchanged, Channel B is proof-of-life only (liveness stamp +
+sample count, no FFT/audio pipeline of its own yet). The second full
+pipeline, independent per-channel tuning, and the dual-panadapter/dual-
+audio UI are later phases once Phase 0 confirms the device layer works
+on this hardware.
 """
 
 import asyncio
@@ -33,6 +51,49 @@ logger = logging.getLogger(__name__)
 
 SpectrumCallback = Callable[[dict], Coroutine]
 
+# Manual RF gain: one 0-100% knob drives both of SDRplay's underlying front-
+# end gain parameters together (same combined-knob convention SDRuno uses),
+# rather than exposing gRdB/LNAstate separately — see project memory on
+# preferring direct manual controls over auto-heuristics. 100% is max gain
+# (gRdB=20, LNAstate=0), 0% is min gain/max attenuation (gRdB=59, LNAstate
+# at the current band's max step) for headroom against strong signals.
+_GR_DB_MAX_GAIN = 20
+_GR_DB_MIN_GAIN = 59
+
+# Highest valid LNAstate (see sdrplay_capi.RSPDUO_NUM_LNA_STATES* — max
+# valid state is count - 1). The RSPdx-R2's per-band tables don't carry
+# over: RSPduo has no software antenna-port switching, and which of its
+# four LNA-state tables applies at which frequency/port isn't in the
+# installed header (SDRplay's API guide has that, not on hand here) — so
+# this uses the general table uniformly across both tuners/all bands for
+# now, pending live confirmation the way the RSPdx-R2 gain zones were
+# (see project memory on the 2026-08-30 RF Gain sweep).
+_MAX_LNA_STATE = capi.RSPDUO_NUM_LNA_STATES - 1
+
+# Raw ADC rate written to dp.devParams.contents.fsHz — NOT the rate IQ
+# samples actually arrive at (that's SdrClient.sample_rate_hz, the
+# constructor param every other consumer in this file assumes). Dual
+# Tuner mode's Low IF down-converter (see ch_a/ch_b.tunerParams.ifType in
+# _open_and_init) only engages for a small fixed set of (fsHz, bwType,
+# ifType) triples, and once engaged, applies its OWN internal decimation
+# before handing samples to us — confirmed (SDRplay's rsp-recorder
+# project docs, since the API spec PDF 403'd and this station's headers
+# don't have it) that 6,000,000 / BW_1_536 / IF_1_620 carries an internal
+# decimation of 3, landing the delivered rate at exactly 2,000,000 — the
+# same value sample_rate_hz already defaults to. This explicit split
+# exists so a future change to either number can't accidentally
+# reintroduce the "wrong rate assumed" bug that broke Phase 0's first
+# live test (see sample_rate_hz's own comment).
+_DEVICE_FS_HZ = 6_000_000.0
+
+
+def _rf_gain_params(pct: float) -> tuple:
+    """Map the 0-100% RF Gain knob to (gRdB, LNAstate)."""
+    pct = max(0.0, min(100.0, pct))
+    gr_db = round(_GR_DB_MIN_GAIN - (_GR_DB_MIN_GAIN - _GR_DB_MAX_GAIN) * pct / 100.0)
+    lna_state = round(_MAX_LNA_STATE * (1.0 - pct / 100.0))
+    return gr_db, lna_state
+
 
 class SdrClient:
     """
@@ -47,27 +108,48 @@ class SdrClient:
     def __init__(
         self,
         rf_freq_hz: float = 14_074_000.0,
-        # 2 MHz native capture. A 6 MHz wide-view experiment (2026-07-08) tripled
-        # this and pushed CPU ~6x (52%), starving the audio-demod thread — which
-        # decimates from this full rate in one stage, so its FIR got 3x longer
-        # over 3x the samples and could no longer produce 16 kHz audio in real
-        # time (stutter, no audible signals). Reverted. A true wide view needs
-        # the audio path decoupled from the capture rate (two-stage decimation)
-        # before fs can go up. Divides 16 kHz exactly (decim_factor 125).
+        # This is the EFFECTIVE/delivered IQ rate — what every consumer
+        # downstream of the native callback (FFT span, AudioDemodulator,
+        # passband_strength_db) assumes each sample represents. It is NOT
+        # the same as the raw ADC rate written to the device (_DEVICE_FS_HZ,
+        # see _open_and_init) once Dual Tuner mode's Low IF down-converter
+        # is involved — that engages a fixed internal decimation the API
+        # applies before samples ever reach us. Stays at 2MHz, this
+        # client's original RSPdx-R2 value — confirmed unchanged (see
+        # _DEVICE_FS_HZ) by SDRplay's rsp-recorder project docs, pulled via
+        # web search 2026-09-10 since neither this station's local headers
+        # nor the API spec PDF (403/blocked) had it directly. Divides
+        # 16 kHz exactly (decim_factor 125).
         sample_rate_hz: float = 2_000_000.0,
         fft_size: int = 65536,
         display_fps: float = 18.0,
-        spectrum_avg_frames: float = 3.0,
-        gr_db: int = 40,
-        lna_state: int = 4,
+        spectrum_avg_frames: float = 10.0,
+        rf_gain_pct: float = 80.0,
         lib_path: str = capi.DEFAULT_LIB_PATH,
     ):
         self.rf_freq_hz = rf_freq_hz
         self.sample_rate_hz = sample_rate_hz
         self.fft_size = fft_size
         self.display_fps = display_fps
-        self.gr_db = gr_db
-        self.lna_state = lna_state
+        # Live-adjustable front-end gain (see _rf_gain_params above) — was
+        # fixed constants (gr_db=40, lna_state=4) until the operator asked
+        # for a manual RF Gain control to pull weak SSB signals out of the
+        # noise. The original 50% default landed at LNAstate=14 and produced
+        # a visible DC/LO-leakage spike in the wideband spectrum display —
+        # confirmed live 2026-08-30 by sweeping the slider: the spike is
+        # present in a middle LNAstate range and clears at both low and high
+        # gain. 80% (LNAstate=5) sits back in the same clean high-gain zone
+        # the old fixed LNAstate=4 was in (not an exact reproduction — the
+        # two underlying parameters don't scale together linearly enough for
+        # one percent to hit both old constants at once), which conveniently
+        # is also more gain for weak-signal work, the whole reason this
+        # control exists.
+        self.rf_gain_pct = rf_gain_pct
+        # Channel B (Tuner 2 / Antenna 2) starts parked on the same
+        # freq/gain as Channel A — independent tuning is exactly what
+        # Phase 1 adds these for; see set_center_freq_hz_b/set_rf_gain_pct_b.
+        self.rf_freq_hz_b = rf_freq_hz
+        self.rf_gain_pct_b = rf_gain_pct
         self.lib_path = lib_path
         # Exponential moving average in linear power across consecutive FFT
         # frames, weighted to match the steady-state variance reduction of an
@@ -79,10 +161,15 @@ class SdrClient:
         self._avg_decay = max(0.0, (spectrum_avg_frames - 1.0) / (spectrum_avg_frames + 1.0))
         self._avg_power: Optional[np.ndarray] = None
         self._reset_avg_event = threading.Event()
+        # Channel B's own averaged-spectrum state — separate from Channel
+        # A's above, same reasoning throughout.
+        self._avg_power_b: Optional[np.ndarray] = None
+        self._reset_avg_event_b = threading.Event()
 
         self.available = False
         self.status = "stopped"   # stopped | live | unavailable
         self.dropped_count = 0
+        self.dropped_count_b = 0
 
         self._lib: Optional[object] = None
         self._device = capi.DeviceT()
@@ -92,8 +179,10 @@ class SdrClient:
         # thread and the consumer — measured ~1000+/s drops continuously
         # even after fixing the consumer's own per-chunk cost separately.
         self._q: "queue.Queue" = queue.Queue(maxsize=512)
+        self._q_b: "queue.Queue" = queue.Queue(maxsize=512)
         self._stop_event = threading.Event()
         self._consumer_thread: Optional[threading.Thread] = None
+        self._consumer_thread_b: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         # A device-removed/failure event fires on the vendor callback thread
         # and can arrive in a burst (removed + failure together). This gate
@@ -110,12 +199,31 @@ class SdrClient:
         # stamped on every callback; _stall_watchdog trips if it goes stale.
         self._last_sample_at = 0.0
         self._watchdog_task: Optional[asyncio.Task] = None
+        # Channel B (Tuner 2 / Antenna 2, receive-only) — Phase 0 tracked
+        # only liveness; Phase 1 (this) gives it a real FFT/audio pipeline,
+        # same liveness stamp/watchdog reasoning as Channel A above.
+        self._last_sample_at_b = 0.0
+        self._sample_count_b = 0
+        self._ch_b_first_log_done = False
         # 2 MHz sustained means callbacks arrive continuously (thousands/s),
         # and they keep coming during TX too (the antenna switch mutes the
         # input, not the stream) — so any multi-second gap is a real stall,
         # not TX or normal jitter.
         self._stall_timeout_s = 3.0
         self._spectrum_callbacks: list[SpectrumCallback] = []
+        # Deliberately separate from _spectrum_callbacks above, NOT a
+        # shared list distinguished only by the "channel" tag — server.py
+        # already subscribes to _spectrum_callbacks (via on_spectrum) for
+        # today's single-panadapter display, and nothing calls
+        # on_spectrum_b yet. If Channel B published onto the same shared
+        # list, its frames would start interleaving into that existing
+        # display the moment this client starts, before any dual-channel
+        # frontend support exists to make sense of them — a real
+        # regression to the just-confirmed-working live view, not a
+        # theoretical one. This list stays empty (Channel B frames
+        # computed but published nowhere) until a future pass wires up
+        # on_spectrum_b from the dual-panadapter UI.
+        self._spectrum_callbacks_b: list[SpectrumCallback] = []
         self._window = np.hanning(fft_size).astype(np.float32)
         # 0dBFS reference: the coherent FFT magnitude a full-scale (32767)
         # input would produce through this window. Without this, magnitude
@@ -124,13 +232,21 @@ class SdrClient:
         # of the conventional dBFS sign (real signals negative, 0 = full scale).
         self._fullscale_ref = 32767.0 * float(np.sum(self._window))
         self._cb_stream = capi.StreamCallback_t(self._on_stream_data)
-        self._cb_stream_b = capi.StreamCallback_t()
+        self._cb_stream_b = capi.StreamCallback_t(self._on_stream_data_b)
         self._cb_event = capi.EventCallback_t(self._on_event)
         # Playback now runs through an AudioWorklet ring buffer (panadapter.html),
         # which is immune to per-message scheduling jitter — so batch size is
         # purely a latency knob now, not a glitch-avoidance one. Smaller is
         # better: it also caps the relative cost of the accumulation buffer.
         self.audio = AudioDemodulator(input_rate_hz=sample_rate_hz)
+        # Channel B's own demodulator — independent mode/frequency/gain
+        # from Channel A's, per the dual-watch plan. NOT wired to
+        # digital_audio below yet: which channel feeds the single BlackHole
+        # cable is meant to be operator-switchable (see project memory on
+        # the dual-receiver migration), and that source-select control is
+        # still frontend/server.py work, not built this pass — defaults to
+        # Channel A, matching today's behavior exactly until it exists.
+        self.audio_b = AudioDemodulator(input_rate_hz=sample_rate_hz)
         # Second subscriber on the same demodulated audio — feeds digital-mode
         # software (WSJT-X etc.) via a virtual audio cable instead of needing
         # the antenna switched back to the radio's own receiver.
@@ -141,20 +257,60 @@ class SdrClient:
         # subscribed via on_spectrum) — the "kind": "fine" tag on the frame
         # is what lets the frontend and SpectrumConnectionManager tell them
         # apart downstream.
-        self.audio.on_fine_spectrum(self._publish)
+        # AudioDemodulator is channel-agnostic (same class for both
+        # instances, doesn't know which tuner it's demodulating) — these
+        # thin wrappers stamp which channel a fine-spectrum frame came
+        # from before it reaches _publish's shared callback list, the same
+        # way _compute_frame/_compute_frame_b stamp the wideband ones.
+        self.audio.on_fine_spectrum(self._publish_fine_a)
+        self.audio_b.on_fine_spectrum(self._publish_fine_b)
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
+    @property
+    def antenna_label(self) -> str:
+        """Which antenna Channel A (the pipeline this client currently
+        publishes) is on. Fixed by physical wiring on the RSPduo — no
+        software switching — so this is a constant until a later phase
+        exposes Channel B's own status separately."""
+        return "A"
+
+    @property
+    def antenna_label_b(self) -> str:
+        """Channel B's antenna — see antenna_label. Fixed at "B"."""
+        return "B"
+
+    @property
+    def channel_b_alive(self) -> bool:
+        """Whether Channel B (Tuner 2 / Antenna 2) has delivered IQ
+        recently."""
+        if not self.available or self._last_sample_at_b == 0.0:
+            return False
+        return time.monotonic() - self._last_sample_at_b < self._stall_timeout_s
+
     def on_spectrum(self, cb: SpectrumCallback):
         self._spectrum_callbacks.append(cb)
+
+    def on_spectrum_b(self, cb: SpectrumCallback):
+        """Channel B's spectrum feed — separate from on_spectrum, see
+        _spectrum_callbacks_b. Nothing subscribes to this yet."""
+        self._spectrum_callbacks_b.append(cb)
 
     def gate_tx(self):
         """Gate all audio output for TX start: flush the IQ queue, the
         BlackHole/digital-audio queue, and reset AGC.  Call this instead of
-        audio.gate_tx() directly so every audio output path is covered."""
+        audio.gate_tx() directly so every audio output path is covered.
+
+        Channel B's audio queue is flushed defensively here too, but its
+        AudioDemodulator.tx_active flag isn't wired to PTT yet — that's
+        server.py's job (currently only touches sdr.audio.tx_active), not
+        done this pass since Channel B has no UI/control wiring yet. Until
+        that lands, Channel B's own TX-gated average-power reset
+        (_compute_frame_b's tx_active check) is a no-op in practice."""
         self.audio.gate_tx()
+        self.audio_b.gate_tx()
         self.digital_audio.flush()
 
     async def start(self):
@@ -206,12 +362,18 @@ class SdrClient:
         self._consumer_thread = threading.Thread(
             target=self._consumer_loop, name="sdr-fft", daemon=True)
         self._consumer_thread.start()
+        self._consumer_thread_b = threading.Thread(
+            target=self._consumer_loop_b, name="sdr-fft-b", daemon=True)
+        self._consumer_thread_b.start()
         self.audio.rf_center_hz = self.rf_freq_hz
         self.audio.start(self._loop)
+        self.audio_b.rf_center_hz = self.rf_freq_hz_b
+        self.audio_b.start(self._loop)
         self.digital_audio.start()
         # Fresh baseline so the watchdog doesn't trip on the gap before the
         # first callback arrives.
         self._last_sample_at = time.monotonic()
+        self._last_sample_at_b = time.monotonic()
         self._watchdog_task = self._loop.create_task(self._stall_watchdog())
 
     async def _teardown_pipeline(self):
@@ -226,16 +388,22 @@ class SdrClient:
             self._watchdog_task = None
         consumer = self._consumer_thread
         self._consumer_thread = None
+        consumer_b = self._consumer_thread_b
+        self._consumer_thread_b = None
 
         def _blocking_teardown():
             self.audio.stop()
+            self.audio_b.stop()
             self.digital_audio.stop()
             if consumer:
                 consumer.join(3.0)
+            if consumer_b:
+                consumer_b.join(3.0)
             self._close()
 
         await self._loop.run_in_executor(None, _blocking_teardown)
         self._avg_power = None
+        self._avg_power_b = None
 
     async def stop(self):
         if not self.available:
@@ -259,6 +427,34 @@ class SdrClient:
         if self._loop:
             self._loop.run_in_executor(None, self._apply_center_freq, freq_hz)
 
+    def set_rf_gain_pct(self, pct: float):
+        """Manual RF Gain, 0-100% (see _rf_gain_params). Safe to call from
+        the event loop — same executor-offload pattern as set_center_freq_hz."""
+        if not self.available:
+            return
+        self.rf_gain_pct = max(0.0, min(100.0, pct))
+        if self._loop:
+            self._loop.run_in_executor(None, self._apply_rf_gain)
+
+    def set_center_freq_hz_b(self, freq_hz: float):
+        """Retune Channel B — see set_center_freq_hz, same pattern,
+        independent of Channel A's frequency."""
+        if not self.available:
+            return
+        self.rf_freq_hz_b = freq_hz
+        self.audio_b.rf_center_hz = freq_hz
+        self._reset_avg_event_b.set()
+        if self._loop:
+            self._loop.run_in_executor(None, self._apply_center_freq_b, freq_hz)
+
+    def set_rf_gain_pct_b(self, pct: float):
+        """Manual RF Gain for Channel B, 0-100% — see set_rf_gain_pct."""
+        if not self.available:
+            return
+        self.rf_gain_pct_b = max(0.0, min(100.0, pct))
+        if self._loop:
+            self._loop.run_in_executor(None, self._apply_rf_gain_b)
+
     # ------------------------------------------------------------------
     # Internal: device lifecycle (runs on executor threads, not the loop)
     # ------------------------------------------------------------------
@@ -281,8 +477,13 @@ class SdrClient:
                 raise RuntimeError("no SDRplay devices found")
 
             target = next((devices[i] for i in range(num_devs.value)
-                            if devices[i].hwVer == capi.SDRPLAY_RSPdxR2_ID), devices[0])
+                            if devices[i].hwVer == capi.SDRPLAY_RSPduo_ID), devices[0])
             self._device = target
+            # Request Dual Tuner mode before SelectDevice — both tuners
+            # streaming simultaneously off one shared ADC clock, per
+            # sdrplay_api_rspDuo.h.
+            self._device.tuner = capi.Tuner_Both
+            self._device.rspDuoMode = capi.RspDuoMode_Dual_Tuner
 
             check(lib.sdrplay_api_SelectDevice(C.byref(self._device)), "SelectDevice")
             self._has_device = True
@@ -291,15 +492,44 @@ class SdrClient:
             check(lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)),
                   "GetDeviceParams")
             dp = dp_ptr.contents
-            dp.devParams.contents.fsHz = self.sample_rate_hz
-            dp.devParams.contents.rspDxParams.antennaSel = capi.RspDx_ANTENNA_C
+            # _DEVICE_FS_HZ (raw ADC rate) is deliberately NOT
+            # self.sample_rate_hz (the effective/delivered rate) — see
+            # _DEVICE_FS_HZ's own comment.
+            dp.devParams.contents.fsHz = _DEVICE_FS_HZ
+            gr_db, lna_state = _rf_gain_params(self.rf_gain_pct)
+
+            # Dual Tuner mode requires Low IF, not Zero IF (see datasheet).
+            # ifType isn't freely choosable, though — the SDRplay API's
+            # internal low-IF-to-baseband down-converter only engages for a
+            # small fixed set of (fsHz, bwType, ifType) triples (confirmed
+            # against the API Specification, consistent from v3.0 through
+            # our installed v3.15.1 — not in the local headers or the
+            # spec PDF, which 403'd; pulled via web search 2026-09-10
+            # after a first attempt at IF_2_048 produced un-shifted raw IF
+            # data live: wrong spectrum, no audio). _DEVICE_FS_HZ=6,000,000
+            # with bwType<=BW_1_536 only enables down-conversion paired
+            # with ifType=IF_1_620 — IF_2_048 is only valid paired with
+            # fsHz=8,000,000, a combination this client doesn't use.
             ch_a = dp.rxChannelA.contents
             ch_a.tunerParams.rfFreq.rfHz = self.rf_freq_hz
             ch_a.tunerParams.bwType = capi.BW_1_536
-            ch_a.tunerParams.ifType = capi.IF_Zero
-            ch_a.tunerParams.gain.gRdB = self.gr_db
-            ch_a.tunerParams.gain.LNAstate = self.lna_state
+            ch_a.tunerParams.ifType = capi.IF_1_620
+            ch_a.tunerParams.gain.gRdB = gr_db
+            ch_a.tunerParams.gain.LNAstate = lna_state
             ch_a.ctrlParams.agc.enable = capi.AGC_DISABLE
+
+            # Channel B (Tuner 2 / Antenna 2) — rxChannelB is only valid
+            # once Dual Tuner mode is actually granted above. Phase 0:
+            # same starting freq/gain as Channel A just to bring the
+            # tuner up and prove it streams; independent per-channel
+            # tuning is a later phase.
+            ch_b = dp.rxChannelB.contents
+            ch_b.tunerParams.rfFreq.rfHz = self.rf_freq_hz
+            ch_b.tunerParams.bwType = capi.BW_1_536
+            ch_b.tunerParams.ifType = capi.IF_1_620
+            ch_b.tunerParams.gain.gRdB = gr_db
+            ch_b.tunerParams.gain.LNAstate = lna_state
+            ch_b.ctrlParams.agc.enable = capi.AGC_DISABLE
 
             # Warm up numpy's FFT planning cache now, off the real-time path —
             # Phase 0 measured a one-time ~68ms first-call cost otherwise.
@@ -321,9 +551,62 @@ class SdrClient:
         dp_ptr = C.POINTER(capi.DeviceParamsT)()
         if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
             return
-        dp_ptr.contents.rxChannelA.contents.tunerParams.rfFreq.rfHz = freq_hz
-        self._lib.sdrplay_api_Update(self._device.dev, capi.Tuner_A,
-                                      capi.Update_Tuner_Frf, capi.Update_Ext1_None)
+        ch_a = dp_ptr.contents.rxChannelA.contents
+        ch_a.tunerParams.rfFreq.rfHz = freq_hz
+        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct)
+        ch_a.tunerParams.gain.gRdB = gr_db
+        ch_a.tunerParams.gain.LNAstate = lna_state
+        self._lib.sdrplay_api_Update(
+            self._device.dev, capi.Tuner_A,
+            capi.Update_Tuner_Frf | capi.Update_Tuner_Gr, capi.Update_Ext1_None)
+
+    def _apply_rf_gain(self):
+        if not self._has_device or self._lib is None:
+            return
+        dp_ptr = C.POINTER(capi.DeviceParamsT)()
+        if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
+            return
+        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct)
+        ch_a = dp_ptr.contents.rxChannelA.contents
+        ch_a.tunerParams.gain.gRdB = gr_db
+        ch_a.tunerParams.gain.LNAstate = lna_state
+        err = self._lib.sdrplay_api_Update(self._device.dev, capi.Tuner_A,
+                                            capi.Update_Tuner_Gr, capi.Update_Ext1_None)
+        if err != 0:
+            logger.warning(f"RSPdx RF gain update failed: err={err}")
+
+    def _apply_center_freq_b(self, freq_hz: float):
+        """Channel B's retune — see _apply_center_freq, targets Tuner_B/
+        rxChannelB instead of Tuner_A/rxChannelA."""
+        if not self._has_device or self._lib is None:
+            return
+        dp_ptr = C.POINTER(capi.DeviceParamsT)()
+        if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
+            return
+        ch_b = dp_ptr.contents.rxChannelB.contents
+        ch_b.tunerParams.rfFreq.rfHz = freq_hz
+        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct_b)
+        ch_b.tunerParams.gain.gRdB = gr_db
+        ch_b.tunerParams.gain.LNAstate = lna_state
+        self._lib.sdrplay_api_Update(
+            self._device.dev, capi.Tuner_B,
+            capi.Update_Tuner_Frf | capi.Update_Tuner_Gr, capi.Update_Ext1_None)
+
+    def _apply_rf_gain_b(self):
+        """Channel B's RF gain — see _apply_rf_gain, targets Tuner_B."""
+        if not self._has_device or self._lib is None:
+            return
+        dp_ptr = C.POINTER(capi.DeviceParamsT)()
+        if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
+            return
+        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct_b)
+        ch_b = dp_ptr.contents.rxChannelB.contents
+        ch_b.tunerParams.gain.gRdB = gr_db
+        ch_b.tunerParams.gain.LNAstate = lna_state
+        err = self._lib.sdrplay_api_Update(self._device.dev, capi.Tuner_B,
+                                            capi.Update_Tuner_Gr, capi.Update_Ext1_None)
+        if err != 0:
+            logger.warning(f"RSPduo Channel B RF gain update failed: err={err}")
 
     def _safe_release(self):
         if self._has_device and self._lib is not None:
@@ -369,6 +652,34 @@ class SdrClient:
             except queue.Full:
                 pass
         self.audio.feed(i, q_arr)
+
+    def _on_stream_data_b(self, xi, xq, params, num_samples, reset, cb_context):
+        """Channel B (Tuner 2 / Antenna 2) — mirrors _on_stream_data
+        exactly (liveness stamp, queue handoff, feed to its own
+        AudioDemodulator), plus the one-time first-samples log kept from
+        Phase 0 as a quick live sanity check."""
+        self._last_sample_at_b = time.monotonic()
+        self._sample_count_b += num_samples
+        if not self._ch_b_first_log_done:
+            self._ch_b_first_log_done = True
+            logger.info(
+                f"RSPduo Channel B (Tuner 2 / Antenna 2) live — "
+                f"first {num_samples} samples received")
+        i = np.ctypeslib.as_array(xi, shape=(num_samples,)).astype(np.int16, copy=True)
+        q_arr = np.ctypeslib.as_array(xq, shape=(num_samples,)).astype(np.int16, copy=True)
+        try:
+            self._q_b.put_nowait((i, q_arr))
+        except queue.Full:
+            try:
+                self._q_b.get_nowait()
+                self.dropped_count_b += 1
+            except queue.Empty:
+                pass
+            try:
+                self._q_b.put_nowait((i, q_arr))
+            except queue.Full:
+                pass
+        self.audio_b.feed(i, q_arr)
 
     def _on_event(self, event_id, tuner, params, cb_context):
         # Both events mean "the stream against this device is now invalid."
@@ -443,12 +754,23 @@ class SdrClient:
                 if not self.available:
                     return
                 gap = time.monotonic() - self._last_sample_at
+                gap_b = time.monotonic() - self._last_sample_at_b
+                # Both channels share one device/lib handle, so a stall on
+                # either is grounds for the same whole-session recovery —
+                # there's no such thing as "just restart Channel B".
                 if gap > self._stall_timeout_s:
                     logger.warning(
                         f"SDR IQ stream stalled — no samples for {gap:.1f}s and "
                         f"no device event fired; tearing down (device likely "
                         f"wedged — a USB replug is what clears this)")
                     self._schedule_recovery("stream stalled")
+                    return
+                if gap_b > self._stall_timeout_s:
+                    logger.warning(
+                        f"SDR Channel B IQ stream stalled — no samples for "
+                        f"{gap_b:.1f}s; tearing down (device likely wedged — "
+                        f"a USB replug is what clears this)")
+                    self._schedule_recovery("channel B stream stalled")
                     return
         except asyncio.CancelledError:
             pass
@@ -548,7 +870,88 @@ class SdrClient:
             mag_db = (10.0 * np.log10(self._avg_power / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
         return {
             "ts": time.time(),
+            "channel": "A",
             "center_freq_hz": self.rf_freq_hz,
+            "span_hz": self.sample_rate_hz,
+            "sample_rate_hz": self.sample_rate_hz,
+            "data": mag_db,
+        }
+
+    def _consumer_loop_b(self):
+        """Channel B's FFT consumer — mirrors _consumer_loop exactly,
+        against _q_b/dropped_count_b and _compute_frame_b instead."""
+        buf_cap = self.fft_size * 2
+        buf_i = np.empty(buf_cap, dtype=np.int16)
+        buf_q = np.empty(buf_cap, dtype=np.int16)
+        write_pos = 0
+
+        tick_interval = 1.0 / self.display_fps
+        next_tick = time.monotonic()
+        next_drop_log = time.monotonic() + 5.0
+        last_logged_drops = 0
+
+        while not self._stop_event.is_set():
+            now_check = time.monotonic()
+            if now_check >= next_drop_log:
+                if self.dropped_count_b != last_logged_drops:
+                    logger.warning(
+                        f"Channel B spectrum queue drops: {self.dropped_count_b} total "
+                        f"(+{self.dropped_count_b - last_logged_drops} in last 5s)")
+                    last_logged_drops = self.dropped_count_b
+                next_drop_log = now_check + 5.0
+            try:
+                i, q_arr = self._q_b.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            n = len(i)
+            if write_pos + n > buf_cap:
+                keep = min(write_pos, self.fft_size)
+                buf_i[:keep] = buf_i[write_pos - keep:write_pos]
+                buf_q[:keep] = buf_q[write_pos - keep:write_pos]
+                write_pos = keep
+            buf_i[write_pos:write_pos + n] = i
+            buf_q[write_pos:write_pos + n] = q_arr
+            write_pos += n
+
+            now = time.monotonic()
+            if now < next_tick or write_pos < self.fft_size:
+                continue
+            next_tick = now + tick_interval
+
+            frame = self._compute_frame_b(buf_i[write_pos - self.fft_size:write_pos],
+                                           buf_q[write_pos - self.fft_size:write_pos])
+            if self._loop is not None:
+                try:
+                    asyncio.run_coroutine_threadsafe(self._publish_b(frame), self._loop)
+                except RuntimeError:
+                    pass  # loop is closing/closed during shutdown
+
+    def _compute_frame_b(self, block_i, block_q) -> dict:
+        """Channel B's spectrum frame — mirrors _compute_frame exactly,
+        against Channel B's own avg-power/reset-event state and
+        AudioDemodulator instance."""
+        iq = (block_i.astype(np.float32) + 1j * block_q.astype(np.float32)).astype(np.complex64)
+        iq *= self._window
+        spectrum = np.fft.fftshift(np.fft.fft(iq))
+        power = (np.abs(spectrum) ** 2).astype(np.float32)
+
+        if self.audio_b.tx_active:
+            self._avg_power_b = None
+            mag_db = (10.0 * np.log10(power / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
+        else:
+            if self._reset_avg_event_b.is_set():
+                self._avg_power_b = None
+                self._reset_avg_event_b.clear()
+            if self._avg_power_b is None:
+                self._avg_power_b = power
+            else:
+                self._avg_power_b = self._avg_power_b * self._avg_decay + power * (1.0 - self._avg_decay)
+            mag_db = (10.0 * np.log10(self._avg_power_b / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
+        return {
+            "ts": time.time(),
+            "channel": "B",
+            "center_freq_hz": self.rf_freq_hz_b,
             "span_hz": self.sample_rate_hz,
             "sample_rate_hz": self.sample_rate_hz,
             "data": mag_db,
@@ -574,6 +977,33 @@ class SdrClient:
         avg_power = float(np.mean(self._avg_power[start_bin:end_bin]))
         return 10.0 * float(np.log10(avg_power / (self._fullscale_ref ** 2) + 1e-30))
 
+    def passband_strength_db_b(self, center_hz: float, bandwidth_hz: float) -> Optional[float]:
+        """Channel B's S-meter source — see passband_strength_db."""
+        if self._avg_power_b is None:
+            return None
+        n = len(self._avg_power_b)
+        span_hz = self.sample_rate_hz
+        bin_hz = span_hz / n
+        full_lo_hz = self.rf_freq_hz_b - span_hz / 2
+        start_bin = int((center_hz - bandwidth_hz / 2 - full_lo_hz) / bin_hz)
+        end_bin = int(np.ceil((center_hz + bandwidth_hz / 2 - full_lo_hz) / bin_hz))
+        start_bin = max(0, min(n - 1, start_bin))
+        end_bin = max(start_bin + 1, min(n, end_bin))
+        avg_power = float(np.mean(self._avg_power_b[start_bin:end_bin]))
+        return 10.0 * float(np.log10(avg_power / (self._fullscale_ref ** 2) + 1e-30))
+
     async def _publish(self, frame: dict):
         for cb in self._spectrum_callbacks:
             await cb(frame)
+
+    async def _publish_b(self, frame: dict):
+        for cb in self._spectrum_callbacks_b:
+            await cb(frame)
+
+    async def _publish_fine_a(self, frame: dict):
+        frame["channel"] = "A"
+        await self._publish(frame)
+
+    async def _publish_fine_b(self, frame: dict):
+        frame["channel"] = "B"
+        await self._publish_b(frame)

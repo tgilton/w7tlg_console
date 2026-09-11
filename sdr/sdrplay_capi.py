@@ -56,15 +56,64 @@ RspDx_ANTENNA_A = 0
 RspDx_ANTENNA_B = 1
 RspDx_ANTENNA_C = 2
 
-# Reason-for-update bit flags (sdrplay_api.h) — only the ones we use
+# RSPdx-R2 LNA state counts (max valid LNAstate is count-1) — per-band
+# tables from sdrplay_api_rspDx.h. Only the two ranges this station's
+# antenna routing actually uses are ported: the general/HF table (Antenna
+# C, <~50MHz) and VHF Band3/420MHz (Antenna B, 2m/70cm) — see
+# _antenna_for_freq in sdr/sdr_client.py. The AM-port and DX-path variants
+# don't apply here since this station never uses SMA AM Port 2.
+RSPDX_NUM_LNA_STATES = 28              # general/HF (Antenna C)
+RSPDX_NUM_LNA_STATES_VHF_BAND3 = 27    # 2m (Antenna B)
+RSPDX_NUM_LNA_STATES_420MHZ = 21       # 70cm (Antenna B)
+
+# RSPduo LNA state counts (max valid LNAstate is count-1) — confirmed
+# against the installed header (sdrplay_api_rspDuo.h), not guessed. Which
+# of these four applies at a given frequency/port is documented in
+# SDRplay's API guide, not the header — this station doesn't have that
+# guide on hand, so sdr_client.py uses the general table uniformly for
+# now (see _rf_gain_params) pending live confirmation across bands.
+RSPDUO_NUM_LNA_STATES = 10          # general (Tuner 1 Ant A / Tuner 2 Ant B)
+RSPDUO_NUM_LNA_STATES_AMPORT = 5    # Tuner 1 Hi-Z AM port
+RSPDUO_NUM_LNA_STATES_AM = 7        # AM broadcast band
+RSPDUO_NUM_LNA_STATES_LBAND = 9     # L-band (>1GHz)
+
+# RSPduo AM port select (sdrplay_api_rspDuo.h) — Tuner 1 only.
+RspDuo_AMPORT_2 = 0   # default: normal SMA input
+RspDuo_AMPORT_1 = 1   # Hi-Z wire antenna input, HF only
+
+# RSPduo mode (sdrplay_api_rspDuo.h) — set on DeviceT.rspDuoMode before
+# SelectDevice to request how the two tuners are driven. Dual Tuner mode
+# is what this station uses: both tuners independently tunable, streaming
+# simultaneously, sharing one ADC clock (hence one shared devParams.fsHz).
+RspDuoMode_Unknown = 0
+RspDuoMode_Single_Tuner = 1
+RspDuoMode_Dual_Tuner = 2
+RspDuoMode_Master = 4
+RspDuoMode_Slave = 8
+
+# Reason-for-update bit flags (sdrplay_api.h) — only the ones we use.
+# Update_None/Update_RspDx_AntennaControl come from two *separate* enums
+# (sdrplay_api_ReasonForUpdateT vs ...ExtensionT1) that both start at 0 —
+# confirmed against the installed header (/Library/SDRplayAPI/3.15.1/include/
+# sdrplay_api.h), not guessed, since getting either wrong makes the Update
+# call a silent no-op rather than an error.
+Update_None = 0x00000000
 Update_Dev_Fs = 0x00000001
 Update_Tuner_Gr = 0x00008000
 Update_Tuner_Frf = 0x00020000
 Update_Tuner_BwType = 0x00040000
 Update_Tuner_IfType = 0x00080000
 Update_Ext1_None = 0x00000000
+Update_RspDx_AntennaControl = 0x00000004
 
+# Tuner select (sdrplay_api_tuner.h) — confirmed against the installed
+# header. Tuner_Both is what requesting Dual Tuner mode uses (set on
+# DeviceT.tuner before SelectDevice); Tuner_A/Tuner_B address one tuner in
+# a per-channel Update() call once streaming.
+Tuner_Neither = 0
 Tuner_A = 1
+Tuner_B = 2
+Tuner_Both = 3
 
 # Event IDs (sdrplay_api_callback.h)
 Overload_Detected = 0

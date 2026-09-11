@@ -69,6 +69,40 @@ AudioCallback = Callable[[bytes], Coroutine]
 
 INTERMEDIATE_RATE_HZ = 16_000   # final output audio rate
 
+# Stage-1 (coarse) decimation filter length. A single-stage design's cost
+# scales with input_rate_hz * num_taps regardless of decim_factor (see
+# _design_decim_filter) — fine at the RSPdx-R2's 2MHz capture rate
+# (num_taps=401, cost-rate 2e6*401=8.02e8), but a 2026-07-08 test at 6MHz
+# (tripling input_rate_hz, same 401 taps) pushed CPU ~6x and starved
+# real-time audio. RSPduo Dual Tuner mode makes 6/8MHz mandatory (not an
+# optional wide view), so this can no longer be single-stage.
+# 101 taps keeps stage 1's own cost-rate (6e6*101=6.06e8) under that
+# already-proven 2MHz/401-tap budget despite running at 3x the rate —
+# stage 1 only needs a generous transition band (final selectivity still
+# comes from stage 2's unchanged 401-tap design, now running at the much
+# lower coarse rate, plus the SSB filter after it), so fewer taps than
+# stage 2 is expected to be fine. NOT verified by ear/scope yet — reasoned
+# from the existing design's own math, same as _design_decim_filter's
+# cutoff formula, but genuinely needs a live listening test once Dual
+# Tuner mode is running on real hardware, the same way the original
+# 401-tap/2MHz design was validated.
+_STAGE1_NUM_TAPS = 101
+
+
+def _choose_decim_stages(total_factor: int) -> tuple:
+    """Split a total input_rate_hz -> INTERMEDIATE_RATE_HZ decimation
+    factor into (coarse, fine) stages — see _STAGE1_NUM_TAPS for why.
+    Only splits on an exact divisor (the existing batch_samples/
+    decim_factor phase-lock needs the total factor exact either way, and
+    an exact divisor keeps each stage's own decimate-by-N step a plain
+    strided slice); falls back to no split (coarse=1) if none of these
+    common candidates divide evenly, same as the original single-stage
+    behavior."""
+    for coarse in (25, 20, 16, 10, 8, 5, 4, 2):
+        if total_factor % coarse == 0 and total_factor // coarse > 1:
+            return coarse, total_factor // coarse
+    return 1, total_factor
+
 # Noise reduction (DeepFilterNet3) — runs on its own rolling window rather
 # than per-block; see AudioDemodulator._apply_nr for why.
 NR_SAMPLE_RATE_HZ = 48_000
@@ -104,10 +138,14 @@ FINE_AVG_DECAY = max(0.0, (FINE_AVG_FRAMES - 1.0) / (FINE_AVG_FRAMES + 1.0))
 class AudioDemodulator:
     def __init__(self, input_rate_hz: float = 2_000_000.0, batch_samples: int = 16384):
         self.input_rate_hz = input_rate_hz
-        self.decim_factor = round(input_rate_hz / INTERMEDIATE_RATE_HZ)
+        self.decim_factor = round(input_rate_hz / INTERMEDIATE_RATE_HZ)   # total, both stages
+        self._coarse_decim_factor, self._fine_decim_factor = _choose_decim_stages(self.decim_factor)
+        self._coarse_rate_hz = input_rate_hz / self._coarse_decim_factor
         # Snapped to an exact multiple of decim_factor so the decimation
         # phase never drifts at batch boundaries (16384 isn't a multiple of
-        # 125 — left a 9-sample phase slip every batch otherwise).
+        # 125 — left a 9-sample phase slip every batch otherwise). Each
+        # stage keeps its own overlap-save state, so this only needs to
+        # hold for the total factor, not each stage individually.
         self.batch_samples = (batch_samples // self.decim_factor) * self.decim_factor
 
         self.enabled = False
@@ -157,7 +195,7 @@ class AudioDemodulator:
         # monitoring still had audio). Leave it available for cleaning up a
         # genuinely noisy SSB voice contact, but don't impose it by default.
         self.nr_enabled = False
-        self.nr_atten_limit_db = 40.0   # higher = more aggressive suppression
+        self.nr_atten_limit_db = 6.0    # higher = more aggressive suppression; 6.0 = UI slider level 1 (min)
         self._nr_model = None
         self._nr_df_state = None
         self._nr_load_failed = False
@@ -203,11 +241,30 @@ class AudioDemodulator:
         self._ssb_filter_key = None
         self._ssb_overlap: Optional[np.ndarray] = None
 
-        self._decim_filter = self._design_decim_filter()
-        self._decim_overlap = np.zeros(len(self._decim_filter) - 1, dtype=np.complex64)
+        self._decim_filter_coarse = (
+            self._design_decim_filter(self.input_rate_hz, self._coarse_rate_hz, _STAGE1_NUM_TAPS)
+            if self._coarse_decim_factor > 1 else None)
+        self._decim_overlap_coarse = (
+            np.zeros(len(self._decim_filter_coarse) - 1, dtype=np.complex64)
+            if self._decim_filter_coarse is not None else None)
+        self._decim_filter_fine = self._design_decim_filter(
+            self._coarse_rate_hz, INTERMEDIATE_RATE_HZ, 401)
+        self._decim_overlap_fine = np.zeros(len(self._decim_filter_fine) - 1, dtype=np.complex64)
 
     def on_audio(self, cb: AudioCallback):
-        self._audio_callbacks.append(cb)
+        # Idempotent — a repeated subscribe (e.g. the digital-audio
+        # source-select swapping between Channel A/B) must not double-fire
+        # the callback per chunk.
+        if cb not in self._audio_callbacks:
+            self._audio_callbacks.append(cb)
+
+    def off_audio(self, cb: AudioCallback):
+        """Undo on_audio — see the digital-audio source-select in
+        server.py's set_digital_source handler for why this exists:
+        AudioDemodulator is otherwise a subscribe-only, never-unsubscribe
+        API."""
+        if cb in self._audio_callbacks:
+            self._audio_callbacks.remove(cb)
 
     def on_fine_spectrum(self, cb: Callable[[dict], Coroutine]):
         self._fine_spectrum_callbacks.append(cb)
@@ -285,7 +342,9 @@ class AudioDemodulator:
         self._ssb_filter = None
         self._ssb_filter_key = None
         self._ssb_overlap = None
-        self._decim_overlap = np.zeros(len(self._decim_filter) - 1, dtype=np.complex64)
+        if self._decim_filter_coarse is not None:
+            self._decim_overlap_coarse = np.zeros(len(self._decim_filter_coarse) - 1, dtype=np.complex64)
+        self._decim_overlap_fine = np.zeros(len(self._decim_filter_fine) - 1, dtype=np.complex64)
         self.agc_gain = 1.0
         self._was_tx_active = False
         self._eq_sos = None
@@ -319,17 +378,19 @@ class AudioDemodulator:
             self._thread.join(timeout=3.0)
         self._thread = None
 
-    def _design_decim_filter(self) -> np.ndarray:
-        """Anti-alias lowpass for decimating input_rate_hz -> INTERMEDIATE_RATE_HZ,
-        applied via overlap-save (stateful across batches). Replaces
-        scipy's resample_poly, whose own internal filter is NOT stateful
-        across independent per-batch calls — the same class of bug as the
-        original severe SSB-filter distortion, just smaller in magnitude.
-        Real-valued filter (decimation doesn't need sideband selection)."""
-        cutoff_hz = INTERMEDIATE_RATE_HZ / 2.4   # comfortably inside the new Nyquist
-        num_taps = 401
+    def _design_decim_filter(self, input_rate_hz: float, output_rate_hz: float,
+                              num_taps: int) -> np.ndarray:
+        """Anti-alias lowpass decimating input_rate_hz -> output_rate_hz,
+        applied via overlap-save (stateful across batches) by the caller.
+        Replaces scipy's resample_poly, whose own internal filter is NOT
+        stateful across independent per-batch calls — the same class of
+        bug as the original severe SSB-filter distortion, just smaller in
+        magnitude. Real-valued filter (decimation doesn't need sideband
+        selection). Used for both decimation stages — see _STAGE1_NUM_TAPS
+        for why stage 1 passes a much smaller num_taps than stage 2's 401."""
+        cutoff_hz = output_rate_hz / 2.4   # comfortably inside the new Nyquist
         n = np.arange(num_taps) - (num_taps - 1) / 2.0
-        h = np.sinc(2 * cutoff_hz / self.input_rate_hz * n)
+        h = np.sinc(2 * cutoff_hz / input_rate_hz * n)
         h *= np.hamming(num_taps)
         h /= np.sum(h)
         return h.astype(np.complex64)
@@ -542,7 +603,10 @@ class AudioDemodulator:
             if self._was_tx_active:
                 self._was_tx_active = False
                 self._acc_len = 0
-                self._decim_overlap = np.zeros(len(self._decim_filter) - 1, dtype=np.complex64)
+                if self._decim_filter_coarse is not None:
+                    self._decim_overlap_coarse = np.zeros(
+                        len(self._decim_filter_coarse) - 1, dtype=np.complex64)
+                self._decim_overlap_fine = np.zeros(len(self._decim_filter_fine) - 1, dtype=np.complex64)
                 if self._ssb_filter is not None:
                     self._ssb_overlap = np.zeros(len(self._ssb_filter) - 1, dtype=np.complex64)
                 if self._eq_sos is not None:
@@ -595,11 +659,23 @@ class AudioDemodulator:
         mix = np.exp(-1j * 2 * np.pi * offset_hz / self.input_rate_hz * t).astype(np.complex64)
         baseband = (block_i.astype(np.float32) + 1j * block_q.astype(np.float32)) * mix
 
-        # Stateful decimation (overlap-save) — see _design_decim_filter.
-        decim_extended = np.concatenate([self._decim_overlap, baseband])
-        decim_filtered = np.convolve(decim_extended, self._decim_filter, mode="valid")
-        self._decim_overlap = decim_extended[-(len(self._decim_filter) - 1):]
-        intermediate = decim_filtered[::self.decim_factor]
+        # Two-stage stateful decimation (overlap-save) — see
+        # _choose_decim_stages/_STAGE1_NUM_TAPS. Stage 1 (coarse, cheap
+        # filter) does most of the rate reduction at the expensive full
+        # input rate; stage 2 (fine, the original 401-tap design) only
+        # has to run at whatever's left over.
+        if self._decim_filter_coarse is not None:
+            coarse_extended = np.concatenate([self._decim_overlap_coarse, baseband])
+            coarse_filtered = np.convolve(coarse_extended, self._decim_filter_coarse, mode="valid")
+            self._decim_overlap_coarse = coarse_extended[-(len(self._decim_filter_coarse) - 1):]
+            coarse_out = coarse_filtered[::self._coarse_decim_factor]
+        else:
+            coarse_out = baseband
+
+        fine_extended = np.concatenate([self._decim_overlap_fine, coarse_out])
+        fine_filtered = np.convolve(fine_extended, self._decim_filter_fine, mode="valid")
+        self._decim_overlap_fine = fine_extended[-(len(self._decim_filter_fine) - 1):]
+        intermediate = fine_filtered[::self._fine_decim_factor]
 
         if self.in_digital_mode:
             self._update_fine_spectrum(intermediate)
