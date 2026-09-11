@@ -3095,11 +3095,7 @@ function ensureAudioWorklet2() {
       // migration's dual-watch stereo plan.
       const panner = audioCtx2.createStereoPanner ? audioCtx2.createStereoPanner() : null;
       audioWorkletNode2.connect(muteGain2);
-      // TEMP diagnostic (Terry 2026-09-12): pan=0 (center, both speakers)
-      // instead of 1 (hard right) — testing whether RX2 audio is actually
-      // silent everywhere or just not reaching the right channel
-      // specifically. Revert to 1 once resolved.
-      if (panner) { panner.pan.value = 0; muteGain2.connect(panner); panner.connect(audioCtx2.destination); }
+      if (panner) { panner.pan.value = 1; muteGain2.connect(panner); panner.connect(audioCtx2.destination); }
       else { muteGain2.connect(audioCtx2.destination); }
     }).catch(err => {
       // Was cached as audioWorkletReady2 even on failure — every future
