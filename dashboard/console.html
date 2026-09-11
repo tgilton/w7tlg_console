@@ -84,17 +84,66 @@ html, body {
 
 .console {
   display: grid;
-  grid-template-columns: 240px 1fr 268px;
+  /* --col-left/--col-right are set inline by the resize-drag JS and restored
+     from localStorage on load — the px fallbacks here are only what a
+     first-ever visit sees before any dragging happens. Four zones, per
+     Terry 2026-09-11: modedsp = GLOBAL operating controls (Mode/Session/
+     Band/Digital Audio/Preamp-ATT — "there might be reasons to control
+     the radio"), center = RX1 fully self-contained (its own Filter/AGC/
+     NR/EQ live inside it now, not a separate narrow side column — "each
+     RX panel needs its own filter width... so I could conceivably hide
+     RX2 and operate without it"), center2 = RX2 fully self-contained
+     (identical structure to center), bandamp = TX ("the right side of
+     the entire console should be Transmit stuff" — amp, ALC/Radio PO/
+     SWR, and SSB Audio mic/comp/TX BW all live here now). There is no
+     longer a separate narrow "RX2 DSP" column — it was position-adjacent
+     confusion Terry flagged live ("hide RX2 and I still see the RX2
+     MODE box next to the RX1 spectrum") that a mid-session reorder only
+     partly fixed; folding it entirely into center2 removes the
+     adjacency question altogether. */
+  grid-template-columns: var(--col-left, 240px) 1fr 1fr var(--col-right, 268px);
   grid-template-areas:
-    "status   status   status"
-    "modedsp  center   bandamp"
-    "sysmsgs  sysmsgs  sysmsgs";
+    "status   status   status   status"
+    "modedsp  center   center2  bandamp"
+    "sysmsgs  sysmsgs  sysmsgs  sysmsgs";
   gap: 1px;
   background: var(--border);
   align-items: stretch;
 }
+/* Collapsing a side column hands its width to the center columns —
+   operator wants more room for the panadapters while actively operating,
+   full DSP/TX controls back with one click otherwise. Overrides the
+   resized width rather than replacing the variable, so the dragged width
+   is still there underneath when the column re-expands. */
+.console.collapsed-left  { grid-template-columns: 22px 1fr 1fr var(--col-right, 268px); }
+.console.collapsed-right { grid-template-columns: var(--col-left, 240px) 1fr 1fr 22px; }
+.console.collapsed-left.collapsed-right { grid-template-columns: 22px 1fr 1fr 22px; }
 
 .panel { background: var(--bg-1); padding: 16px; min-width: 0; }
+.panel-modedsp, .panel-bandamp { display: flex; padding: 0; }
+.panel-modedsp > .panel-body, .panel-bandamp > .panel-body { flex: 1; min-width: 0; padding: 16px; }
+.panel-collapse-tab {
+  flex: 0 0 22px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-2); border: none; padding: 0; margin: 0;
+  color: var(--chrome-label); cursor: pointer; font-size: 14px;
+  font-family: inherit;
+}
+.panel-collapse-tab:hover { color: var(--fg-0); background: var(--bg-1); }
+.panel-modedsp .panel-collapse-tab { border-left: 1px solid var(--border); }
+.panel-bandamp .panel-collapse-tab { border-right: 1px solid var(--border); }
+.panel-modedsp.collapsed > .panel-body, .panel-bandamp.collapsed > .panel-body { display: none; }
+/* Drag-to-resize handle, separate from the collapse tab (drag vs. click
+   shouldn't fight over the same hit target) — sits at the column's inner
+   edge, right against the spectrum. Double-click resets to the default
+   width. */
+.panel-resize-handle { flex: 0 0 6px; cursor: col-resize; background: transparent; user-select: none; }
+.panel-resize-handle:hover, .panel-resize-handle.dragging { background: var(--chrome-accent); }
+.panel-modedsp.collapsed .panel-resize-handle, .panel-bandamp.collapsed .panel-resize-handle { display: none; }
+/* While actively dragging, block text selection page-wide — the mouse
+   routinely strays off a 6px handle mid-drag, and without this that turns
+   into a selection highlight instead of a resize. */
+body.resizing-column { user-select: none; cursor: col-resize; }
 .panel h2, .section-label {
   font-size: 12px;
   font-weight: 400;
@@ -205,21 +254,6 @@ html, body {
 .badge-dummy-load { background: var(--state-selected); color: var(--bg-0); font-weight: 700; }
 @keyframes pulse-tx { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 
-/* ── Zoned grouping ─────────────────────────────────────────
-   Group identity is proximity + divider + --chrome-accent header only, per
-   DESIGN.md §2.4 ("grouping is structural, not chromatic") — this used to
-   tint panel-modedsp's Filter-through-Preamp/ATT controls amber and
-   panel-bandamp's amp telemetry green (predates DESIGN.md, added in
-   234af9b); the tint is gone, the hairline/margin grouping stays.
-   zone-amp itself is gone (2026-07-14, Band moved into panel-modedsp under
-   panel-modedsp's Mode grid, Amp is now the first thing in panel-bandamp so
-   there's nothing above it to separate from). */
-.zone-audio {
-  padding-top: 8px;
-  margin-top: 8px;
-  border-top: 0.5px solid var(--border);
-}
-
 /* Segmented-pill containers for true multi-choice controls (exactly one
    of N is ever active) — Mode, Filter, AGC, Band. Individual .btn/.dsp-
    agc-btn active styling already does the "selected" look; this just adds
@@ -241,6 +275,10 @@ html, body {
    it room; tightened padding + no-wrap here make that robust rather than
    "just barely fits" if content or font ever changes. */
 .mode-grid .btn { padding: 5px 4px; white-space: nowrap; }
+/* Session buttons reuse .mode-grid for the same 2-column pill layout, but
+   their labels ("FT8 (WSJT-X)") run longer than any mode button's — nowrap
+   above made those overflow past the button edge instead of wrapping. */
+#session-grid.mode-grid .btn { white-space: normal; line-height: 1.25; }
 .slider-label { color: var(--chrome-label); margin: 6px 0 3px; text-transform: uppercase; letter-spacing: 0.1em; }
 input[type=range] { width: 100%; accent-color: var(--data-trace); cursor: pointer; }
 /* Disabled sliders (Floor/Gain while AUTO is checked) barely differ from
@@ -269,6 +307,7 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
 
 /* ── Center column ──────────────────────────────────────── */
 .panel-center { grid-area: center; }
+.panel-center2 { grid-area: center2; }
 /* DESIGN.md §2.5: RX is a fact (--fg-0, near-white), TX is the one state
    where misreading is expensive (--state-fault, red + the shell border in
    RigControl's TX handling). Badge-level TX indicators (PTT-TX badge,
@@ -281,13 +320,26 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
 .smeter-bar-wrap { position: relative; height: 14px; background: var(--bg-0); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; margin-bottom: 2px; }
 .smeter-bar { height: 100%; width: 0%; background: var(--data-trace); transition: width 0.15s ease-out, background-color 0.15s ease-out; }
 .smeter-bar.over-s9 { background: var(--state-fault); }
-.smeter-readout { display: flex; justify-content: space-between; align-items: center; color: var(--chrome-muted); margin-bottom: 8px; }
+.smeter-readout { display: flex; justify-content: space-between; align-items: center; color: var(--chrome-muted); margin-bottom: 8px; min-height: 19.5px; }
 .smeter-readout .val { color: var(--data-trace); font-weight: 600; }
+/* Realtime dBFS reading, centered under the S-meter bar as its own line
+   (Terry 2026-09-11) rather than sharing the label/S9-Cal row — same
+   --chrome-muted color as before, just bigger/bolder to stand out. */
+.smeter-dbfs { text-align: center; font-size: 14px; font-weight: 700; color: var(--chrome-muted); margin-bottom: 4px; }
+/* min-height pinned to RX1's own measured height (which includes the S9
+   Cal input RX2 doesn't have) so both rows occupy identical space instead
+   of RX2's row collapsing ~2.7px shorter — part of the "spectra must line
+   up perfectly" fix (Terry 2026-09-11), see .vol-alc-group below for the
+   rest of it. */
 #s9-cal-input {
   background: var(--bg-0);
   border: 1px solid var(--border); color: var(--fg-0); padding: 1px 4px;
   border-radius: 2px; width: 40px;
 }
+/* RX2 tuning input/button dim while "Link to RX1" is on — RX2's
+   frequency is being driven by RX1's rig VFO, not by manual entry, so
+   editing them would just get overwritten on the next RX1 freq change. */
+#freq2-input:disabled, #tune2-btn:disabled { opacity: 0.4; }
 
 .tx-meters { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; transition: opacity 0.15s; }
 .tx-meters.inactive { opacity: 0.35; }
@@ -295,7 +347,24 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
    with ALC's below it, and the near-zero margin between the two blocks (vs.
    the 8px elsewhere) reads them as one instrument rather than two stacked
    ones. See FUNCTIONS.md §8: VOL/ALC/WSJT-X power are one tuning loop. */
-.vol-alc-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 2px; }
+/* AF/RF Gain columns pinned to a compact fixed width (Terry 2026-09-11:
+   "which can be much smaller") so the third column — each RX's own Mode
+   box, moved here from its own separate section-box for identical
+   RX1/RX2 treatment — gets the remaining room for up to 6 mode buttons. */
+.vol-alc-group { display: grid; grid-template-columns: 100px 100px 1fr; gap: 6px; margin-bottom: 2px; min-height: 58.8px; }
+/* 3 columns, not 2 (Terry 2026-09-11: "pills 2x too wide") — also cuts
+   RX1's 6-button grid from 3 rows to 2, which is most of why RX1's
+   vol-alc-group was taller than RX2's and pushed RX1's spectrum down
+   out of alignment. min-height pinned to RX1's own measured height (the
+   taller of the two) so row-count parity between RX1's 6-button mode grid
+   and RX2's 2-button grid can't silently drift apart again on a future
+   button change. */
+.mode-mini-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.mode-mini-grid .btn { padding: 3px 2px; font-size: 10px; }
+/* Filter side by side with AGC/NR within one merged box (Terry
+   2026-09-11) — sliders shrink naturally from sharing the column instead
+   of a full section-box width, no extra sizing needed. */
+.filter-agc-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .vol-slider-full { width: 100%; accent-color: var(--data-trace); margin: 3px 0 2px; }
 .tx-meter-label { color: var(--chrome-muted); text-transform: uppercase; letter-spacing: 0.1em; }
 .tx-meter-bar-wrap { height: 10px; background: var(--bg-0); border: 1px solid var(--border); border-radius: 2px; overflow: hidden; margin: 2px 0; }
@@ -314,9 +383,15 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
 .scope-box { background: var(--bg-0); border: 1px solid var(--border); border-radius: 4px; position: relative; overflow: hidden; }
 .panadapter-box { height: 260px; margin-bottom: 4px; cursor: grab; }
 .panadapter-box.dragging { cursor: grabbing; }
-.waterfall-box { height: 260px; margin-bottom: 6px; }
-#spectrum-canvas, #waterfall-canvas { width: 100%; height: 100%; display: block; }
-#waterfall-overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+.waterfall-box { height: 195px; margin-bottom: 6px; }   /* 260px * 0.75 — 25% shorter, more room for other panels */
+/* Same "full border box, locatable by eye" treatment as .section-box
+   (DESIGN.md §2.4) — wraps spectrum + freq axis + waterfall as one unit,
+   the highest-traffic region on screen while operating. */
+.scope-group { border: 2px solid #FFFFFF; border-radius: 7px; padding: 8px 8px 4px; margin-bottom: 16px; }
+.scope-group .waterfall-box { margin-bottom: 2px; }
+.scope-group .freq-axis { padding: 0 2px; }
+#spectrum-canvas, #waterfall-canvas, #spectrum2-canvas, #waterfall2-canvas { width: 100%; height: 100%; display: block; }
+#waterfall-overlay-canvas, #waterfall2-overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
 .freq-axis { display: flex; justify-content: space-between; color: var(--chrome-muted); padding: 1px 2px 4px; }
 
 .center-controls-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
@@ -324,11 +399,23 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
    class from .smeter-readout, outside that row, and needs the same
    uppercase treatment. */
 .ctl-label { color: var(--chrome-label); text-transform: uppercase; letter-spacing: 0.1em; }
-/* Tuning is one action cluster (freq entry + 4 buttons that work
+/* Tuning is one action cluster (freq entry + buttons that work
    together) — centered as a unit. Display is 6 independent parameters —
    DESIGN.md §9 wants those "distributed across the available width," so
    each .field-group (label+slider+value) is spaced edge-to-edge instead. */
-.row-tuning { justify-content: center; }
+/* nowrap+scroll, not wrap: RX2's tuning row has 2 more buttons than
+   RX1's (Link/Copy have no RX1 equivalent), so with normal wrapping it
+   drops to a 2nd line at container widths where RX1's row still fits on
+   one, making the two Tuning boxes different heights (Terry 2026-09-11).
+   A min-height reservation was tried first but is only as good as its
+   guess at the worst-case line count — at some widths RX1 itself also
+   wraps, or RX2 wraps to 3 lines, breaking the guess again. Forcing a
+   single line and scrolling it horizontally instead keeps the row's
+   height exactly one line, always, for both, regardless of button count
+   or width — the row is short enough that this essentially never
+   triggers in practice (only at widths already narrower than useful). */
+.row-tuning { justify-content: center; flex-wrap: nowrap; overflow-x: auto; }
+.row-tuning > * { flex-shrink: 0; }
 .row-display { justify-content: space-between; }
 .field-group { display: flex; align-items: center; gap: 6px; }
 #freq-input {
@@ -353,8 +440,15 @@ select#palette-select {
    whole point (operator feedback 2026-07-14: a value sitting right next to
    the next band's label read as ambiguous about which slider it belonged
    to). */
-.eq-bmt-group { flex: 1; display: flex; align-items: center; justify-content: center; gap: 32px; }
-.eq-bmt-group .display-slider { width: 165px; }
+/* Was a fixed 165px per slider (+ 32px gaps) — never shrank with the
+   container, so it stuck out past the box edge once RX panels got
+   narrower sharing the page with a second receiver (Terry 2026-09-11).
+   flex:1 + min-width:0 on both the wrapper and each slider's field-group
+   makes Bass/Mid/Treble share the actual available width proportionally,
+   same as the rest of this responsive layout. */
+.eq-bmt-group { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.eq-bmt-group .field-group { flex: 1; min-width: 0; }
+.eq-bmt-group .display-slider { width: auto; flex: 1; min-width: 30px; }
 /* Bass/Mid/Treble get more visual weight than every other slider in the app
    (operator request, 2026-07-14) — scaling the native control keeps the
    same browser-rendered look as every other input[type=range] here, just
@@ -363,9 +457,44 @@ select#palette-select {
 .eq-bmt-group input[type=range] { transform: scaleY(1.5); }
 
 /* ── Band / amp column ──────────────────────────────────── */
-.panel-bandamp { grid-area: bandamp; }
+.panel-bandamp { grid-area: bandamp; position: relative; }
+/* Targets .panel-body specifically (not .panel-bandamp's direct children)
+   so the collapse tab added alongside it stays clickable while bypassed. */
+.panel-bandamp.amp-bypassed > .panel-body { opacity: 0.35; pointer-events: none; }
+.amp-bypassed-note {
+  display: none;
+  margin-bottom: 16px; padding: 8px 10px;
+  border: 1px solid var(--border); background: var(--bg-0);
+  color: var(--chrome-muted); text-align: center; font-size: 11px;
+  line-height: 1.4;
+}
+.panel-bandamp.amp-bypassed .amp-bypassed-note { display: block; }
 .band-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 16px; }
 .divider { height: 0.5px; background: var(--border); margin: 16px 0; }
+
+/* ── Visual zoning ──────────────────────────────────────────
+   Operator decision (2026-08-30, DESIGN.md §2.4 amended): a full border box
+   around each function group, not just hairlines — this console sits
+   alongside RUNlogNG, terminals, and WSJT-X across two monitors, and a
+   region needs to be locatable by eye, not read. */
+.section-box {
+  border: 2px solid #FFFFFF;
+  border-radius: 7px;
+  padding: 12px 16px 16px;
+  margin-bottom: 16px;
+}
+.section-box:last-child { margin-bottom: 0; }
+
+/* Collapsible sections — the h2 header is the disclosure toggle (chevron
+   via ::before, no extra markup needed). .section-body is everything that
+   hides; anything placed as a direct child of .section-box instead (e.g.
+   the Fault Status severity badge) stays visible even when collapsed, per
+   DESIGN.md's "absence must be visible" instinct — collapsing a section
+   must never hide the one thing that would tell you to expand it. */
+.section-box.collapsible > h2 { cursor: pointer; user-select: none; }
+.section-box.collapsible > h2::before { content: '\25be\0020'; display: inline-block; }
+.section-box.collapsed > h2::before { content: '\25b8\0020'; }
+.section-box.collapsed > .section-body { display: none; }
 .meter-row { display: flex; justify-content: space-between; align-items: center; padding: 2px 0; }
 /* House style (2026-07-14, operator decision): control/meter labels are
    uppercase everywhere, same as .slider-label/.tx-meter-label/.ctl-label —
@@ -492,23 +621,16 @@ select#palette-select {
   </div>
 
   <!-- ── 2. Mode / DSP ────────────────────────────────────── -->
-  <div class="panel panel-modedsp">
-    <h2>Mode</h2>
-    <div class="mode-grid">
-      <button class="btn" data-mode="USB"    onclick="RigControl.setMode(this)">USB</button>
-      <button class="btn" data-mode="LSB"    onclick="RigControl.setMode(this)">LSB</button>
-      <button class="btn" data-mode="PKTUSB" onclick="RigControl.setMode(this)">DATA-U</button>
-      <button class="btn" data-mode="CW"     onclick="RigControl.setMode(this)">CW</button>
-      <button class="btn" data-mode="AM"     onclick="RigControl.setMode(this)">AM</button>
-      <button class="btn" data-mode="FM"     onclick="RigControl.setMode(this)">FM</button>
-    </div>
+  <div class="panel panel-modedsp" id="panel-modedsp">
+    <div class="panel-body">
 
-    <div class="divider"></div>
+    <div class="section-box">
     <h2>Session</h2>
     <div class="mode-grid" id="session-grid"></div>
     <div class="mono" id="session-step" style="margin-bottom:8px"></div>
+    </div>
 
-    <div class="divider"></div>
+    <div class="section-box">
     <h2>Band</h2>
     <div class="band-grid">
       <button class="btn" data-band="160m" data-freq="1840000"  onclick="RigControl.setBand(this)">160</button>
@@ -524,21 +646,15 @@ select#palette-select {
       <button class="btn" data-band="6m"   data-freq="50313000" onclick="RigControl.setBand(this)">6</button>
     </div>
 
-    <div class="zone-audio">
-    <h2>Filter</h2>
-    <div class="btn-row seg-row" style="margin-bottom:6px">
-      <button class="btn" id="filt-NAR" onclick="RigControl.setFilterWidthMode('NAR')" style="flex:1">NARROW</button>
-      <button class="btn active" id="filt-WID" onclick="RigControl.setFilterWidthMode('WID')" style="flex:1">WIDE</button>
-    </div>
-    <input type="range" min="200" max="3000" step="50" value="3000" id="width-slider"
-      oninput="RigControl.onWidthSlider(this.value)"
-      onmousedown="RigControl.setDragging('width', true)"
-      onmouseup="RigControl.sliderRelease('width', () => RigControl.setWidth(document.getElementById('width-slider').value))"
-      ontouchstart="RigControl.setDragging('width', true)"
-      ontouchend="RigControl.sliderRelease('width', () => RigControl.setWidth(document.getElementById('width-slider').value))">
-    <div class="power-value" id="width-val" style="text-align:left;margin-bottom:6px">3000Hz</div>
-
     <div class="divider"></div>
+    <h2>VHF / UHF <span class="muted" style="font-weight:normal">&mdash; direct to rig</span></h2>
+    <div class="band-grid" style="grid-template-columns:repeat(2,1fr)">
+      <button class="btn" data-band="2m"   data-freq="144200000" onclick="RigControl.setBand(this)">2m</button>
+      <button class="btn" data-band="70cm" data-freq="432100000" onclick="RigControl.setBand(this)">70cm</button>
+    </div>
+    </div>
+
+    <div class="section-box">
     <div id="digital-tx-controls">
       <h2>Digital Audio</h2>
       <div class="power-slider-wrap" style="margin-bottom:6px">
@@ -551,6 +667,13 @@ select#palette-select {
           ontouchend="RigControl.sliderRelease('dtGain', () => RigControl.setDtGain(document.getElementById('dt-gain-slider').value))">
         <span class="power-value" id="dt-gain-val">15</span>
       </div>
+      <div class="power-slider-wrap" style="margin-bottom:6px">
+        <span class="ctl-label" style="min-width:40px">SOURCE</span>
+        <span class="seg-row" style="flex:1">
+          <button class="dsp-agc-btn active" id="digisrc-A" onclick="RigControl.setDigitalSource('A')" title="RX1 feeds the BlackHole cable to WSJT-X etc.">RX1</button>
+          <button class="dsp-agc-btn" id="digisrc-B" onclick="RigControl.setDigitalSource('B')" title="RX2 feeds the BlackHole cable to WSJT-X etc.">RX2</button>
+        </span>
+      </div>
       <!-- COMP intentionally removed here — it's the same underlying
            rig.comp_level as SSB Audio's COMP slider below, not a separate
            digital-mode parameter, so showing both (now that both blocks are
@@ -561,7 +684,521 @@ select#palette-select {
     </div>
 
     <div class="divider"></div>
-    <div id="voice-tx-controls">
+    <div class="dsp-toggle-row rx-inert" title="FT-991A's own receiver isn't in the RF path while the SDR handles RX (see FUNCTIONS.md §4) — these have no audible effect right now">
+      <span class="amp-diag-label">FT-991A RX</span>
+      <button class="dsp-toggle" id="nb-btn" onclick="RigControl.toggleNB()">NB</button>
+      <button class="dsp-toggle" id="dnf-btn" onclick="RigControl.toggleDNF()">DNF</button>
+    </div>
+    <div class="divider"></div>
+    <div class="rx-inert" title="FT-991A's own receiver isn't in the RF path while the SDR handles RX (see FUNCTIONS.md §4) — these have no audible effect right now">
+      <span class="amp-diag-label">FT-991A RX</span>
+      <div class="meter-row"><span>Preamp</span>
+        <span>
+          <button class="btn" id="preamp-ipo" style="padding:2px 5px" onclick="RigControl.setPreamp(0)">IPO</button>
+          <button class="btn" id="preamp-amp1" style="padding:2px 5px" onclick="RigControl.setPreamp(1)">A1</button>
+          <button class="btn" id="preamp-amp2" style="padding:2px 5px" onclick="RigControl.setPreamp(2)">A2</button>
+        </span>
+      </div>
+      <div class="meter-row"><span>ATT</span>
+        <span>
+          <button class="btn" id="att-0" style="padding:2px 5px" onclick="RigControl.setAtt(0)">OFF</button>
+          <button class="btn" id="att-12" style="padding:2px 5px" onclick="RigControl.setAtt(12)">12</button>
+        </span>
+      </div>
+    </div>
+    </div>
+
+    <!-- RX1-only (Terry 2026-09-11: "let it remain only for RX1") — samples
+         rig.sdr_strength_db, which is specifically RX1's S-meter feed. -->
+    <div class="section-box">
+    <h2>Measure Noise</h2>
+    <div class="field-group">
+      <button class="btn" id="noise-measure-btn" onclick="RigControl.measureNoise()">Measure Noise</button>
+      <span class="mono" id="noise-floor-val" style="color:var(--chrome-muted)">—</span>
+    </div>
+    </div>
+    </div>
+    <div class="panel-resize-handle" id="resize-modedsp" onmousedown="startColumnResize('modedsp', event)" ondblclick="resetColumnWidth('modedsp')" title="Drag to resize, double-click to reset"></div>
+    <button class="panel-collapse-tab" id="tab-modedsp" onclick="toggleColumn('modedsp')" title="Collapse DSP panel"></button>
+  </div>
+
+  <!-- ── 3. VFO / panadapter / waterfall / tune ──────────── -->
+  <div class="panel panel-center">
+    <div class="freq-readout" id="vfo">  0.000.000</div>
+    <div class="vfo-meta">
+      <span class="badge badge-band" id="badge-band">??</span>
+      <span class="badge badge-mode" id="badge-mode">—</span>
+      <span class="badge badge-ptt-rx" id="badge-ptt">RX</span>
+      <span class="badge badge-split" id="badge-split" style="display:none">&#9888; SPLIT</span>
+      <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
+      <span class="badge badge-digital-audio-inactive" id="badge-digital-audio" style="display:none">DIGI AUDIO</span>
+      <span class="badge badge-dummy-load" id="badge-dummy-load" style="display:none">DUMMY LOAD</span>
+    </div>
+
+    <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter-bar"></div></div>
+    <div class="smeter-dbfs" id="smeter-db">— dBFS</div>
+    <div class="smeter-readout">
+      <span class="val" id="smeter-label">S0</span>
+      <span class="field-group">
+        <span class="ctl-label">S9 Cal</span>
+        <input type="number" id="s9-cal-input" value="-75" step="1" oninput="RigControl.onS9CalInput(this.value)">
+      </span>
+    </div>
+    <!-- AF Gain sits directly above ALC, column-aligned with it via the same
+         3-column grid as #tx-meters (matching width = visually "one loop"),
+         but in its own container so it's exempt from that block's TX-only
+         dimming — AF Gain (SDR RX volume) must stay fully visible during RX
+         too. Moved from the left column DSP panel per FUNCTIONS.md §8:
+         AF Gain/ALC/WSJT-X power are one tuning loop and were previously on
+         opposite sides of the screen. RF Gain (SDR front-end gain) sits next
+         to it in the same row — moved from the left DSP panel so the two
+         gain controls operators reach for together are side by side. -->
+    <div class="vol-alc-group">
+      <div class="vol-control">
+        <div class="tx-meter-label">AF GAIN</div>
+        <input type="range" min="0" max="1000" step="10" value="400" id="rx-vol-slider" class="vol-slider-full"
+          oninput="document.getElementById('rx-vol-val').textContent = this.value + '%'"
+          onmousedown="RigControl.setDragging('rxVol', true)"
+          onmouseup="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))"
+          ontouchstart="RigControl.setDragging('rxVol', true)"
+          ontouchend="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))">
+        <div class="tx-meter-value" id="rx-vol-val">400%</div>
+      </div>
+      <div class="vol-control">
+        <div class="tx-meter-label">RF GAIN</div>
+        <input type="range" min="0" max="100" step="1" value="80" id="rf-gain-slider" class="vol-slider-full"
+          oninput="document.getElementById('rf-gain-val').textContent = this.value + '%'"
+          onmousedown="RigControl.setDragging('rfGain', true)"
+          onmouseup="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(document.getElementById('rf-gain-slider').value))"
+          ontouchstart="RigControl.setDragging('rfGain', true)"
+          ontouchend="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(document.getElementById('rf-gain-slider').value))">
+        <div class="tx-meter-value" id="rf-gain-val">80%</div>
+      </div>
+      <div class="vol-control">
+        <div class="tx-meter-label">MODE</div>
+        <div class="mode-mini-grid">
+          <button class="btn" data-mode="USB"    onclick="RigControl.setMode(this)">USB</button>
+          <button class="btn" data-mode="LSB"    onclick="RigControl.setMode(this)">LSB</button>
+          <button class="btn" data-mode="CW"     onclick="RigControl.setMode(this)">CW</button>
+          <button class="btn" data-mode="AM"     onclick="RigControl.setMode(this)">AM</button>
+          <button class="btn" data-mode="FM"     onclick="RigControl.setMode(this)">FM</button>
+          <button class="btn" data-mode="PKTUSB" onclick="RigControl.setMode(this)">DATA-U</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="scope-group">
+      <div class="scope-box panadapter-box" id="spectrum-wrap">
+        <canvas id="spectrum-canvas"></canvas>
+      </div>
+      <!-- No gap/labels between spectrum and waterfall on purpose — the
+           waterfall should read as the spectrum's peaks draining straight
+           down. Just span min/max below both; exact position comes from the
+           hover crosshair (drawCursorCrosshair), not this strip. -->
+      <div class="scope-box waterfall-box" id="waterfall-wrap">
+        <canvas id="waterfall-canvas"></canvas>
+        <canvas id="waterfall-overlay-canvas"></canvas>
+      </div>
+      <div class="freq-axis">
+        <span id="axis-lo">—</span><span id="axis-hi">—</span>
+      </div>
+    </div>
+
+    <div class="section-box">
+    <h2>RX1 Spectrum &amp; Waterfall</h2>
+    <div class="center-controls-row row-display">
+      <span class="field-group">
+        <span class="ctl-label">Span</span>
+        <input type="range" class="display-slider" id="span-slider" min="0" max="1000" value="500" oninput="Panadapter.onSpanSlider(this.value)">
+        <span class="span-val" id="span-val">15.0 kHz</span>
+      </span>
+      <label class="ctl-label field-group"><input type="checkbox" id="auto-scale-cb" checked onchange="Panadapter.onAutoScaleToggle(this.checked)"> Auto</label>
+      <span class="field-group">
+        <span class="ctl-label">Floor</span>
+        <input type="range" class="display-slider" id="floor-slider" min="-160" max="0" value="-90" disabled oninput="Panadapter.onFloorSlider(this.value)">
+        <span class="span-val" id="floor-val">-90dB</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">Gain</span>
+        <input type="range" class="display-slider" id="gain-slider" min="0" max="100" value="50" disabled oninput="Panadapter.onGainSlider(this.value)">
+        <span class="span-val" id="gain-val">50%</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">Avg</span>
+        <input type="range" class="display-slider" id="avg-slider" min="0" max="100" value="80" oninput="Panadapter.onAvgSlider(this.value)">
+        <span class="span-val" id="avg-val">80%</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">WF Palette</span>
+        <select id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
+          <option value="default">Default</option>
+          <option value="linrad">Linrad</option>
+          <option value="grayscale">Grayscale</option>
+          <option value="hot">Hot</option>
+          <option value="gqrx">GQRX</option>
+        </select>
+      </span>
+    </div>
+    <div class="divider"></div>
+    <h2>RX1 Tuning</h2>
+    <div class="center-controls-row row-tuning">
+      <input type="text" id="freq-input" value="14.074000">
+      <button class="btn" onmousedown="event.preventDefault()" onclick="Panadapter.tuneToInput()">Tune</button>
+      <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()">Whole Band</button>
+      <button class="btn" onclick="Panadapter.recenterView()">Center</button>
+      <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()">Audio</button>
+    </div>
+    </div>
+
+    <div class="section-box">
+    <div class="filter-agc-row">
+      <div>
+      <h2>RX1 Filter</h2>
+      <input type="range" min="200" max="3000" step="50" value="3000" id="width-slider"
+        oninput="RigControl.onWidthSlider(this.value)"
+        onmousedown="RigControl.setDragging('width', true)"
+        onmouseup="RigControl.sliderRelease('width', () => RigControl.setWidth(document.getElementById('width-slider').value))"
+        ontouchstart="RigControl.setDragging('width', true)"
+        ontouchend="RigControl.sliderRelease('width', () => RigControl.setWidth(document.getElementById('width-slider').value))">
+      <div class="power-value" id="width-val" style="text-align:left">3000Hz</div>
+      <div class="btn-row seg-row" style="margin-top:6px">
+        <button class="btn" id="filt-NAR" onclick="RigControl.setFilterWidthMode('NAR')" style="flex:1">NARROW</button>
+        <button class="btn active" id="filt-WID" onclick="RigControl.setFilterWidthMode('WID')" style="flex:1">WIDE</button>
+      </div>
+      </div>
+      <div>
+      <h2>RX1 AGC / NR</h2>
+      <div class="dsp-toggle-row" style="margin-top:0">
+        <input type="range" min="1" max="15" step="1" value="1" id="nr-slider" class="dsp-slider-mini"
+          oninput="RigControl.onNRChange(this.value)"
+          onmousedown="RigControl.setDragging('nr', true)"
+          onmouseup="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))"
+          ontouchstart="RigControl.setDragging('nr', true)"
+          ontouchend="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))">
+        <span class="dsp-val" id="nr-val">1</span>
+      </div>
+      <div class="dsp-toggle-row">
+        <button class="dsp-toggle" id="nr-btn" onclick="RigControl.toggleNR()">DNR</button>
+      </div>
+      <div class="dsp-toggle-row">
+        <span class="slider-label" style="margin:0">AGC</span>
+        <span class="seg-row" style="flex:1">
+          <button class="dsp-agc-btn" id="agc-off" onclick="RigControl.setAGC(0)">OFF</button>
+          <button class="dsp-agc-btn" id="agc-fast" onclick="RigControl.setAGC(2)">FAST</button>
+          <button class="dsp-agc-btn" id="agc-slow" onclick="RigControl.setAGC(3)">SLOW</button>
+        </span>
+      </div>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <h2>RX1 Audio EQ</h2>
+    <div class="center-controls-row eq-row">
+      <button class="dsp-toggle eq-square-btn active" id="eq-btn" onclick="RigControl.toggleEQ()">EQ</button>
+      <div class="eq-bmt-group">
+        <span class="field-group">
+          <span class="ctl-label">Bass</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-bass-slider"
+            oninput="document.getElementById('eq-bass-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq', true)"
+            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+            ontouchstart="RigControl.setDragging('eq', true)"
+            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+          <span class="dsp-val" id="eq-bass-val">0</span>
+        </span>
+        <span class="field-group">
+          <span class="ctl-label">Mid</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-mid-slider"
+            oninput="document.getElementById('eq-mid-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq', true)"
+            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+            ontouchstart="RigControl.setDragging('eq', true)"
+            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+          <span class="dsp-val" id="eq-mid-val">0</span>
+        </span>
+        <span class="field-group">
+          <span class="ctl-label">Treble</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-treble-slider"
+            oninput="document.getElementById('eq-treble-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq', true)"
+            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
+            ontouchstart="RigControl.setDragging('eq', true)"
+            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
+          <span class="dsp-val" id="eq-treble-val">0</span>
+        </span>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- ── RX2 (Channel B / Tuner 2 / Antenna 2) — fully self-
+       contained panel, identical structure to RX1's panel-center
+       above: Mode, Filter, AGC/NR, Audio EQ all live here now
+       (2026-09-11 — Terry: "each RX panel needs to have its own
+       RX filter width, its own DNR... so I could conceivably hide
+       RX2 and operate without it"). Deliberately NOT duplicated:
+       Session/Band presets (whole-station/rig concepts, left
+       column), SSB Audio mic/comp/TX BW and ALC/Radio PO/SWR (all
+       TX, right column with the amp), Preamp/ATT (rig-CAT-only,
+       left column per Terry — "there might be reasons to control
+       the radio"). See project memory on the RSPduo migration. -->
+  <div class="panel panel-center2">
+    <div class="freq-readout" id="vfo2">  0.000.000</div>
+    <div class="vfo-meta">
+      <span class="badge badge-band" id="badge2-antenna">ANT B</span>
+      <span class="badge badge-mode" id="badge2-mode">USB</span>
+    </div>
+
+    <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter2-bar"></div></div>
+    <div class="smeter-dbfs" id="smeter2-db">— dBFS</div>
+    <div class="smeter-readout">
+      <span class="val" id="smeter2-label">S0</span>
+    </div>
+
+    <div class="vol-alc-group">
+      <div class="vol-control">
+        <div class="tx-meter-label">AF GAIN</div>
+        <input type="range" min="0" max="1000" step="10" value="400" id="rx-vol2-slider" class="vol-slider-full"
+          oninput="document.getElementById('rx-vol2-val').textContent = this.value + '%'"
+          onmousedown="RigControl.setDragging('rxVol2', true)"
+          onmouseup="RigControl.sliderRelease('rxVol2', () => Panadapter2.setRxVolume(document.getElementById('rx-vol2-slider').value))"
+          ontouchstart="RigControl.setDragging('rxVol2', true)"
+          ontouchend="RigControl.sliderRelease('rxVol2', () => Panadapter2.setRxVolume(document.getElementById('rx-vol2-slider').value))">
+        <div class="tx-meter-value" id="rx-vol2-val">400%</div>
+      </div>
+      <div class="vol-control">
+        <div class="tx-meter-label">RF GAIN</div>
+        <input type="range" min="0" max="100" step="1" value="80" id="rf-gain2-slider" class="vol-slider-full"
+          oninput="document.getElementById('rf-gain2-val').textContent = this.value + '%'"
+          onmousedown="RigControl.setDragging('rfGain2', true)"
+          onmouseup="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(document.getElementById('rf-gain2-slider').value))"
+          ontouchstart="RigControl.setDragging('rfGain2', true)"
+          ontouchend="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(document.getElementById('rf-gain2-slider').value))">
+        <div class="tx-meter-value" id="rf-gain2-val">80%</div>
+      </div>
+      <div class="vol-control">
+        <div class="tx-meter-label">MODE</div>
+        <!-- USB/LSB are real (AudioDemodulator's actual sideband
+             selection). CW/AM/FM are NOT wired here yet — pending
+             Terry's answer on whether to build real SDR demod for them
+             or leave them dimmed as a placeholder (asked 2026-09-11) — a
+             blank 3rd/4th/5th/6th slot rather than fake buttons in the
+             meantime. -->
+        <div class="mode-mini-grid">
+          <button class="btn active" id="mode2-USB" onclick="Panadapter2.setMode('USB')">USB</button>
+          <button class="btn" id="mode2-LSB" onclick="Panadapter2.setMode('LSB')">LSB</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="scope-group">
+      <div class="scope-box panadapter-box" id="spectrum2-wrap">
+        <canvas id="spectrum2-canvas"></canvas>
+      </div>
+      <div class="scope-box waterfall-box" id="waterfall2-wrap">
+        <canvas id="waterfall2-canvas"></canvas>
+        <canvas id="waterfall2-overlay-canvas"></canvas>
+      </div>
+      <div class="freq-axis">
+        <span id="axis2-lo">—</span><span id="axis2-hi">—</span>
+      </div>
+    </div>
+
+    <div class="section-box">
+    <h2>RX2 Spectrum &amp; Waterfall</h2>
+    <div class="center-controls-row row-display">
+      <span class="field-group">
+        <span class="ctl-label">Span</span>
+        <input type="range" class="display-slider" id="span2-slider" min="0" max="1000" value="500" oninput="Panadapter2.onSpanSlider(this.value)">
+        <span class="span-val" id="span2-val">15.0 kHz</span>
+      </span>
+      <label class="ctl-label field-group"><input type="checkbox" id="auto-scale2-cb" checked onchange="Panadapter2.onAutoScaleToggle(this.checked)"> Auto</label>
+      <span class="field-group">
+        <span class="ctl-label">Floor</span>
+        <input type="range" class="display-slider" id="floor2-slider" min="-160" max="0" value="-90" disabled oninput="Panadapter2.onFloorSlider(this.value)">
+        <span class="span-val" id="floor2-val">-90dB</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">Gain</span>
+        <input type="range" class="display-slider" id="gain2-slider" min="0" max="100" value="50" disabled oninput="Panadapter2.onGainSlider(this.value)">
+        <span class="span-val" id="gain2-val">50%</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">Avg</span>
+        <input type="range" class="display-slider" id="avg2-slider" min="0" max="100" value="80" oninput="Panadapter2.onAvgSlider(this.value)">
+        <span class="span-val" id="avg2-val">80%</span>
+      </span>
+      <span class="field-group">
+        <span class="ctl-label">WF Palette</span>
+        <select id="palette2-select" onchange="Panadapter2.onPaletteSelect(this.value)">
+          <option value="default">Default</option>
+          <option value="linrad">Linrad</option>
+          <option value="grayscale">Grayscale</option>
+          <option value="hot">Hot</option>
+          <option value="gqrx">GQRX</option>
+        </select>
+      </span>
+    </div>
+    <div class="divider"></div>
+    <h2>RX2 Tuning</h2>
+    <div class="center-controls-row row-tuning">
+      <input type="text" id="freq2-input" value="14.074000">
+      <button class="btn" id="tune2-btn" onmousedown="event.preventDefault()" onclick="Panadapter2.tuneToInput()">Tune</button>
+      <button class="btn" onclick="Panadapter2.snapToWholeBand()">Whole Band</button>
+      <button class="btn" onclick="Panadapter2.recenterView()">Center</button>
+      <button class="btn active" id="mute2-btn" onclick="Panadapter2.toggleMute()">Audio</button>
+      <button class="btn" id="link2-btn" onclick="Panadapter2.toggleLink()"
+        title="Link to RX1 — RX2 continuously follows RX1's tuning (the radio's VFO knob) instead of being tuned independently">Link</button>
+      <button class="btn" id="copy2-btn" onclick="Panadapter2.copyFromRx1()"
+        title="Copy RX1 -> RX2 — one-time copy of RX1's current frequency, mode, filter width and view onto RX2 (does not keep following unless Link is also on)">Copy</button>
+    </div>
+    </div>
+
+    <div class="section-box">
+    <div class="filter-agc-row">
+      <div>
+      <h2>RX2 Filter</h2>
+      <input type="range" min="200" max="3000" step="50" value="3000" id="width2-slider"
+        oninput="document.getElementById('width2-val').textContent = this.value + 'Hz'"
+        onmousedown="RigControl.setDragging('width2', true)"
+        onmouseup="RigControl.sliderRelease('width2', () => Panadapter2.setWidth(document.getElementById('width2-slider').value))"
+        ontouchstart="RigControl.setDragging('width2', true)"
+        ontouchend="RigControl.sliderRelease('width2', () => Panadapter2.setWidth(document.getElementById('width2-slider').value))">
+      <div class="power-value" id="width2-val" style="text-align:left">3000Hz</div>
+      <div class="btn-row seg-row" style="margin-top:6px">
+        <button class="btn" id="filt2-NAR" onclick="Panadapter2.setFilterWidthMode('NAR')" style="flex:1">NARROW</button>
+        <button class="btn active" id="filt2-WID" onclick="Panadapter2.setFilterWidthMode('WID')" style="flex:1">WIDE</button>
+      </div>
+      </div>
+      <div>
+      <h2>RX2 AGC / NR</h2>
+      <div class="dsp-toggle-row" style="margin-top:0">
+        <input type="range" min="1" max="15" step="1" value="1" id="nr2-slider" class="dsp-slider-mini"
+          oninput="document.getElementById('nr2-val').textContent = this.value"
+          onmousedown="RigControl.setDragging('nr2', true)"
+          onmouseup="RigControl.sliderRelease('nr2', () => Panadapter2.setNR(document.getElementById('nr2-slider').value))"
+          ontouchstart="RigControl.setDragging('nr2', true)"
+          ontouchend="RigControl.sliderRelease('nr2', () => Panadapter2.setNR(document.getElementById('nr2-slider').value))">
+        <span class="dsp-val" id="nr2-val">1</span>
+      </div>
+      <div class="dsp-toggle-row">
+        <button class="dsp-toggle" id="nr2-btn" onclick="Panadapter2.toggleNR()">DNR</button>
+      </div>
+      <div class="dsp-toggle-row">
+        <span class="slider-label" style="margin:0">AGC</span>
+        <span class="seg-row" style="flex:1">
+          <button class="dsp-agc-btn" id="agc2-off" onclick="Panadapter2.setAGC(0)">OFF</button>
+          <button class="dsp-agc-btn active" id="agc2-fast" onclick="Panadapter2.setAGC(2)">FAST</button>
+          <button class="dsp-agc-btn" id="agc2-slow" onclick="Panadapter2.setAGC(3)">SLOW</button>
+        </span>
+      </div>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <h2>RX2 Audio EQ</h2>
+    <div class="center-controls-row eq-row">
+      <button class="dsp-toggle eq-square-btn active" id="eq2-btn" onclick="Panadapter2.toggleEQ()">EQ</button>
+      <div class="eq-bmt-group">
+        <span class="field-group">
+          <span class="ctl-label">Bass</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq2-bass-slider"
+            oninput="document.getElementById('eq2-bass-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq2', true)"
+            onmouseup="RigControl.sliderRelease('eq2', () => Panadapter2.setEQ())"
+            ontouchstart="RigControl.setDragging('eq2', true)"
+            ontouchend="RigControl.sliderRelease('eq2', () => Panadapter2.setEQ())">
+          <span class="dsp-val" id="eq2-bass-val">0</span>
+        </span>
+        <span class="field-group">
+          <span class="ctl-label">Mid</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq2-mid-slider"
+            oninput="document.getElementById('eq2-mid-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq2', true)"
+            onmouseup="RigControl.sliderRelease('eq2', () => Panadapter2.setEQ())"
+            ontouchstart="RigControl.setDragging('eq2', true)"
+            ontouchend="RigControl.sliderRelease('eq2', () => Panadapter2.setEQ())">
+          <span class="dsp-val" id="eq2-mid-val">0</span>
+        </span>
+        <span class="field-group">
+          <span class="ctl-label">Treble</span>
+          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq2-treble-slider"
+            oninput="document.getElementById('eq2-treble-val').textContent = this.value"
+            onmousedown="RigControl.setDragging('eq2', true)"
+            onmouseup="RigControl.sliderRelease('eq2', () => Panadapter2.setEQ())"
+            ontouchstart="RigControl.setDragging('eq2', true)"
+            ontouchend="RigControl.sliderRelease('eq2', () => Panadapter2.setEQ())">
+          <span class="dsp-val" id="eq2-treble-val">0</span>
+        </span>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- ── 4. Band / amp ────────────────────────────────────── -->
+  <div class="panel panel-bandamp" id="panel-bandamp">
+    <button class="panel-collapse-tab" id="tab-bandamp" onclick="toggleColumn('bandamp')" title="Collapse Band/Amp panel"></button>
+    <div class="panel-resize-handle" id="resize-bandamp" onmousedown="startColumnResize('bandamp', event)" ondblclick="resetColumnWidth('bandamp')" title="Drag to resize, double-click to reset"></div>
+    <div class="panel-body">
+    <div class="section-box">
+      <div class="amp-bypassed-note">ACOM not in RF path &mdash; 2m/70cm run direct to rig</div>
+      <h2>Amp (ACOM 1200S)</h2>
+      <div class="amp-state-row">
+        <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
+        <span class="amp-state-badge" id="amp-atu-badge" style="display:none">ATU &#10003;</span>
+      </div>
+      <div class="meter-row"><span>Fwd P</span><span class="val good" id="amp-fwd-val">0 W</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>Rev P</span><span class="val" id="amp-refl-val">— W</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-refl-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>SWR</span><span class="val good" id="amp-swr-val">—</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-swr-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>Drive P</span><span class="val" id="amp-drive-val">— W</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-drive-bar" style="width:0%"></div></div>
+      <div class="meter-row"><span>PAM1 T</span><span class="val" id="amp-temp-val">— &deg;C</span></div>
+      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div></div>
+
+      <!-- Fwd P/Rev P/SWR/Drive P/PAM1 T above are watched continuously for
+           drift (see FUNCTIONS.md §6/8) — trend charts for exactly those
+           already exist on /monitor (dashboard/monitor.html's StripChart,
+           fed by the same bridge.on_trend_sample data), so this console
+           doesn't need to duplicate that view, just link to it (see header).
+           HV/I below are troubleshooting-only (RARE) and demoted out of
+           that stack: a divider breaks the visual run, and the DIAG tag
+           marks them as a separate, lower-priority readout rather than a
+           sixth thing to watch for drift. -->
+      <div class="divider"></div>
+      <div class="amp-diag-row" title="Troubleshooting only — not watched during normal operation">
+        <span class="amp-diag-label">DIAG</span>
+        <span>HV <span id="amp-hv-val">—</span>V</span>
+        <span>I <span id="amp-current-val">—</span>A</span>
+      </div>
+    </div>
+
+    <!-- TX meters + SSB Audio — moved here 2026-09-11 (Terry: "the right
+         side of the entire console should be Transmit (TX) stuff"). ALC/
+         Radio PO/SWR and mic/comp/TX BW are all about the transmitted
+         signal, not receive — they don't belong near either RX panel. -->
+    <div class="section-box">
+      <h2>TX Meters</h2>
+      <div class="tx-meters inactive" id="tx-meters">
+        <div>
+          <div class="tx-meter-label">ALC</div>
+          <div class="tx-meter-bar-wrap"><div class="tx-meter-bar alc" id="alc-bar"></div></div>
+          <div class="tx-meter-value" id="alc-val">—</div>
+        </div>
+        <div>
+          <div class="tx-meter-label">Radio PO</div>
+          <div class="tx-meter-bar-wrap"><div class="tx-meter-bar po" id="po-bar"></div></div>
+          <div class="tx-meter-value" id="po-val">—</div>
+        </div>
+        <div>
+          <div class="tx-meter-label">SWR</div>
+          <div class="tx-meter-bar-wrap"><div class="tx-meter-bar swr" id="swr-bar"></div></div>
+          <div class="tx-meter-value" id="swr-val">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-box">
       <h2>SSB Audio</h2>
       <div class="power-slider-wrap" style="margin-bottom:6px">
         <span class="ctl-label" style="min-width:40px">MIC</span>
@@ -599,247 +1236,10 @@ select#palette-select {
       </div>
     </div>
 
-    <div class="divider"></div>
-    <div class="dsp-toggle-row rx-inert" title="FT-991A's own receiver isn't in the RF path while the SDR handles RX (see FUNCTIONS.md §4) — these have no audible effect right now">
-      <span class="amp-diag-label">FT-991A RX</span>
-      <button class="dsp-toggle" id="nb-btn" onclick="RigControl.toggleNB()">NB</button>
-      <button class="dsp-toggle" id="dnf-btn" onclick="RigControl.toggleDNF()">DNF</button>
-    </div>
-    <div class="dsp-toggle-row">
-      <button class="dsp-toggle" id="nr-btn" onclick="RigControl.toggleNR()">DNR</button>
-      <input type="range" min="1" max="15" step="1" value="8" id="nr-slider" class="dsp-slider-mini"
-        oninput="RigControl.onNRChange(this.value)"
-        onmousedown="RigControl.setDragging('nr', true)"
-        onmouseup="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))"
-        ontouchstart="RigControl.setDragging('nr', true)"
-        ontouchend="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))">
-      <span class="dsp-val" id="nr-val">8</span>
-    </div>
-    <div class="divider"></div>
-    <div class="dsp-toggle-row">
-      <span class="slider-label" style="margin:0">AGC</span>
-      <span class="seg-row" style="flex:1">
-        <button class="dsp-agc-btn" id="agc-off" onclick="RigControl.setAGC(0)">OFF</button>
-        <button class="dsp-agc-btn" id="agc-fast" onclick="RigControl.setAGC(2)">FAST</button>
-        <button class="dsp-agc-btn" id="agc-slow" onclick="RigControl.setAGC(3)">SLOW</button>
-      </span>
-    </div>
-    <div class="divider"></div>
-    <div class="rx-inert" title="FT-991A's own receiver isn't in the RF path while the SDR handles RX (see FUNCTIONS.md §4) — these have no audible effect right now">
-      <span class="amp-diag-label">FT-991A RX</span>
-      <div class="meter-row"><span>Preamp</span>
-        <span>
-          <button class="btn" id="preamp-ipo" style="padding:2px 5px" onclick="RigControl.setPreamp(0)">IPO</button>
-          <button class="btn" id="preamp-amp1" style="padding:2px 5px" onclick="RigControl.setPreamp(1)">A1</button>
-          <button class="btn" id="preamp-amp2" style="padding:2px 5px" onclick="RigControl.setPreamp(2)">A2</button>
-        </span>
-      </div>
-      <div class="meter-row"><span>ATT</span>
-        <span>
-          <button class="btn" id="att-0" style="padding:2px 5px" onclick="RigControl.setAtt(0)">OFF</button>
-          <button class="btn" id="att-12" style="padding:2px 5px" onclick="RigControl.setAtt(12)">12</button>
-        </span>
-      </div>
-    </div>
-    </div>
-  </div>
-
-  <!-- ── 3. VFO / panadapter / waterfall / tune ──────────── -->
-  <div class="panel panel-center">
-    <div class="freq-readout" id="vfo">  0.000.000</div>
-    <div class="vfo-meta">
-      <span class="badge badge-band" id="badge-band">??</span>
-      <span class="badge badge-mode" id="badge-mode">—</span>
-      <span class="badge badge-ptt-rx" id="badge-ptt">RX</span>
-      <span class="badge badge-split" id="badge-split" style="display:none">&#9888; SPLIT</span>
-      <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
-      <span class="badge badge-digital-audio-inactive" id="badge-digital-audio" style="display:none">DIGI AUDIO</span>
-      <span class="badge badge-dummy-load" id="badge-dummy-load" style="display:none">DUMMY LOAD</span>
-    </div>
-
-    <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter-bar"></div></div>
-    <div class="smeter-readout">
-      <span class="val" id="smeter-label">S0</span>
-      <span id="smeter-db">— dBFS</span>
-      <span class="field-group">
-        <span class="ctl-label">S9 Cal</span>
-        <input type="number" id="s9-cal-input" value="-75" step="1" oninput="RigControl.onS9CalInput(this.value)">
-      </span>
-    </div>
-
-    <!-- VOL sits directly above ALC, column-aligned with it via the same
-         3-column grid as #tx-meters (matching width = visually "one loop"),
-         but in its own container so it's exempt from that block's TX-only
-         dimming — VOL (SDR RX volume) must stay fully visible during RX too.
-         Moved from the left column DSP panel per FUNCTIONS.md §8:
-         VOL/ALC/WSJT-X power are one tuning loop and were previously on
-         opposite sides of the screen. -->
-    <div class="vol-alc-group">
-      <div class="vol-control">
-        <div class="tx-meter-label">VOL</div>
-        <input type="range" min="0" max="1000" step="10" value="400" id="rx-vol-slider" class="vol-slider-full"
-          oninput="document.getElementById('rx-vol-val').textContent = this.value + '%'"
-          onmousedown="RigControl.setDragging('rxVol', true)"
-          onmouseup="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))"
-          ontouchstart="RigControl.setDragging('rxVol', true)"
-          ontouchend="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))">
-        <div class="tx-meter-value" id="rx-vol-val">400%</div>
-      </div>
-      <div></div>
-      <div></div>
-    </div>
-
-    <div class="tx-meters inactive" id="tx-meters">
-      <div>
-        <div class="tx-meter-label">ALC</div>
-        <div class="tx-meter-bar-wrap"><div class="tx-meter-bar alc" id="alc-bar"></div></div>
-        <div class="tx-meter-value" id="alc-val">—</div>
-      </div>
-      <div>
-        <div class="tx-meter-label">Radio PO</div>
-        <div class="tx-meter-bar-wrap"><div class="tx-meter-bar po" id="po-bar"></div></div>
-        <div class="tx-meter-value" id="po-val">—</div>
-      </div>
-      <div>
-        <div class="tx-meter-label">SWR</div>
-        <div class="tx-meter-bar-wrap"><div class="tx-meter-bar swr" id="swr-bar"></div></div>
-        <div class="tx-meter-value" id="swr-val">—</div>
-      </div>
-    </div>
-
-    <div class="scope-box panadapter-box" id="spectrum-wrap">
-      <canvas id="spectrum-canvas"></canvas>
-    </div>
-    <div class="freq-axis">
-      <span id="axis-lo">—</span><span id="axis-center">—</span><span id="axis-hi">—</span>
-    </div>
-    <div class="scope-box waterfall-box" id="waterfall-wrap">
-      <canvas id="waterfall-canvas"></canvas>
-      <canvas id="waterfall-overlay-canvas"></canvas>
-    </div>
-
-    <h2>Tuning</h2>
-    <div class="center-controls-row row-tuning">
-      <input type="text" id="freq-input" value="14.074000">
-      <button class="btn" onmousedown="event.preventDefault()" onclick="Panadapter.tuneToInput()">Tune</button>
-      <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()">Whole Band</button>
-      <button class="btn" onclick="Panadapter.recenterView()">Center</button>
-      <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()">Audio</button>
-    </div>
-
-    <div class="divider"></div>
-    <h2>Spectrum &amp; Waterfall</h2>
-    <div class="center-controls-row row-display">
-      <span class="field-group">
-        <span class="ctl-label">Span</span>
-        <input type="range" class="display-slider" id="span-slider" min="0" max="1000" value="500" oninput="Panadapter.onSpanSlider(this.value)">
-        <span class="span-val" id="span-val">15.0 kHz</span>
-      </span>
-      <label class="ctl-label field-group"><input type="checkbox" id="auto-scale-cb" checked onchange="Panadapter.onAutoScaleToggle(this.checked)"> Auto</label>
-      <span class="field-group">
-        <span class="ctl-label">Floor</span>
-        <input type="range" class="display-slider" id="floor-slider" min="-160" max="0" value="-90" disabled oninput="Panadapter.onFloorSlider(this.value)">
-        <span class="span-val" id="floor-val">-90dB</span>
-      </span>
-      <span class="field-group">
-        <span class="ctl-label">Gain</span>
-        <input type="range" class="display-slider" id="gain-slider" min="0" max="100" value="50" disabled oninput="Panadapter.onGainSlider(this.value)">
-        <span class="span-val" id="gain-val">50%</span>
-      </span>
-      <span class="field-group">
-        <span class="ctl-label">Avg</span>
-        <input type="range" class="display-slider" id="avg-slider" min="0" max="100" value="80" oninput="Panadapter.onAvgSlider(this.value)">
-        <span class="span-val" id="avg-val">80%</span>
-      </span>
-      <span class="field-group">
-        <span class="ctl-label">WF Palette</span>
-        <select id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
-          <option value="default">Default</option>
-          <option value="linrad">Linrad</option>
-          <option value="grayscale">Grayscale</option>
-          <option value="hot">Hot</option>
-          <option value="gqrx">GQRX</option>
-        </select>
-      </span>
-    </div>
-
-    <div class="divider"></div>
-    <h2>Audio EQ</h2>
-    <div class="center-controls-row eq-row">
-      <button class="dsp-toggle eq-square-btn active" id="eq-btn" onclick="RigControl.toggleEQ()">EQ</button>
-      <div class="eq-bmt-group">
-        <span class="field-group">
-          <span class="ctl-label">Bass</span>
-          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-bass-slider"
-            oninput="document.getElementById('eq-bass-val').textContent = this.value"
-            onmousedown="RigControl.setDragging('eq', true)"
-            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-            ontouchstart="RigControl.setDragging('eq', true)"
-            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-          <span class="dsp-val" id="eq-bass-val">0</span>
-        </span>
-        <span class="field-group">
-          <span class="ctl-label">Mid</span>
-          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-mid-slider"
-            oninput="document.getElementById('eq-mid-val').textContent = this.value"
-            onmousedown="RigControl.setDragging('eq', true)"
-            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-            ontouchstart="RigControl.setDragging('eq', true)"
-            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-          <span class="dsp-val" id="eq-mid-val">0</span>
-        </span>
-        <span class="field-group">
-          <span class="ctl-label">Treble</span>
-          <input type="range" class="display-slider" min="-12" max="12" step="1" value="0" id="eq-treble-slider"
-            oninput="document.getElementById('eq-treble-val').textContent = this.value"
-            onmousedown="RigControl.setDragging('eq', true)"
-            onmouseup="RigControl.sliderRelease('eq', () => RigControl.setEQ())"
-            ontouchstart="RigControl.setDragging('eq', true)"
-            ontouchend="RigControl.sliderRelease('eq', () => RigControl.setEQ())">
-          <span class="dsp-val" id="eq-treble-val">0</span>
-        </span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── 4. Band / amp ────────────────────────────────────── -->
-  <div class="panel panel-bandamp">
-      <h2>Amp (ACOM 1200S)</h2>
-      <div class="amp-state-row">
-        <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
-        <span class="amp-state-badge" id="amp-atu-badge" style="display:none">ATU &#10003;</span>
-      </div>
-      <div class="meter-row"><span>Fwd P</span><span class="val good" id="amp-fwd-val">0 W</span></div>
-      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div></div>
-      <div class="meter-row"><span>Rev P</span><span class="val" id="amp-refl-val">— W</span></div>
-      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-refl-bar" style="width:0%"></div></div>
-      <div class="meter-row"><span>SWR</span><span class="val good" id="amp-swr-val">—</span></div>
-      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-swr-bar" style="width:0%"></div></div>
-      <div class="meter-row"><span>Drive P</span><span class="val" id="amp-drive-val">— W</span></div>
-      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-drive-bar" style="width:0%"></div></div>
-      <div class="meter-row"><span>PAM1 T</span><span class="val" id="amp-temp-val">— &deg;C</span></div>
-      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-temp-bar" style="width:0%"></div></div>
-
-      <!-- Fwd P/Rev P/SWR/Drive P/PAM1 T above are watched continuously for
-           drift (see FUNCTIONS.md §6/8) — trend charts for exactly those
-           already exist on /monitor (dashboard/monitor.html's StripChart,
-           fed by the same bridge.on_trend_sample data), so this console
-           doesn't need to duplicate that view, just link to it (see header).
-           HV/I below are troubleshooting-only (RARE) and demoted out of
-           that stack: a divider breaks the visual run, and the DIAG tag
-           marks them as a separate, lower-priority readout rather than a
-           sixth thing to watch for drift. -->
-      <div class="divider"></div>
-      <div class="amp-diag-row" title="Troubleshooting only — not watched during normal operation">
-        <span class="amp-diag-label">DIAG</span>
-        <span>HV <span id="amp-hv-val">—</span>V</span>
-        <span>I <span id="amp-current-val">—</span>A</span>
-      </div>
-
-      <div class="divider"></div>
-      <div class="fault-group">
-        <h2>Fault Status</h2>
-        <span class="fault-severity ok" id="fault-severity">OK</span>
+    <div class="section-box collapsible collapsed" id="box-fault-status">
+      <h2 onclick="toggleSectionBox('box-fault-status')">Fault Status</h2>
+      <span class="fault-severity ok" id="fault-severity">OK</span>
+      <div class="section-body">
         <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--chrome-muted)">No active faults</span></div>
         <span class="inhibit-banner" id="inhibit-banner">&#9940; TX INHIBITED &mdash; <span id="inhibit-reason">—</span></span>
         <div class="btn-row" style="margin-top:6px">
@@ -847,15 +1247,17 @@ select#palette-select {
           <button class="btn active-green btn-critical" id="btn-allow" style="flex:1" onclick="RigControl.allowTx()">&#10003; Allow</button>
         </div>
       </div>
+    </div>
 
-      <div class="divider"></div>
+    <div class="section-box">
       <h2>Operating Mode</h2>
       <div class="opmode-grid">
         <button class="btn active" id="mode-AMP_OFF" onclick="RigControl.setOpMode('AMP_OFF')">AMP OFF</button>
         <button class="btn" id="mode-AMP_ON" onclick="RigControl.setOpMode('AMP_ON')">AMP ON</button>
       </div>
+    </div>
 
-      <div class="divider"></div>
+    <div class="section-box">
       <h2>Exciter Drive</h2>
       <div class="power-slider-wrap">
         <input type="range" min="5" max="100" value="50" id="rf-power-slider"
@@ -866,8 +1268,9 @@ select#palette-select {
           ontouchend="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))">
         <span class="power-value power-value-green" id="rf-power-val">50W</span>
       </div>
+    </div>
 
-    <div class="divider"></div>
+    <div class="section-box">
     <h2>Antenna</h2>
     <div class="ant-grid">
       <div class="btn ant-indicator" id="ant-1">A1F<br><span class="ant-alias" id="ant-alias-1"></span></div>
@@ -880,9 +1283,11 @@ select#palette-select {
       <span class="muted mono" style="color:var(--chrome-muted)">DUMMY LOAD:</span>
       <span class="dummy-timer" id="dummy-timer">10.0s</span>
     </div>
+    </div>
 
-    <div class="divider"></div>
-    <h2>Antenna A/B Test</h2>
+    <div class="section-box collapsible collapsed" id="box-abtest">
+    <h2 onclick="toggleSectionBox('box-abtest')">Antenna A/B Test</h2>
+    <div class="section-body">
     <div class="abt-row">
       <label><input type="checkbox" id="abt-manual" onchange="RigControl.toggleAbtManual()"> Manual switching</label>
     </div>
@@ -914,6 +1319,9 @@ select#palette-select {
     </div>
     <div id="abt-summary" class="mono" style="margin-bottom:4px"></div>
     <div id="abt-results" class="scroll-table"></div>
+    </div>
+    </div>
+    </div>
   </div>
 
   <!-- ── 5. System messages ───────────────────────────────── -->
@@ -1030,6 +1438,8 @@ const BAND_EDGES_HZ = {
   '12m':  [24890000, 24990000],
   '10m':  [28000000, 29700000],
   '6m':   [50000000, 54000000],
+  '2m':   [144000000, 148000000],
+  '70cm': [432000000, 450000000],
 };
 
 const SPAN_MIN_HZ = 1000;
@@ -1379,6 +1789,24 @@ function isViewWithinCapture(frame) {
   return viewHi > capLo && viewLo < capHi;
 }
 
+// Spatial (bin-to-bin) smoothing width, in Hz either side of each sampled
+// bin — this is separate from the temporal averaging in applySpectrumSmoothing
+// and sdr_client.py's spectrum_avg_frames. Temporal averaging reduces how
+// fast the trace's "grass" flickers between successive frames; it does
+// nothing for how spiky the grass looks in a single frame, because that's
+// driven by each FFT bin's independent variance, not by time. This instead
+// box-averages neighboring bins (in linear power, matching how the server
+// averages across frames — dB-domain averaging is biased low by log
+// compression), the same way a real analyzer's RBW/VBW smooths a sweep.
+// 90Hz at full AVG is small next to an SSB passband (2.4kHz) or even FT8
+// tone spacing (6.25Hz — this view is for band monitoring, not resolving
+// individual tones) so real signal shapes survive; capped at 8 bins either
+// side so it can't collapse into a giant averaging window at very fine bin
+// spacing. The actual width used (spatialSmoothHz) is scaled live by the
+// AVG slider, declared with specAvgAlpha below.
+const SPATIAL_SMOOTH_MAX_HZ = 90;
+const SPATIAL_SMOOTH_MAX_HALF_BINS = 8;
+
 function cropToView(frame, outPoints) {
   const n = frame.data.length;
   const binHz = frame.spanHz / n;
@@ -1392,10 +1820,25 @@ function cropToView(frame, outPoints) {
   endBin = Math.max(startBin + 1, Math.min(n, endBin));
   const span = endBin - startBin;
 
+  const halfWin = Math.min(SPATIAL_SMOOTH_MAX_HALF_BINS,
+                            Math.round(spatialSmoothHz / binHz));
+
+  // Linear-power prefix sum over the visible slice, computed once, so each
+  // output point's windowed average is an O(1) lookup instead of redoing
+  // the same neighboring bins' dB->power conversion for every point that
+  // overlaps them.
+  const linPow = new Float64Array(span);
+  for (let b = 0; b < span; b++) linPow[b] = Math.pow(10, frame.data[startBin + b] / 10);
+  const prefix = new Float64Array(span + 1);
+  for (let b = 0; b < span; b++) prefix[b + 1] = prefix[b] + linPow[b];
+
   const out = new Float32Array(outPoints);
   for (let i = 0; i < outPoints; i++) {
-    const srcIdx = startBin + Math.floor((i / outPoints) * span);
-    out[i] = frame.data[Math.min(n - 1, srcIdx)];
+    const centerBin = Math.min(span - 1, Math.floor((i / outPoints) * span));
+    const lo = Math.max(0, centerBin - halfWin);
+    const hi = Math.min(span - 1, centerBin + halfWin);
+    const avgPow = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1);
+    out[i] = 10 * Math.log10(avgPow);
   }
   return out;
 }
@@ -1478,7 +1921,6 @@ function drawSpectrum() {
 
   if (frame && viewCenterHz !== null) {
     document.getElementById('axis-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);
-    document.getElementById('axis-center').textContent = (viewCenterHz / 1e6).toFixed(4);
     document.getElementById('axis-hi').textContent = ((viewCenterHz + viewSpanHz / 2) / 1e6).toFixed(4);
     updateFreqInputDisplay();
 
@@ -1559,8 +2001,17 @@ function onContrastSlider(v) { wfContrast = parseFloat(v) / 10; }
 
 let smoothedSpectrum = null;
 let specAvgAlpha = 0.80 * 0.95;
+// AVG drives both smoothing axes from one knob: temporal (specAvgAlpha, how
+// fast the trace settles frame-to-frame) and spatial (spatialSmoothHz, how
+// wide a neighborhood of FFT bins gets box-averaged in cropToView — see
+// SPATIAL_SMOOTH_MAX_HZ there for why they're different problems). Scaling
+// both together from the same percentage keeps it one "smoothness" control
+// instead of two the operator has to reason about separately.
+let spatialSmoothHz = 0.80 * SPATIAL_SMOOTH_MAX_HZ;
 function onAvgSlider(v) {
-  specAvgAlpha = parseFloat(v) / 100 * 0.95;
+  const frac = parseFloat(v) / 100;
+  specAvgAlpha = frac * 0.95;
+  spatialSmoothHz = frac * SPATIAL_SMOOTH_MAX_HZ;
   document.getElementById('avg-val').textContent = v + '%';
 }
 function applySpectrumSmoothing(points) {
@@ -1659,8 +2110,15 @@ function ensureAudioWorklet() {
       audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
       muteGain = audioCtx.createGain();
       muteGain.gain.value = 1;
+      // Panned hard left — RX2 (Panadapter2's ensureAudioWorklet2) is
+      // panned hard right, so the two channels read as distinct sources
+      // by ear (dual-watch). This was missing until 2026-09-11: RX1
+      // played centered/both-ears while only RX2 got a panner, so the
+      // stereo split wasn't actually happening for RX1's half of it.
+      const panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
       audioWorkletNode.connect(muteGain);
-      muteGain.connect(audioCtx.destination);
+      if (panner) { panner.pan.value = -1; muteGain.connect(panner); panner.connect(audioCtx.destination); }
+      else { muteGain.connect(audioCtx.destination); }
     });
   }
   return audioWorkletReady;
@@ -1800,11 +2258,956 @@ return {
   init, tuneToInput, snapToWholeBand, recenterView, toggleMute,
   onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider,
   onPaletteSelect,
+  // Read-only — lets Panadapter2's Copy/Link (a different <script> tag's
+  // own closure, can't see this module's view state directly; see the
+  // cross-script scoping note in project memory) mirror RX1's actual
+  // current view (span AND center) onto RX2 without duplicating RX1's
+  // own view state locally. Both are needed together, not just span:
+  // RX1's view center can differ from its own dial/audio-target
+  // frequency (e.g. after Whole Band, which centers on the band
+  // midpoint, not the dial) — copying span alone and re-deriving center
+  // from the dial frequency reproduced the wrong window (Terry
+  // 2026-09-11: got 13.9947-14.3487 instead of RX1's clean
+  // 14.000-14.350).
+  getViewSpanHz: () => viewSpanHz,
+  getViewCenterHz: () => viewCenterHz,
 };
 
 })();
 
 Panadapter.init();
+</script>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     RX2 (Channel B / Tuner 2 / Antenna 2) — independent SDR panadapter.
+     Deliberately NOT sharing code with the Panadapter module above: that
+     module is deeply woven around following the radio's own CAT frequency
+     and mode (rigFreqHz, followRigFrequency, snapToWholeBand,
+     handleDigitalViewMode) — none of which exists for Channel B, since
+     there's no second radio. Refactoring the live, TX-mute-critical
+     Channel A module into a shared parameterized factory would touch
+     nearly every line of it for no safety benefit; instead this reuses the
+     same proven rendering ALGORITHMS (cropToView, dbToColor,
+     applySpectrumSmoothing, waterfall push, span-slider log-mapping) as
+     fresh, independent code. Also owns its own /ws (PTT/tx_mute + S-meter
+     only, much smaller than Panadapter's), /ws/spectrum_b, /ws/audio_b —
+     same "no shared connection or state" isolation Panadapter already
+     uses, for the same TX-mute-timing-criticality reason: RX2's audio
+     playing through speakers during TX is the same mic-feedback risk as
+     RX1's. See project memory on the RSPduo migration.
+     ══════════════════════════════════════════════════════════════════════ -->
+<script>
+const Panadapter2 = (function () {
+
+const SPAN_MIN_HZ = 1000;
+const SPAN_MAX_HZ = 2000000;
+
+// Local copy — Panadapter's BAND_EDGES_HZ is private to that module's
+// closure (see the s9CalDb2/PALETTES2 comments earlier in this file for
+// why cross-script access doesn't work here). RX2 has no rig/CAT band to
+// key off like RX1's snapToWholeBand does (BAND_EDGES_HZ[rigBand]) — it
+// looks up whichever band contains RX2's own current frequency instead,
+// which is actually more correct for an independent SDR VFO with no CAT
+// counterpart to ask.
+const BAND_EDGES_HZ2 = {
+  '160m': [1800000, 2000000],
+  '80m':  [3500000, 4000000],
+  '60m':  [5330500, 5403500],
+  '40m':  [7000000, 7300000],
+  '30m':  [10100000, 10150000],
+  '20m':  [14000000, 14350000],
+  '17m':  [18068000, 18168000],
+  '15m':  [21000000, 21450000],
+  '12m':  [24890000, 24990000],
+  '10m':  [28000000, 29700000],
+  '6m':   [50000000, 54000000],
+  '2m':   [144000000, 148000000],
+  '70cm': [432000000, 450000000],
+};
+
+function bandForFreq2(hz) {
+  for (const [band, [lo, hi]] of Object.entries(BAND_EDGES_HZ2)) {
+    if (hz >= lo && hz <= hi) return band;
+  }
+  return null;
+}
+
+// ── Private /ws — PTT/tx_mute + this channel's S-meter only ───────────
+let ws2 = null;
+
+function connectWs2() {
+  ws2 = new WebSocket(`ws://${location.host}/ws`);
+  ws2.onclose = () => setTimeout(connectWs2, 2000);
+  ws2.onmessage = evt => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'tx_mute') { txSilenceStart(); return; }
+    if (msg.type === 'state') {
+      const rig = msg.data.rig || {};
+      if (rig.ptt) txSilenceStart(); else txSilenceEnd();
+      updateSmeter(rig);
+      // "Link to RX1" (Terry 2026-09-11: no way to tune RX2 since the
+      // radio's VFO knob only ever drives RX1's CAT frequency) — while
+      // enabled, any actual change in RX1's frequency/mode/passband
+      // re-applies all three to RX2 via applyRx1ToRx2(), the same path
+      // "Copy RX1 -> RX2" uses for a one-time sync. lastRig* are tracked
+      // unconditionally (not just while linked) so Copy always has fresh
+      // values to read even if Link has never been turned on. Guarded on
+      // an actual change so this doesn't re-send on every periodic state
+      // broadcast when nothing has moved.
+      const rigChanged = rig.freq_hz !== lastRigFreqHz ||
+        rig.mode !== lastRigMode || rig.passband_hz !== lastRigPassband;
+      if (rig.freq_hz) lastRigFreqHz = rig.freq_hz;
+      if (rig.mode) lastRigMode = rig.mode;
+      if (rig.passband_hz) lastRigPassband = rig.passband_hz;
+      // recenterView: true only on the very first application (!everTuned
+      // — applyRx1ToRx2 flips it true internally), so startup inherits
+      // RX1's actual current span/view once, same as a manual Link click
+      // would — not just its default 15kHz. false afterward routes
+      // through followRx1() (not tuneTo()), which keeps RX2's view stable
+      // and only moves it once the frequency actually drifts out of view,
+      // matching RX1's own cursor-only knob-follow behavior instead of
+      // panning every tick.
+      if (linkToRx1 && rigChanged && lastRigFreqHz !== null) applyRx1ToRx2(!everTuned);
+      // One-time sync from server truth at load — after this, the
+      // operator IS the ground truth for RX2 (no rig to keep following,
+      // unlike Channel A). Only fires while nothing has been tuned yet.
+      if (!everTuned && rig.sdr_rf_freq_hz_b) {
+        everTuned = true;
+        audioTargetFreqHz = rig.sdr_target_freq_hz_b || rig.sdr_rf_freq_hz_b;
+        viewCenterHz = rig.sdr_rf_freq_hz_b;
+        document.getElementById('freq2-input').value = (audioTargetFreqHz / 1e6).toFixed(6);
+      }
+      followOwnTuning2();
+      // See wholeBandApplied2's own declaration comment — race-free
+      // startup default, independent of Link/Copy's own span sync.
+      if (!wholeBandApplied2 && audioTargetFreqHz !== null && latestFrame2) {
+        wholeBandApplied2 = true;
+        snapToWholeBand();
+      }
+    }
+  };
+}
+
+function send2(obj) {
+  if (ws2 && ws2.readyState === WebSocket.OPEN) {
+    obj.channel = 'B';
+    ws2.send(JSON.stringify(obj));
+  }
+}
+
+// s9CalDb2/smeterLabel2 are local copies, NOT the Panadapter/RigControl
+// globals they're modeled on — those live INSIDE those modules' own IIFEs
+// (function-closure-private, not page-global despite living in an earlier
+// <script> tag), so this module genuinely cannot see them. Confirmed live
+// via a ReferenceError before this fix — see project memory on the RSPduo
+// migration. Duplicated here rather than exposing them from Panadapter/
+// RigControl, to avoid touching that already-proven code.
+let s9CalDb2 = -75;
+function smeterLabel2(strengthDb) {
+  if (strengthDb >= 0) {
+    const over = Math.round(strengthDb / 10) * 10;
+    return over > 0 ? `S9+${over}` : 'S9';
+  }
+  const s = Math.max(0, Math.min(9, 9 + Math.floor(strengthDb / 6)));
+  return `S${s}`;
+}
+
+function updateSmeter(rig) {
+  const dbFs = rig.sdr_strength_db_b;
+  const dbEl = document.getElementById('smeter2-db');
+  if (dbFs === undefined || dbFs === null) { dbEl.textContent = '— dBFS'; return; }
+  const strengthDb = dbFs - s9CalDb2;
+  const pct = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100));
+  const bar = document.getElementById('smeter2-bar');
+  bar.style.width = pct + '%';
+  bar.classList.toggle('over-s9', strengthDb >= 0);
+  document.getElementById('smeter2-label').textContent = smeterLabel2(strengthDb);
+  dbEl.textContent = dbFs.toFixed(1) + ' dBFS';
+}
+
+// ── Spectrum /ws/spectrum_b — binary frames ────────────────────────────
+let specWs2 = null;
+let pendingHeader2 = null;
+let latestFrame2 = null;
+let pendingRetuneHz2 = null;
+let pendingRetuneAt2 = 0;
+// Defaults ON (Terry 2026-09-11: "It needs to startup with RX1 and RX2
+// linked with the same defaults" — RX2's viewSpanHz otherwise always
+// starts at its own bare 15kHz default on every reload, regardless of
+// whatever RX1 is showing). The UI (link2-btn active, freq2-input/
+// tune2-btn disabled) is synced to match in init(), same as a manual
+// toggleLink() click would — see there for why. The first-ever sync
+// this produces also copies RX1's current span/view onto RX2 (see
+// !everTuned in connectWs2's state handler below), not just frequency.
+let linkToRx1 = true;
+let lastRigFreqHz = null;
+let lastRigMode = null;
+let lastRigPassband = null;
+const PENDING_RETUNE_TIMEOUT_MS = 3000;
+
+function setPendingRetune2(hz) { pendingRetuneHz2 = hz; pendingRetuneAt2 = performance.now(); }
+function clearStalePendingRetune2() {
+  if (pendingRetuneHz2 !== null && (performance.now() - pendingRetuneAt2) > PENDING_RETUNE_TIMEOUT_MS) {
+    pendingRetuneHz2 = null;
+  }
+}
+
+function connectSpectrumWs2() {
+  specWs2 = new WebSocket(`ws://${location.host}/ws/spectrum_b`);
+  specWs2.binaryType = 'arraybuffer';
+  specWs2.onclose = () => setTimeout(connectSpectrumWs2, 2000);
+  specWs2.onmessage = evt => {
+    if (typeof evt.data === 'string') { pendingHeader2 = JSON.parse(evt.data); return; }
+    if (!pendingHeader2) return;
+    const data = new Float32Array(evt.data);
+    const frame = { centerFreqHz: pendingHeader2.center_freq_hz, spanHz: pendingHeader2.span_hz, data };
+    if (pendingRetuneHz2 !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz2) > 1000) {
+      // Waiting for an explicit retune to land — freeze, same as Panadapter.
+    } else {
+      pendingRetuneHz2 = null;
+      if (viewCenterHz === null || !isViewWithinCapture2(frame)) viewCenterHz = frame.centerFreqHz;
+      latestFrame2 = frame;
+      pushWaterfallRow2(frame);
+    }
+    pendingHeader2 = null;
+  };
+}
+
+// ── Controls: tuning ────────────────────────────────────────────────────
+let viewSpanHz = 15000;
+let viewCenterHz = null;
+let audioTargetFreqHz = 14074000;
+let everTuned = false;
+// Independent of Link/Copy's own span-copying (applyRx1ToRx2's
+// recenterView=true path) — that one-shot copy reads RX1's span at
+// whatever instant RX2's first sync happens to fire, which races against
+// RX1's OWN async startup snap-to-whole-band (its `wholeBandApplied` in
+// the Panadapter module, triggered once RX1's first frame arrives) and
+// can lose that race, leaving RX2 stuck at its bare 15kHz default even
+// though RX1 ends up wide a moment later (Terry 2026-09-11: "every time
+// I restart it, RX2 goes back to 15kHz"). Mirroring RX1's own
+// once-when-ready bootstrap independently sidesteps the race entirely —
+// each side reaches Whole Band on its own once it's ready, no
+// cross-referencing RX1's transient state required.
+let wholeBandApplied2 = false;
+let mode2 = 'USB';
+let bandwidth2Hz = 3000;
+
+function spanFromSlider(v) { const t = v / 1000; return SPAN_MIN_HZ * Math.pow(SPAN_MAX_HZ / SPAN_MIN_HZ, t); }
+function sliderFromSpan(hz) { const t = Math.log(hz / SPAN_MIN_HZ) / Math.log(SPAN_MAX_HZ / SPAN_MIN_HZ); return Math.round(t * 1000); }
+
+function setViewSpan(hz) {
+  viewSpanHz = Math.max(SPAN_MIN_HZ, Math.min(SPAN_MAX_HZ, hz));
+  document.getElementById('span2-slider').value = sliderFromSpan(viewSpanHz);
+  updateSpanLabel2();
+}
+function updateSpanLabel2() {
+  const el = document.getElementById('span2-val');
+  el.textContent = viewSpanHz >= 1e6 ? (viewSpanHz / 1e6).toFixed(2) + ' MHz' : (viewSpanHz / 1e3).toFixed(2) + ' kHz';
+}
+function onSpanSlider(v) { viewSpanHz = spanFromSlider(parseInt(v, 10)); updateSpanLabel2(); }
+
+function tuneTo(freqHz, recenterView = true) {
+  freqHz = Math.round(freqHz);
+  everTuned = true;
+  audioTargetFreqHz = freqHz;
+  send2({ cmd: 'set_panadapter_freq', freq_hz: freqHz });
+  setAudioTarget();
+  if (recenterView) viewCenterHz = freqHz;
+  if (latestFrame2) {
+    const margin = viewSpanHz / 2;
+    const lo = latestFrame2.centerFreqHz - latestFrame2.spanHz / 2 + margin;
+    const hi = latestFrame2.centerFreqHz + latestFrame2.spanHz / 2 - margin;
+    if (freqHz < lo || freqHz > hi) setPendingRetune2(freqHz);
+  }
+}
+
+function tuneToInput() {
+  const mhz = parseFloat(document.getElementById('freq2-input').value);
+  if (isFinite(mhz)) tuneTo(mhz * 1e6);
+}
+
+// Continuous Link-to-RX1 follow — mirrors RX1's own followRigFrequency():
+// the audio target always tracks exactly, but the SDR hardware capture
+// (and so the visible view) only gets re-centered once the frequency
+// actually drifts outside it, not on every single knob tick. tuneTo()
+// unconditionally sends set_panadapter_freq regardless of its
+// recenterView flag (that flag only ever governed the local view-crop
+// variable, not whether the hardware itself retuned) — using it here
+// was what made RX2's whole spectrum visibly slide on every tick instead
+// of just moving the tuning cursor within a stable view, the way RX1
+// does (Terry 2026-09-11).
+function followRx1(freqHz) {
+  freqHz = Math.round(freqHz);
+  everTuned = true;
+  audioTargetFreqHz = freqHz;
+  setAudioTarget();
+  if (latestFrame2) {
+    const margin = viewSpanHz / 2;
+    const lo = latestFrame2.centerFreqHz - latestFrame2.spanHz / 2 + margin;
+    const hi = latestFrame2.centerFreqHz + latestFrame2.spanHz / 2 - margin;
+    if ((freqHz < lo || freqHz > hi) && pendingRetuneHz2 === null) {
+      send2({ cmd: 'set_panadapter_freq', freq_hz: freqHz });
+      setPendingRetune2(freqHz);
+    }
+  } else {
+    send2({ cmd: 'set_panadapter_freq', freq_hz: freqHz });
+  }
+}
+
+// Mirrors RX1's own followRigFrequency()'s 2nd check (view-center recenter
+// once the tuned frequency drifts >80% of half-span off-center) — RX1 had
+// this unconditionally on every state tick, RX2 never did (Terry
+// 2026-09-11: scroll-wheel zoom on RX1 keeps the tuned point in view,
+// recentering if it drifts out; RX2 just let it scroll off-screen and
+// never came back). Runs on RX2's own audioTargetFreqHz regardless of
+// Link state — this is RX2 tracking what it's tuned to, same as RX1
+// always does, not a Link-specific behavior. followRx1()'s own hardware-
+// capture margin check (much wider, deliberately not this) still governs
+// whether the SDR itself retunes; this only moves the local view crop.
+function followOwnTuning2() {
+  if (audioTargetFreqHz === null || viewCenterHz === null) return;
+  const halfSpan = viewSpanHz / 2;
+  if (Math.abs(audioTargetFreqHz - viewCenterHz) > halfSpan * 0.8) {
+    viewCenterHz = audioTargetFreqHz;
+  }
+}
+
+function toggleLink() {
+  linkToRx1 = !linkToRx1;
+  document.getElementById('link2-btn').classList.toggle('active', linkToRx1);
+  document.getElementById('freq2-input').disabled = linkToRx1;
+  document.getElementById('tune2-btn').disabled = linkToRx1;
+  // Snap the view once when Link is first turned on (like a Copy), but
+  // continuous updates afterward (below, in connectWs2) pass
+  // recenterView=false — see applyRx1ToRx2's own comment for why.
+  if (linkToRx1 && lastRigFreqHz !== null) applyRx1ToRx2(true);
+}
+
+// Shared by continuous Link and the one-shot Copy button — applies RX1's
+// last-known frequency/mode/passband (tracked unconditionally in
+// connectWs2's state handler, so Copy has fresh values even if Link has
+// never been on) onto RX2 in a single set_audio_target send via tuneTo's
+// own setAudioTarget call, rather than the 3 separate sends that calling
+// setMode()/setWidth()/tuneTo() in sequence would each trigger.
+//
+// recenterView is forwarded to tuneTo() as-is: true (Copy, and Link's own
+// initial snap) recenters the view on the new frequency, matching a
+// manual Tune/Center click. false (Link's continuous per-knob-tick
+// follow) leaves the view alone unless the new frequency actually falls
+// outside it — RX1's own knob-follow behavior only moves its tuning
+// cursor within a stable view, not the whole spectrum window; Terry
+// caught Link doing the latter (2026-09-11: "RX2 slides the entire
+// spectrum over") before this was split out from a single hardcoded true.
+function applyRx1ToRx2(recenterView) {
+  if (lastRigFreqHz === null) return;
+  if (lastRigMode) {
+    mode2 = lastRigMode;
+    document.getElementById('mode2-USB').classList.toggle('active', mode2 === 'USB');
+    document.getElementById('mode2-LSB').classList.toggle('active', mode2 === 'LSB');
+    document.getElementById('badge2-mode').textContent = mode2;
+  }
+  if (lastRigPassband) {
+    bandwidth2Hz = lastRigPassband;
+    document.getElementById('width2-slider').value = bandwidth2Hz;
+    document.getElementById('width2-val').textContent = bandwidth2Hz + 'Hz';
+  }
+  // Match RX1's actual current view (span AND center) too, one-shot only
+  // (Terry 2026-09-11: RX2 was stuck at its own default 15kHz span even
+  // when RX1 was zoomed out to the whole band) — not during continuous
+  // Link-follow, so zooming RX2 in for a closer look while linked in
+  // frequency doesn't get yanked back out on the next knob tick.
+  //
+  // Deliberately NOT tuneTo(lastRigFreqHz, true): that recenters on the
+  // dial/audio-target frequency, which is wrong whenever RX1's own view
+  // isn't centered on its own dial frequency — e.g. right after RX1's
+  // Whole Band, which centers on the band midpoint instead (Terry
+  // 2026-09-11: copying span alone while recentering on the dial
+  // produced 13.9947-14.3487 instead of RX1's clean 14.000-14.350). The
+  // view (hardware capture window) and the audio target (what's actually
+  // being demodulated) are independent, same as RX1's own Whole Band vs
+  // Tune — so copy them independently too.
+  if (recenterView) {
+    const rx1Center = Panadapter.getViewCenterHz();
+    setViewSpan(Panadapter.getViewSpanHz());
+    if (rx1Center !== null) {
+      viewCenterHz = rx1Center;
+      send2({ cmd: 'set_panadapter_freq', freq_hz: rx1Center });
+      setPendingRetune2(rx1Center);
+    }
+    everTuned = true;
+    audioTargetFreqHz = lastRigFreqHz;
+    setAudioTarget();
+  } else {
+    followRx1(lastRigFreqHz);
+  }
+}
+
+function copyFromRx1() { applyRx1ToRx2(true); }
+
+function recenterView() { if (audioTargetFreqHz !== null) viewCenterHz = audioTargetFreqHz; }
+
+function snapToWholeBand() {
+  // Mirrors Panadapter's own snapToWholeBand: moves the wideband SDR
+  // CAPTURE window to cover the whole band, purely for viewing — does
+  // NOT touch audioTargetFreqHz/set_audio_target, since that would yank
+  // whatever's actually being listened to over to the band's midpoint
+  // (usually empty) rather than just widening what's visible.
+  if (audioTargetFreqHz === null) return;
+  const band = bandForFreq2(audioTargetFreqHz);
+  const edges = band && BAND_EDGES_HZ2[band];
+  if (!edges) return;
+  const [lo, hi] = edges;
+  setViewSpan(Math.min(hi - lo, SPAN_MAX_HZ));
+  viewCenterHz = (lo + hi) / 2;
+  send2({ cmd: 'set_panadapter_freq', freq_hz: viewCenterHz });
+  setPendingRetune2(viewCenterHz);
+}
+
+function setAudioTarget() {
+  if (audioMuted2) return;
+  send2({ cmd: 'set_audio_target', freq_hz: audioTargetFreqHz, mode: mode2, bandwidth_hz: bandwidth2Hz });
+}
+
+function setMode(m) {
+  mode2 = m;
+  document.getElementById('mode2-USB').classList.toggle('active', m === 'USB');
+  document.getElementById('mode2-LSB').classList.toggle('active', m === 'LSB');
+  document.getElementById('badge2-mode').textContent = m;
+  setAudioTarget();
+}
+
+let cursorFreqHz2 = null;
+function attachHoverCrosshair2(el) {
+  el.addEventListener('mousemove', evt => {
+    if (viewCenterHz === null) return;
+    const rect = el.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    cursorFreqHz2 = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
+  });
+}
+
+function clampViewToCapture2() {
+  if (!latestFrame2 || viewCenterHz === null) return;
+  const lo = latestFrame2.centerFreqHz - latestFrame2.spanHz / 2 + viewSpanHz / 2;
+  const hi = latestFrame2.centerFreqHz + latestFrame2.spanHz / 2 - viewSpanHz / 2;
+  if (lo <= hi) viewCenterHz = Math.max(lo, Math.min(hi, viewCenterHz));
+  else viewCenterHz = latestFrame2.centerFreqHz;
+}
+
+function isViewWithinCapture2(frame) {
+  const capLo = frame.centerFreqHz - frame.spanHz / 2, capHi = frame.centerFreqHz + frame.spanHz / 2;
+  const viewLo = viewCenterHz - viewSpanHz / 2, viewHi = viewCenterHz + viewSpanHz / 2;
+  return viewHi > capLo && viewLo < capHi;
+}
+
+// ── Spectrum/waterfall rendering — same algorithms as Panadapter's,
+// reimplemented against this module's own state (see file-header note). ──
+const SPATIAL_SMOOTH_MAX_HZ = 90;
+const SPATIAL_SMOOTH_MAX_HALF_BINS = 8;
+
+function cropToView2(frame, outPoints) {
+  const n = frame.data.length;
+  const binHz = frame.spanHz / n;
+  const fullLoHz = frame.centerFreqHz - frame.spanHz / 2;
+  const viewLoHz = viewCenterHz - viewSpanHz / 2;
+  const viewHiHz = viewCenterHz + viewSpanHz / 2;
+  let startBin = Math.floor((viewLoHz - fullLoHz) / binHz);
+  let endBin = Math.ceil((viewHiHz - fullLoHz) / binHz);
+  startBin = Math.max(0, Math.min(n - 1, startBin));
+  endBin = Math.max(startBin + 1, Math.min(n, endBin));
+  const span = endBin - startBin;
+  const halfWin = Math.min(SPATIAL_SMOOTH_MAX_HALF_BINS, Math.round(spatialSmoothHz2 / binHz));
+  const linPow = new Float64Array(span);
+  for (let b = 0; b < span; b++) linPow[b] = Math.pow(10, frame.data[startBin + b] / 10);
+  const prefix = new Float64Array(span + 1);
+  for (let b = 0; b < span; b++) prefix[b + 1] = prefix[b] + linPow[b];
+  const out = new Float32Array(outPoints);
+  for (let i = 0; i < outPoints; i++) {
+    const centerBin = Math.min(span - 1, Math.floor((i / outPoints) * span));
+    const lo = Math.max(0, centerBin - halfWin), hi = Math.min(span - 1, centerBin + halfWin);
+    const avgPow = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1);
+    out[i] = 10 * Math.log10(avgPow);
+  }
+  return out;
+}
+
+let canvas2, ctx2;
+let floorDb2 = -110, ceilDb2 = -40;
+function updateDbRange2(data) {
+  const sorted = Array.from(data).sort((a, b) => a - b);
+  const p10 = sorted[Math.floor(0.10 * (sorted.length - 1))];
+  const p999 = sorted[Math.floor(0.999 * (sorted.length - 1))];
+  if (!isFinite(p10) || !isFinite(p999)) return;
+  const alpha = 0.05;
+  floorDb2 += ((p10 - 3) - floorDb2) * alpha;
+  ceilDb2 += ((p999 + 5) - ceilDb2) * alpha;
+}
+let autoScale2 = true, manualFloorDb2 = -90, manualRangeDb2 = 80;
+function effectiveFloorCeil2() { return autoScale2 ? [floorDb2, ceilDb2] : [manualFloorDb2, manualFloorDb2 + manualRangeDb2]; }
+function onAutoScaleToggle(checked) {
+  autoScale2 = checked;
+  document.getElementById('floor2-slider').disabled = checked;
+  document.getElementById('gain2-slider').disabled = checked;
+}
+function onFloorSlider(v) { manualFloorDb2 = parseFloat(v); document.getElementById('floor2-val').textContent = manualFloorDb2 + 'dB'; }
+function onGainSlider(v) { const g = parseFloat(v); manualRangeDb2 = 150 - (g / 100) * 140; document.getElementById('gain2-val').textContent = g + '%'; }
+
+function drawTargetMarker2(c, w, h, dpr) {
+  if (audioTargetFreqHz === null || viewCenterHz === null) return;
+  const x = ((audioTargetFreqHz - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+  if (x < 0 || x > w) return;
+  c.save();
+  c.strokeStyle = 'rgba(138, 147, 217, 0.85)';
+  c.lineWidth = 1.5 * dpr;
+  c.setLineDash([4, 4]);
+  c.beginPath(); c.moveTo(x, 0); c.lineTo(x, h); c.stroke();
+  c.setLineDash([]);
+  const label = (audioTargetFreqHz / 1e6).toFixed(4) + ' MHz';
+  c.font = `${11 * dpr}px monospace`;
+  c.fillStyle = '#8A93D9';
+  const labelW = c.measureText(label).width;
+  const labelX = (x + labelW + 6 > w) ? x - labelW - 6 : x + 6;
+  c.fillText(label, labelX, h - 4 * dpr);
+  c.restore();
+}
+
+function drawCursorCrosshair2(c, w, h, dpr) {
+  if (cursorFreqHz2 === null || viewCenterHz === null) return;
+  const cx = ((cursorFreqHz2 - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+  if (cx < 0 || cx > w) return;
+  c.save();
+  c.strokeStyle = 'rgba(230, 234, 240, 0.4)';
+  c.lineWidth = 1;
+  c.beginPath(); c.moveTo(cx, 0); c.lineTo(cx, h); c.stroke();
+  const label = (cursorFreqHz2 / 1e6).toFixed(4) + ' MHz';
+  c.font = `${11 * dpr}px monospace`;
+  c.fillStyle = '#5C6675';
+  const labelW = c.measureText(label).width;
+  const labelX = (cx + labelW + 6 > w) ? cx - labelW - 6 : cx + 6;
+  c.fillText(label, labelX, 12 * dpr);
+  c.restore();
+}
+
+// RX1's hero readout gets a pre-formatted rig.freq_display string from the
+// server; RX2 has no rig, so this formats audioTargetFreqHz client-side to
+// match the same "  0.000.000"-style grouping (dot every 3 digits from the
+// right, first group space-padded to 2 chars).
+function formatFreqHz2(hz) {
+  const str = Math.max(0, Math.round(hz)).toString();
+  const groups = [];
+  let rem = str;
+  while (rem.length > 3) { groups.unshift(rem.slice(-3)); rem = rem.slice(0, -3); }
+  groups.unshift(rem);
+  let out = groups.join('.');
+  if (groups[0].length < 2) out = ' ' + out;
+  return out;
+}
+
+function drawSpectrum2() {
+  clearStalePendingRetune2();
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas2.getBoundingClientRect();
+  const w = Math.max(1, rect.width * dpr), h = Math.max(1, rect.height * dpr);
+  if (canvas2.width !== w || canvas2.height !== h) { canvas2.width = w; canvas2.height = h; }
+  ctx2.clearRect(0, 0, w, h);
+
+  if (audioTargetFreqHz !== null) {
+    document.getElementById('vfo2').textContent = formatFreqHz2(audioTargetFreqHz);
+  }
+
+  if (latestFrame2 && viewCenterHz !== null) {
+    document.getElementById('axis2-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);
+    document.getElementById('axis2-hi').textContent = ((viewCenterHz + viewSpanHz / 2) / 1e6).toFixed(4);
+    if (document.activeElement !== document.getElementById('freq2-input')) {
+      document.getElementById('freq2-input').value = (audioTargetFreqHz / 1e6).toFixed(6);
+    }
+
+    const points = cropToView2(latestFrame2, Math.round(w));
+    if (autoScale2) updateDbRange2(points);
+    const [floor, ceil] = effectiveFloorCeil2();
+    const drawPoints = applySpectrumSmoothing2(points);
+    const xs = new Float32Array(drawPoints.length), ys = new Float32Array(drawPoints.length);
+    for (let i = 0; i < drawPoints.length; i++) {
+      xs[i] = (i / (drawPoints.length - 1)) * w;
+      const pct = Math.max(0, Math.min(1, (drawPoints[i] - floor) / (ceil - floor)));
+      ys[i] = h - pct * h;
+    }
+    ctx2.beginPath();
+    ctx2.moveTo(xs[0], ys[0]);
+    for (let i = 1; i < drawPoints.length; i++) ctx2.lineTo(xs[i], ys[i]);
+    ctx2.lineTo(xs[drawPoints.length - 1], h);
+    ctx2.lineTo(xs[0], h);
+    ctx2.closePath();
+    ctx2.fillStyle = 'rgba(103, 208, 240, 0.25)';
+    ctx2.fill();
+    ctx2.beginPath();
+    ctx2.moveTo(xs[0], ys[0]);
+    for (let i = 1; i < drawPoints.length; i++) ctx2.lineTo(xs[i], ys[i]);
+    ctx2.strokeStyle = '#67D0F0';
+    ctx2.lineWidth = 1.5 * dpr;
+    ctx2.stroke();
+    drawTargetMarker2(ctx2, w, h, dpr);
+    drawCursorCrosshair2(ctx2, w, h, dpr);
+  }
+
+  drawWaterfallOverlay2();
+  requestAnimationFrame(drawSpectrum2);
+}
+
+let wfCanvas2, wfCtx2, wfOverlayCanvas2, wfOverlayCtx2;
+// Local copy — see s9CalDb2's comment above for why (Panadapter's
+// PALETTES is private to that module's closure, not page-global).
+const PALETTES2 = {
+  default: [ [0.00,0,0,0], [0.20,0,0,130], [0.40,0,180,200], [0.60,0,220,60], [0.80,255,220,0], [1.00,255,30,30] ],
+  linrad:  [ [0.00,0,0,0], [0.15,0,0,80], [0.35,0,0,255], [0.55,0,255,255], [0.70,0,255,0], [0.85,255,255,0], [0.95,255,0,0], [1.00,255,255,255] ],
+  grayscale: [ [0.00,0,0,0], [1.00,255,255,255] ],
+  hot: [ [0.00,0,0,0], [0.40,200,0,0], [0.70,255,160,0], [0.85,255,240,0], [1.00,255,255,255] ],
+  gqrx: [ [0.00,0,0,32], [0.25,0,40,120], [0.50,0,150,200], [0.70,100,210,100], [0.85,240,220,0], [1.00,255,80,30] ],
+};
+let currentPalette2 = 'default';
+function onPaletteSelect(v) { currentPalette2 = v; }
+let wfContrast2 = 1.5;
+let smoothedSpectrum2 = null;
+let specAvgAlpha2 = 0.80 * 0.95;
+let spatialSmoothHz2 = 0.80 * SPATIAL_SMOOTH_MAX_HZ;
+function onAvgSlider(v) {
+  const frac = parseFloat(v) / 100;
+  specAvgAlpha2 = frac * 0.95;
+  spatialSmoothHz2 = frac * SPATIAL_SMOOTH_MAX_HZ;
+  document.getElementById('avg2-val').textContent = v + '%';
+}
+function applySpectrumSmoothing2(points) {
+  if (specAvgAlpha2 < 0.01) return points;
+  if (!smoothedSpectrum2 || smoothedSpectrum2.length !== points.length) {
+    smoothedSpectrum2 = new Float32Array(points);
+    return smoothedSpectrum2;
+  }
+  const fresh = 1 - specAvgAlpha2;
+  for (let i = 0; i < points.length; i++) smoothedSpectrum2[i] = fresh * points[i] + specAvgAlpha2 * smoothedSpectrum2[i];
+  return smoothedSpectrum2;
+}
+function dbToColor2(db, floor, ceil) {
+  let pct = Math.max(0, Math.min(1, (db - floor) / (ceil - floor)));
+  pct = Math.pow(pct, wfContrast2);
+  const stops = PALETTES2[currentPalette2] || PALETTES2.default;
+  for (let i = 1; i < stops.length; i++) {
+    if (pct <= stops[i][0]) {
+      const [p0, r0, g0, b0] = stops[i - 1], [p1, r1, g1, b1] = stops[i];
+      const t = (pct - p0) / (p1 - p0 || 1);
+      return [r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t];
+    }
+  }
+  return stops[stops.length - 1].slice(1);
+}
+function ensureWfCanvasSize2() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = wfCanvas2.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * dpr)), h = Math.max(1, Math.round(rect.height * dpr));
+  if (wfCanvas2.width !== w || wfCanvas2.height !== h) { wfCanvas2.width = w; wfCanvas2.height = h; }
+  return { w, h };
+}
+function drawWaterfallOverlay2() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = wfOverlayCanvas2.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * dpr)), h = Math.max(1, Math.round(rect.height * dpr));
+  if (wfOverlayCanvas2.width !== w || wfOverlayCanvas2.height !== h) { wfOverlayCanvas2.width = w; wfOverlayCanvas2.height = h; }
+  wfOverlayCtx2.clearRect(0, 0, w, h);
+  drawTargetMarker2(wfOverlayCtx2, w, h, dpr);
+}
+function pushWaterfallRow2(frame) {
+  const { w, h } = ensureWfCanvasSize2();
+  if (h < 2) return;
+  const img = wfCtx2.getImageData(0, 0, w, h - 1);
+  wfCtx2.putImageData(img, 0, 1);
+  const points = cropToView2(frame, w);
+  const [floor, ceil] = effectiveFloorCeil2();
+  const row = wfCtx2.createImageData(w, 1);
+  for (let x = 0; x < w; x++) {
+    const [r, g, b] = dbToColor2(points[x], floor, ceil);
+    row.data[x * 4 + 0] = r; row.data[x * 4 + 1] = g; row.data[x * 4 + 2] = b; row.data[x * 4 + 3] = 255;
+  }
+  wfCtx2.putImageData(row, 0, 0);
+}
+
+// ── Audio ───────────────────────────────────────────────────────────────
+let audioCtx2 = null, audioWs2 = null, audioWorkletNode2 = null, muteGain2 = null;
+let audioWorkletReady2 = null, audioMuted2 = true, _txSilenced2 = false, _txUnmuteTimer2 = null;
+
+function ensureAudioWorklet2() {
+  if (!audioCtx2) audioCtx2 = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioWorkletReady2) {
+    audioWorkletReady2 = audioCtx2.audioWorklet.addModule('/audio-worklet.js').then(() => {
+      audioWorkletNode2 = new AudioWorkletNode(audioCtx2, 'pcm-stream-processor');
+      muteGain2 = audioCtx2.createGain();
+      muteGain2.gain.value = 1;
+      // Panned hard right so RX1 (left, default center-ish via its own
+      // element's implicit destination routing) and RX2 read as distinct
+      // "dual watch" sources by ear — see project memory on the RSPduo
+      // migration's dual-watch stereo plan.
+      const panner = audioCtx2.createStereoPanner ? audioCtx2.createStereoPanner() : null;
+      audioWorkletNode2.connect(muteGain2);
+      if (panner) { panner.pan.value = 1; muteGain2.connect(panner); panner.connect(audioCtx2.destination); }
+      else { muteGain2.connect(audioCtx2.destination); }
+    });
+  }
+  return audioWorkletReady2;
+}
+
+function ensureAudioWs2() {
+  if (audioWs2 && audioWs2.readyState <= WebSocket.OPEN) return;
+  audioWs2 = new WebSocket(`ws://${location.host}/ws/audio_b`);
+  audioWs2.binaryType = 'arraybuffer';
+  audioWs2.onclose = () => { if (!audioMuted2 && !_txSilenced2) setTimeout(ensureAudioWs2, 1000); };
+  audioWs2.onmessage = evt => {
+    if (!audioWorkletNode2 || _txSilenced2) return;
+    const pcm16 = new Int16Array(evt.data);
+    const f32 = new Float32Array(pcm16.length);
+    for (let i = 0; i < pcm16.length; i++) f32[i] = pcm16[i] / 32768;
+    audioWorkletNode2.port.postMessage(f32);
+  };
+}
+
+function txSilenceStart() {
+  if (_txUnmuteTimer2) { clearTimeout(_txUnmuteTimer2); _txUnmuteTimer2 = null; }
+  if (muteGain2) muteGain2.gain.value = 0;
+  if (_txSilenced2) return;
+  _txSilenced2 = true;
+  if (audioWs2) { audioWs2.close(); audioWs2 = null; }
+  if (audioWorkletNode2) audioWorkletNode2.port.postMessage({ cmd: 'flush' });
+}
+function txSilenceEnd() {
+  if (!_txSilenced2 || _txUnmuteTimer2) return;
+  _txUnmuteTimer2 = setTimeout(() => {
+    _txSilenced2 = false;
+    _txUnmuteTimer2 = null;
+    if (muteGain2) muteGain2.gain.value = 1;
+    if (audioWorkletNode2) audioWorkletNode2.port.postMessage({ cmd: 'flush' });
+    if (!audioMuted2) ensureAudioWs2();
+  }, 500);
+}
+
+function enableAudio() {
+  audioMuted2 = false;
+  document.getElementById('mute2-btn').classList.add('active');
+  ensureAudioWorklet2().then(() => {
+    if (audioCtx2 && audioCtx2.state === 'suspended') audioCtx2.resume();
+    ensureAudioWs2();
+    send2({ cmd: 'set_audio_enabled', enabled: true });
+    setAudioTarget();
+  });
+}
+function disableAudio() {
+  audioMuted2 = true;
+  document.getElementById('mute2-btn').classList.remove('active');
+  send2({ cmd: 'set_audio_enabled', enabled: false });
+}
+function toggleMute() { if (audioMuted2) enableAudio(); else disableAudio(); }
+
+// ── RX2 DSP controls (mode/filter/AGC/NR/gain/EQ) — all purely SDR-side,
+// no rig involved, so each just sends its command with channel:'B'. ─────
+function setNR(val) { send2({ cmd: 'set_audio_nr', on: _nr2On, level: parseInt(val, 10) }); }
+let _nr2On = false, _eq2On = true;
+function toggleNR() {
+  _nr2On = !_nr2On;
+  send2({ cmd: 'set_audio_nr', on: _nr2On });
+  document.getElementById('nr2-btn').classList.toggle('active', _nr2On);
+}
+function setAGC(value) {
+  send2({ cmd: 'set_agc', value });
+  document.getElementById('agc2-off').classList.toggle('active', value === 0);
+  document.getElementById('agc2-fast').classList.toggle('active', value === 2);
+  document.getElementById('agc2-slow').classList.toggle('active', value === 3);
+}
+function setRxVolume(v) { send2({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 }); }
+function setRfGain(v) { send2({ cmd: 'set_rf_gain', pct: parseFloat(v) }); }
+function toggleEQ() {
+  _eq2On = !_eq2On;
+  document.getElementById('eq2-btn').classList.toggle('active', _eq2On);
+  setEQ();
+}
+function setEQ() {
+  send2({
+    cmd: 'set_eq', enabled: _eq2On,
+    bass_db: parseFloat(document.getElementById('eq2-bass-slider').value),
+    mid_db: parseFloat(document.getElementById('eq2-mid-slider').value),
+    treble_db: parseFloat(document.getElementById('eq2-treble-slider').value),
+  });
+}
+
+function setWidth(val) {
+  bandwidth2Hz = parseInt(val, 10);
+  document.getElementById('width2-val').textContent = bandwidth2Hz + 'Hz';
+  setAudioTarget();
+}
+
+// Mirrors RigControl's FILTER_RANGES narDefault/widDefault values — not
+// its VALID_WIDTHS hardware-snap table, which is the FT-991A's own CAT
+// filter steps and has no meaning for RX2's continuous SDR-side filter
+// (its slider's step=50 is all the granularity it has or needs).
+// Duplicated rather than shared, same cross-script-closure reason as
+// PALETTES2/s9CalDb2 — see project memory on the RSPduo migration.
+// Added for real NARROW/WIDE feature parity with RX1 (Terry 2026-09-11
+// noticed the missing preset row made the two Filter boxes different
+// heights at some widths) rather than a blank spacer — RX2 gets an
+// actually useful control out of the fix, not just matched padding.
+const FILTER_RANGES2 = {
+  USB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 3000 },
+  LSB:    { NAR: [200, 1800],  WID: [1800, 3000], narDefault: 1800, widDefault: 3000 },
+  CW:     { NAR: [50, 500],    WID: [500, 2400],  narDefault: 300,  widDefault: 1200 },
+  AM:     { NAR: [2500, 6000], WID: [6000, 9000], narDefault: 6000, widDefault: 9000 },
+  PKTUSB: { NAR: [50, 1500],   WID: [1500, 3000], narDefault: 500,  widDefault: 3000 },
+  FM:     null,
+};
+
+let _widthMode2 = 'WID';
+
+function setFilterWidthMode(which) {
+  const range = FILTER_RANGES2[mode2] || FILTER_RANGES2.USB;
+  if (!range) return;
+  _widthMode2 = which;
+  document.getElementById('filt2-NAR').className = 'btn' + (which === 'NAR' ? ' active' : '');
+  document.getElementById('filt2-WID').className = 'btn' + (which === 'WID' ? ' active' : '');
+  const [lo, hi] = range[which];
+  const slider = document.getElementById('width2-slider');
+  slider.min = lo;
+  slider.max = hi;
+  const def = which === 'NAR' ? range.narDefault : range.widDefault;
+  slider.value = def;
+  setWidth(def);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────
+let dragging2 = false, dragMoved2 = false, dragStartX2 = 0, dragStartCenter2 = 0;
+let spectrumWrap2;
+
+function init() {
+  canvas2 = document.getElementById('spectrum2-canvas');
+  ctx2 = canvas2.getContext('2d');
+  wfCanvas2 = document.getElementById('waterfall2-canvas');
+  wfCtx2 = wfCanvas2.getContext('2d');
+  wfOverlayCanvas2 = document.getElementById('waterfall2-overlay-canvas');
+  wfOverlayCtx2 = wfOverlayCanvas2.getContext('2d');
+  spectrumWrap2 = document.getElementById('spectrum2-wrap');
+
+  // Reflect linkToRx1's default-on state (see its own declaration
+  // comment) — same UI sync toggleLink() applies on a manual click.
+  document.getElementById('link2-btn').classList.toggle('active', linkToRx1);
+  document.getElementById('freq2-input').disabled = linkToRx1;
+  document.getElementById('tune2-btn').disabled = linkToRx1;
+
+  spectrumWrap2.addEventListener('wheel', evt => {
+    evt.preventDefault();
+    const factor = evt.deltaY > 0 ? 1.15 : (1 / 1.15);
+    setViewSpan(viewSpanHz * factor);
+  }, { passive: false });
+
+  attachHoverCrosshair2(spectrumWrap2);
+  attachHoverCrosshair2(document.getElementById('waterfall2-wrap'));
+
+  spectrumWrap2.addEventListener('mousedown', evt => {
+    if (evt.button !== 0) return;
+    dragging2 = true; dragMoved2 = false; dragStartX2 = evt.clientX; dragStartCenter2 = viewCenterHz || 0;
+    spectrumWrap2.classList.add('dragging');
+  });
+  window.addEventListener('mouseup', evt => {
+    if (dragging2 && !dragMoved2 && latestFrame2 && viewCenterHz !== null) {
+      const rect = spectrumWrap2.getBoundingClientRect();
+      const x = evt.clientX - rect.left;
+      const freqHz = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
+      tuneTo(freqHz, false);
+    }
+    dragging2 = false;
+    spectrumWrap2.classList.remove('dragging');
+  });
+  window.addEventListener('mousemove', evt => {
+    if (!dragging2 || !latestFrame2) return;
+    const dx = evt.clientX - dragStartX2;
+    if (Math.abs(dx) > 3) dragMoved2 = true;
+    if (!dragMoved2) return;
+    const rect = spectrumWrap2.getBoundingClientRect();
+    const hzPerPx = viewSpanHz / rect.width;
+    viewCenterHz = dragStartCenter2 - dx * hzPerPx;
+    clampViewToCapture2();
+  });
+
+  connectWs2();
+  connectSpectrumWs2();
+  updateSpanLabel2();
+  requestAnimationFrame(drawSpectrum2);
+  enableAudio();
+
+  // Without this, audioCtx2 can start (and silently stay) suspended
+  // forever — enableAudio() runs at page load, before any real user
+  // gesture, and browsers block AudioContext.resume() from actually
+  // taking effect until one occurs. Channel A's Panadapter has this same
+  // listener (its own init(), same pattern) which is why RX1 audio
+  // recovers on the operator's first click/keypress anywhere on the page
+  // but RX2 previously never did — confirmed missing here, not a guess,
+  // after Terry reported "no sound on the right side" 2026-09-11.
+  ['pointerdown', 'keydown'].forEach(evt =>
+    window.addEventListener(evt, () => {
+      if (audioCtx2 && audioCtx2.state === 'suspended') audioCtx2.resume();
+    }, { capture: true }));
+
+  ['span2-slider', 'floor2-slider', 'gain2-slider', 'avg2-slider'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      if (el.disabled) return;
+      const step = parseFloat(el.step) || 1;
+      const dir = e.deltaY < 0 ? 1 : -1;
+      el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max), parseFloat(el.value) + step * dir));
+      el.dispatchEvent(new Event('input'));
+    }, { passive: false });
+  });
+
+  // RigControl has its own addWheelToSlider for RX1's AF/RF Gain, Filter
+  // width, DNR and EQ sliders (rx-vol-slider, rf-gain-slider, etc.) — RX2
+  // never got the equivalent (Terry 2026-09-11: "AF GAIN and RF GAIN
+  // sliders of RX2 do NOT move when rolling the mouse wheel like most
+  // sliders do"). Local copy rather than reaching into RigControl's
+  // closure, same cross-script-scoping reason as PALETTES2/s9CalDb2 — see
+  // project memory. Also drives RigControl.setDragging so a wheel nudge
+  // gets the same "don't let the next periodic state broadcast stomp this
+  // before the debounced send lands" protection the mouse-drag path gets.
+  [
+    ['width2-slider',    v => setWidth(v),     'width2'],
+    ['nr2-slider',       v => setNR(v),        'nr2'],
+    ['rx-vol2-slider',   v => setRxVolume(v),  'rxVol2'],
+    ['rf-gain2-slider',  v => setRfGain(v),    'rfGain2'],
+    ['eq2-bass-slider',  () => setEQ(),        'eq2'],
+    ['eq2-mid-slider',   () => setEQ(),        'eq2'],
+    ['eq2-treble-slider',() => setEQ(),        'eq2'],
+  ].forEach(([id, sendFn, key]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      if (el.disabled) return;
+      const step = parseFloat(el.step) || 1;
+      const dir = e.deltaY < 0 ? 1 : -1;
+      el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
+                          parseFloat(el.value) + step * dir));
+      el.dispatchEvent(new Event('input'));
+      RigControl.setDragging(key, true);
+      sendFn(el.value);
+      clearTimeout(el._wheelTimer);
+      el._wheelTimer = setTimeout(() => RigControl.setDragging(key, false), 350);
+    }, { passive: false });
+  });
+}
+
+return {
+  init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1,
+  onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect,
+  setMode, setAudioTarget, setWidth, setFilterWidthMode, toggleNR, setNR, setAGC, setRxVolume, setRfGain, toggleEQ, setEQ,
+};
+
+})();
+
+Panadapter2.init();
 </script>
 
 <!-- ══════════════════════════════════════════════════════════════════════
@@ -1872,6 +3275,43 @@ function smeterLabel(strengthDb) {
   }
   const s = Math.max(0, Math.min(9, 9 + Math.floor(strengthDb / 6)));
   return `S${s}`;
+}
+
+// Noise floor — samples the same rig.sdr_strength_db feed already driving
+// the S-meter (raw dBFS, not S9-calibrated) over a fixed window and reports
+// the minimum rather than an average: a straight average gets pulled up by
+// any signal passing through the passband during the sample window, but the
+// quietest reading in a few seconds of RX is a much better noise-floor
+// proxy. Entirely client-side — rig.sdr_strength_db already arrives on
+// every 'state' broadcast, no new server plumbing needed.
+const NOISE_MEASURE_MS = 3000;
+let _noiseMeasuring = false;
+let _noiseSamples = [];
+let _noiseBand = null;
+
+function measureNoise() {
+  if (_noiseMeasuring) return;
+  _noiseMeasuring = true;
+  _noiseSamples = [];
+  _noiseBand = null;
+  const btn = document.getElementById('noise-measure-btn');
+  const out = document.getElementById('noise-floor-val');
+  btn.classList.add('active');
+  out.textContent = 'measuring…';
+  setTimeout(() => {
+    _noiseMeasuring = false;
+    btn.classList.remove('active');
+    if (_noiseSamples.length === 0) {
+      out.textContent = 'no RX samples — mid-TX or SDR unavailable?';
+      return;
+    }
+    const min = Math.min.apply(null, _noiseSamples);
+    const sorted = _noiseSamples.slice().sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const bandTxt = _noiseBand ? ` on ${_noiseBand}` : '';
+    out.textContent =
+      `floor ${min.toFixed(1)} dBFS (median ${median.toFixed(1)}, n=${_noiseSamples.length})${bandTxt}`;
+  }, NOISE_MEASURE_MS);
 }
 
 function connectWs() {
@@ -2016,6 +3456,9 @@ function updateUI(s) {
   StatusBar.setDot('rig', !!rig.connected);
   StatusBar.setDot('amp', !!s.amp_connected);
 
+  document.querySelector('.panel-bandamp')
+    .classList.toggle('amp-bypassed', s.amp_in_path === false);
+
   const vfoEl = document.getElementById('vfo');
   vfoEl.textContent = rig.freq_display || '  0.000.000';
   vfoEl.className = 'freq-readout' + (rig.ptt ? ' tx' : '');
@@ -2041,6 +3484,11 @@ function updateUI(s) {
   // rig.is_digital. DT GAIN still only makes sense to sync while actually
   // in a digital mode, so that part of the gate stays.
   const isDigitalMode = !!rig.is_digital;
+  if (rig.digital_source_channel) {
+    document.getElementById('digisrc-A').classList.toggle('active', rig.digital_source_channel === 'A');
+    document.getElementById('digisrc-B').classList.toggle('active', rig.digital_source_channel === 'B');
+  }
+
   if (isDigitalMode && !isDragging('dtGain') && rig.dt_gain != null) {
     document.getElementById('dt-gain-slider').value = rig.dt_gain;
     document.getElementById('dt-gain-val').textContent = rig.dt_gain;
@@ -2058,6 +3506,10 @@ function updateUI(s) {
 
   if (!isTx && rig.sdr_strength_db !== undefined && rig.sdr_strength_db !== null) {
     const dbFs = rig.sdr_strength_db;
+    if (_noiseMeasuring) {
+      _noiseSamples.push(dbFs);
+      _noiseBand = rig.band || _noiseBand;
+    }
     const strengthDb = dbFs - s9CalDb;
     const pct = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100));
     const smeterBar = document.getElementById('smeter-bar');
@@ -2140,6 +3592,11 @@ function updateUI(s) {
     const volPct = Math.round(rig.sdr_rx_volume * 100);
     document.getElementById('rx-vol-slider').value = volPct;
     document.getElementById('rx-vol-val').textContent = volPct + '%';
+  }
+  if (!isDragging('rfGain') && rig.sdr_rf_gain_pct !== undefined) {
+    const gainPct = Math.round(rig.sdr_rf_gain_pct);
+    document.getElementById('rf-gain-slider').value = gainPct;
+    document.getElementById('rf-gain-val').textContent = gainPct + '%';
   }
 
   [1, 2, 3, 4].forEach(n => {
@@ -2255,6 +3712,21 @@ function updateAmp(s) {
   const sev = s.fault_severity || 'OK';
   sevEl.textContent = sev;
   sevEl.className = 'fault-severity ' + (sev === 'OK' ? 'ok' : sev === 'WARNING' ? 'warning' : 'fault');
+
+  // Collapsing Fault Status must never risk hiding a real fault — force it
+  // open the moment severity leaves OK, regardless of the stored collapse
+  // preference. Once it clears back to OK, restore whatever the operator
+  // last chose (defaulting to collapsed) rather than leaving it forced open.
+  const faultBox = document.getElementById('box-fault-status');
+  if (faultBox) {
+    if (sev !== 'OK') {
+      faultBox.classList.remove('collapsed');
+    } else {
+      let stored = null;
+      try { stored = localStorage.getItem('sectionCollapsed:box-fault-status'); } catch (e) {}
+      faultBox.classList.toggle('collapsed', stored !== '0');
+    }
+  }
 
   const faultMsgs = document.getElementById('fault-messages');
   const all = [
@@ -2452,6 +3924,7 @@ function _applyDNF(on) {
 
 function setAGC(value) { send({ cmd: 'set_agc', value }); }
 function setRxVolume(v) { send({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 }); }
+function setRfGain(v) { send({ cmd: 'set_rf_gain', pct: parseFloat(v) }); }
 function setSsbTxBpf(value) { send({ cmd: 'set_ssb_tx_bpf', value }); }
 
 function toggleEQ() { _eqOn = !_eqOn; setEQ(); _applyEQ(_eqOn); }
@@ -2470,6 +3943,12 @@ function setEQ() {
 }
 
 function setDtGain(val) { send({ cmd: 'set_dt_gain', value: parseInt(val, 10) }); }
+
+function setDigitalSource(channel) {
+  send({ cmd: 'set_digital_source', channel });
+  document.getElementById('digisrc-A').classList.toggle('active', channel === 'A');
+  document.getElementById('digisrc-B').classList.toggle('active', channel === 'B');
+}
 
 function updateDSP(s) {
   if (s.nb_on !== undefined && s.nb_on !== _nbOn) { _nbOn = !!s.nb_on; _applyNB(_nbOn); }
@@ -2532,6 +4011,7 @@ function init() {
   addWheelToSlider('width-slider',    v => setWidth(v),    'width');
   addWheelToSlider('nr-slider',       v => setNR(v),        'nr');
   addWheelToSlider('rx-vol-slider',   v => setRxVolume(v),  'rxVol');
+  addWheelToSlider('rf-gain-slider',  v => setRfGain(v),    'rfGain');
   addWheelToSlider('eq-bass-slider',  () => setEQ(),         'eq');
   addWheelToSlider('eq-mid-slider',   () => setEQ(),         'eq');
   addWheelToSlider('eq-treble-slider',() => setEQ(),         'eq');
@@ -2542,19 +4022,140 @@ function init() {
 }
 
 return {
-  init, setDragging, sliderRelease, onS9CalInput,
+  init, setDragging, sliderRelease, onS9CalInput, measureNoise,
   setBand, setMode, setFilterWidthMode, onWidthSlider, setWidth,
   setPower, setPreamp, setAtt, setOpMode, setMicGain, setComp,
   nextAntenna, inhibitTx, allowTx,
-  toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume, setSsbTxBpf,
-  toggleEQ, setEQ, setDtGain,
+  toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume, setRfGain, setSsbTxBpf,
+  toggleEQ, setEQ, setDtGain, setDigitalSource,
   startAbTest, stopAbTest, toggleAbtManual, confirmAbtSwitch,
   setSession, confirmSessionQuit,
 };
 
 })();
 
+// Collapsible section boxes — plain global helpers, not part of either
+// module's isolated scope: this only ever touches classList/localStorage,
+// never rig state, so it carries none of the TX-timing/feedback-loop
+// isolation concerns that keep Panadapter/RigControl separate (see the
+// file-header comment on module isolation).
+function toggleSectionBox(id) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  const collapsed = box.classList.toggle('collapsed');
+  try { localStorage.setItem('sectionCollapsed:' + id, collapsed ? '1' : '0'); } catch (e) {}
+}
+
+function initSectionBoxes() {
+  document.querySelectorAll('.section-box.collapsible[id]').forEach(box => {
+    let collapsed = null;
+    try { collapsed = localStorage.getItem('sectionCollapsed:' + box.id); } catch (e) {}
+    if (collapsed !== null) box.classList.toggle('collapsed', collapsed === '1');
+  });
+}
+
+// Side-column collapse (Global DSP panel / Band+Amp panel) — frees width
+// for the spectrum/waterfall while operating. Same localStorage-persisted
+// pattern as toggleSectionBox above, but toggles a whole grid column via a
+// class on .console rather than a single .section-box. Back to a plain
+// two-column (modedsp/bandamp) lookup as of 2026-09-11 — the RX2 side
+// column (modedsp2) that briefly existed here got folded entirely into
+// RX2's own center2 panel instead (see .console's grid-template-areas
+// comment), so there's no third independently-collapsible column anymore.
+const COLUMN_TAB_LABEL = { modedsp: ['‹', '›'], bandamp: ['›', '‹'] };
+const COLUMN_CLASS_NAME = { modedsp: 'collapsed-left', bandamp: 'collapsed-right' };
+const COLUMN_VAR_NAME = { modedsp: '--col-left', bandamp: '--col-right' };
+const ALL_COLUMNS = ['modedsp', 'bandamp'];
+
+function updateColumnTab(which) {
+  const panel = document.getElementById('panel-' + which);
+  const tab = document.getElementById('tab-' + which);
+  if (!panel || !tab) return;
+  const collapsed = panel.classList.contains('collapsed');
+  const [expandedLabel, collapsedLabel] = COLUMN_TAB_LABEL[which];
+  tab.textContent = collapsed ? collapsedLabel : expandedLabel;
+  tab.title = collapsed ? 'Expand panel' : 'Collapse panel';
+}
+
+function toggleColumn(which) {
+  const panel = document.getElementById('panel-' + which);
+  if (!panel) return;
+  const collapsed = panel.classList.toggle('collapsed');
+  document.querySelector('.console').classList.toggle(COLUMN_CLASS_NAME[which], collapsed);
+  try { localStorage.setItem('columnCollapsed:' + which, collapsed ? '1' : '0'); } catch (e) {}
+  updateColumnTab(which);
+}
+
+function initColumnCollapse() {
+  ALL_COLUMNS.forEach(which => {
+    let collapsed = null;
+    try { collapsed = localStorage.getItem('columnCollapsed:' + which); } catch (e) {}
+    if (collapsed === '1') {
+      const panel = document.getElementById('panel-' + which);
+      if (panel) panel.classList.add('collapsed');
+      document.querySelector('.console').classList.add(COLUMN_CLASS_NAME[which]);
+    }
+    updateColumnTab(which);
+  });
+}
+
+// Side-column resize — drag the handle at a column's inner edge to widen or
+// narrow it. Sets --col-left/--col-left2/--col-right on .console (read by
+// the grid-template-columns rule above), independent of the collapsed
+// state so a dragged width survives a collapse/expand round-trip.
+const COLUMN_WIDTH_LIMITS = { modedsp: [200, 560], bandamp: [200, 560] };
+const COLUMN_WIDTH_DEFAULT = { modedsp: '240px', bandamp: '268px' };
+function startColumnResize(which, downEvent) {
+  const panel = document.getElementById('panel-' + which);
+  if (!panel || panel.classList.contains('collapsed')) return;
+  downEvent.preventDefault();
+  const consoleEl = document.querySelector('.console');
+  const varName = COLUMN_VAR_NAME[which];
+  const handle = document.getElementById('resize-' + which);
+  const startX = downEvent.clientX;
+  const startWidth = panel.getBoundingClientRect().width;
+  const [min, max] = COLUMN_WIDTH_LIMITS[which];
+  if (handle) handle.classList.add('dragging');
+  document.body.classList.add('resizing-column');
+  // The left column (modedsp) grows when dragged rightward; the right
+  // column (bandamp) grows when dragged leftward — "toward center".
+  const growsRightward = which !== 'bandamp';
+
+  function onMove(moveEvent) {
+    const delta = growsRightward ? (moveEvent.clientX - startX) : (startX - moveEvent.clientX);
+    const newWidth = Math.max(min, Math.min(max, Math.round(startWidth + delta)));
+    consoleEl.style.setProperty(varName, newWidth + 'px');
+  }
+  function onUp() {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if (handle) handle.classList.remove('dragging');
+    document.body.classList.remove('resizing-column');
+    try { localStorage.setItem('columnWidth:' + which, consoleEl.style.getPropertyValue(varName)); } catch (e) {}
+  }
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function resetColumnWidth(which) {
+  const consoleEl = document.querySelector('.console');
+  consoleEl.style.setProperty(COLUMN_VAR_NAME[which], COLUMN_WIDTH_DEFAULT[which]);
+  try { localStorage.setItem('columnWidth:' + which, COLUMN_WIDTH_DEFAULT[which]); } catch (e) {}
+}
+
+function initColumnWidths() {
+  const consoleEl = document.querySelector('.console');
+  ALL_COLUMNS.forEach(which => {
+    let width = null;
+    try { width = localStorage.getItem('columnWidth:' + which); } catch (e) {}
+    if (width) consoleEl.style.setProperty(COLUMN_VAR_NAME[which], width);
+  });
+}
+
 RigControl.init();
+initSectionBoxes();
+initColumnCollapse();
+initColumnWidths();
 </script>
 
 </body>
