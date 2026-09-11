@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG Diversity</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a; color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow-y: auto;
+  }
+  .status-bar {
+    display: flex; align-items: center; gap: 24px;
+    padding: 10px 20px;
+    background: #111; border-bottom: 1px solid #333;
+    font-size: 0.85rem;
+  }
+  .status-bar .title { font-size: 1.1rem; font-weight: 600; color: #00e5ff; }
+  .status-bar .sep { color: #333; }
+  .conn-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .conn-dot.on { background: #4caf50; }
+  .conn-dot.off { background: #f44336; }
+
+  .content { padding: 20px; max-width: 900px; margin: 0 auto; }
+
+  .panel {
+    background: #111; border: 1px solid #222; border-radius: 4px;
+    padding: 16px 20px; margin-bottom: 20px;
+  }
+  .panel h2 {
+    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: #888; margin-bottom: 12px;
+  }
+  .panel p {
+    font-size: 0.85rem; color: #aaa; line-height: 1.5; margin-bottom: 10px;
+  }
+  .panel p:last-child { margin-bottom: 0; }
+  .panel code { color: #ccc; background: #1a1a1a; padding: 1px 4px; border-radius: 2px; }
+
+  .scope-row { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+  .scope-canvas-wrap { position: relative; width: 280px; height: 280px; flex-shrink: 0; }
+  #scope { width: 100%; height: 100%; display: block; }
+
+  .readout { display: flex; flex-direction: column; gap: 14px; min-width: 180px; }
+  .readout-item .label {
+    font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: #888;
+  }
+  .readout-item .value {
+    font-size: 1.6rem; font-weight: 700; font-family: monospace; color: #00e5ff;
+  }
+  .readout-item .value.dim { color: #555; }
+
+  .badge {
+    display: inline-block; padding: 4px 12px; border-radius: 3px;
+    font-size: 0.8rem; font-weight: 700; letter-spacing: 0.05em;
+    border: 1px solid #333;
+  }
+  .badge.locked { color: #4caf50; border-color: #4caf50; background: rgba(76,175,80,0.1); }
+  .badge.drifting { color: #ffc107; border-color: #ffc107; background: rgba(255,193,7,0.1); }
+  .badge.no-signal { color: #666; }
+
+  .footnote { font-size: 0.75rem; color: #666; margin-top: 16px; line-height: 1.5; }
+
+  .phase-row { display: flex; align-items: center; gap: 16px; margin-top: 4px; }
+  .phase-row input[type=range] { flex: 1; accent-color: #00e5ff; }
+  .phase-readout {
+    font-family: monospace; font-size: 1.3rem; font-weight: 700; color: #00e5ff;
+    min-width: 56px; text-align: right;
+  }
+  .reset-btn {
+    background: #1a1a1a; border: 1px solid #333; color: #ccc;
+    padding: 6px 14px; border-radius: 3px; font-size: 0.8rem; cursor: pointer;
+  }
+  .reset-btn:hover { border-color: #555; color: #fff; }
+
+  .meter-wrap {
+    height: 14px; background: #0a0a0a; border: 1px solid #333; border-radius: 3px;
+    overflow: hidden; position: relative;
+  }
+  .meter-bar {
+    height: 100%; width: 0%; background: #00e5ff;
+    transition: width 0.15s ease-out, background-color 0.15s ease-out;
+  }
+  .meter-bar.hot { background: #ff5252; }
+
+  .spec-wrap {
+    background: #000; border: 1px solid #333; border-radius: 3px;
+    padding: 4px; position: relative;
+  }
+  .spec-wrap canvas { width: 100%; height: 180px; display: block; }
+  #combine-spectrum { height: 420px; }
+  .spec-freq-axis {
+    display: flex; justify-content: space-between;
+    font-size: 0.65rem; color: #666; padding: 2px 4px 0;
+  }
+  .spec-db-axis {
+    position: absolute; left: 4px; top: 4px; bottom: 20px;
+    display: flex; flex-direction: column; justify-content: space-between;
+    font-size: 0.6rem; color: #555; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="status-bar">
+  <span class="title">W7TLG DIVERSITY</span>
+  <span class="sep">|</span>
+  <span><span class="conn-dot off" id="ws-dot"></span><span id="ws-status">Connecting…</span></span>
+</div>
+
+<div class="content">
+
+  <div class="panel">
+    <h2>Phase Coherence — RX1 vs RX2</h2>
+    <p>
+      The RSPduo's two tuners share one ADC sample clock in Dual Tuner
+      mode, so their IQ streams are guaranteed sample-rate-locked. Whether
+      their own downconversion local oscillators also stay phase-locked to
+      <em>each other</em> — not just the shared clock — is a separate
+      question this scope answers empirically, by watching the phase
+      difference between RX1's and RX2's tuned-frequency FFT bin over time.
+    </p>
+    <p>
+      The dot's absolute position doesn't mean anything on its own (it
+      includes whatever arbitrary offset each receiver's capture happened
+      to start at). What matters is whether it <strong>holds still</strong>
+      (the two tuners are phase-locked — real antenna/propagation
+      differences will make it wander slowly, that's expected) or
+      <strong>spins continuously</strong> (the LOs are free-running
+      relative to each other, at whatever their frequency difference is).
+    </p>
+    <p>
+      Most meaningful with a real, roughly-equal-strength signal tuned on
+      both receivers — on noise alone the dot will look random regardless
+      of coherence, since there's nothing correlated between the two
+      antennas to measure a phase relationship against.
+    </p>
+
+    <div class="scope-row">
+      <div class="scope-canvas-wrap">
+        <canvas id="scope" width="280" height="280"></canvas>
+      </div>
+      <div class="readout">
+        <div class="readout-item">
+          <div class="label">Phase difference</div>
+          <div class="value" id="phase-val">— °</div>
+        </div>
+        <div class="readout-item">
+          <div class="label">Coherence</div>
+          <div id="coherence-badge"><span class="badge no-signal">NO SIGNAL</span></div>
+        </div>
+      </div>
+    </div>
+
+    <p class="footnote">
+      "LOCKED" / "DRIFTING" is a rough read on the last ~8s of samples —
+      circular standard deviation under ~25° reads as locked, spread
+      further or spinning reads as drifting. Judge by eye too; the dot's
+      own trail is the real signal.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>RX2 Phase Rotation</h2>
+    <p>
+      Rotates RX2's baseband phase by the angle below, before it reaches
+      RX2's own filter/demod — RX1 is untouched, stays the reference.
+      Turn it slowly while listening across the stereo field for a null
+      (the two channels partially cancelling) or reinforcement. Sends
+      live as you drag, no need to release first.
+    </p>
+    <div class="phase-row">
+      <input type="range" id="phase2-slider" min="0" max="359" step="1" value="0">
+      <div class="phase-readout" id="phase2-val">0°</div>
+      <button class="reset-btn" id="phase2-reset">Reset</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>RX1 / RX2 / RX0 — Spectrum Comparison</h2>
+    <p>
+      Each independently ±8kHz around its own tuned frequency, same fixed
+      dB scale throughout. RX1 and RX2 are each receivers listening on
+      their own antenna, unaffected by anything below — RX0 is the two
+      of them combined (see its own panel further down for what that
+      means). Only meaningful to compare directly when RX1 and RX2 are
+      tuned to the same frequency (Link on).
+    </p>
+    <p style="margin-top:10px; margin-bottom:4px; font-size:0.7rem; text-transform:uppercase; letter-spacing:.08em; color:#888;">RX1</p>
+    <div class="spec-wrap">
+      <canvas id="spec1-canvas" width="1400" height="180"></canvas>
+      <div class="spec-db-axis" style="bottom:16px"><span>-20</span><span>-70</span><span>-120</span></div>
+      <div class="spec-freq-axis"><span>&minus;8 kHz</span><span>0</span><span>+8 kHz</span></div>
+    </div>
+    <p style="margin-top:10px; margin-bottom:4px; font-size:0.7rem; text-transform:uppercase; letter-spacing:.08em; color:#888;">RX2</p>
+    <div class="spec-wrap">
+      <canvas id="spec2-canvas" width="1400" height="180"></canvas>
+      <div class="spec-db-axis" style="bottom:16px"><span>-20</span><span>-70</span><span>-120</span></div>
+      <div class="spec-freq-axis"><span>&minus;8 kHz</span><span>0</span><span>+8 kHz</span></div>
+    </div>
+    <p style="margin-top:10px; margin-bottom:4px; font-size:0.7rem; text-transform:uppercase; letter-spacing:.08em; color:#888;">RX0 (combined)</p>
+    <div class="spec-wrap">
+      <canvas id="spec0-small-canvas" width="1400" height="180"></canvas>
+      <div class="spec-db-axis" style="bottom:16px"><span>-20</span><span>-70</span><span>-120</span></div>
+      <div class="spec-freq-axis"><span>&minus;8 kHz</span><span>0</span><span>+8 kHz</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>RX0 — Combined Signal</h2>
+    <p>
+      RX0 = RX1 &minus; z&middot;RX2, where z = gain&middot;e<sup>j&middot;phase</sup>
+      is the weight below — a real, listenable third signal, not just a
+      meter. With the splitter feeding both receivers the same antenna,
+      gain=1 / phase matching the coherence scope's own reading above
+      should null it hard. On two different antennas, sweep for whichever
+      combination pulls a signal furthest out of the noise, or knocks a
+      specific noise source down.
+    </p>
+    <p>
+      This costs real CPU (a third full demod pipeline) — off by default,
+      only runs while enabled below.
+    </p>
+    <div class="phase-row">
+      <button class="reset-btn" id="combine-enable">Enable RX0</button>
+      <button class="reset-btn" id="combine-calibrate">Calibrate Alignment</button>
+      <span class="phase-readout" id="combine-delay-val" style="font-size:0.85rem">delay: —</span>
+    </div>
+    <p style="margin-top:14px; margin-bottom:4px; font-size:0.7rem; text-transform:uppercase; letter-spacing:.08em; color:#888;">RX0 Level</p>
+    <div class="meter-wrap">
+      <div class="meter-bar" id="combine-meter-bar"></div>
+    </div>
+    <div class="phase-readout" id="combine-level-val" style="text-align:right; margin-top:4px;">— dBFS</div>
+
+    <p style="margin-top:14px; margin-bottom:4px; font-size:0.7rem; text-transform:uppercase; letter-spacing:.08em; color:#888;">RX0 Spectrum (&plusmn;8kHz around tuned frequency)</p>
+    <div class="spec-wrap">
+      <canvas id="combine-spectrum" width="1400" height="420"></canvas>
+      <div class="spec-db-axis"><span>-20</span><span>-45</span><span>-70</span><span>-95</span><span>-120</span></div>
+      <div class="spec-freq-axis"><span>&minus;8 kHz</span><span>0</span><span>+8 kHz</span></div>
+    </div>
+
+    <p style="margin-top:14px; margin-bottom:4px; font-size:0.7rem; text-transform:uppercase; letter-spacing:.08em; color:#888;">Gain</p>
+    <div class="phase-row">
+      <input type="range" id="combine-gain-slider" min="0" max="200" step="1" value="100">
+      <div class="phase-readout" id="combine-gain-val">1.00</div>
+      <button class="reset-btn" id="combine-gain-reset">Reset</button>
+    </div>
+    <p style="margin-top:14px; margin-bottom:4px; font-size:0.7rem; text-transform:uppercase; letter-spacing:.08em; color:#888;">Phase</p>
+    <div class="phase-row">
+      <input type="range" id="combine-phase-slider" min="0" max="359" step="1" value="0">
+      <div class="phase-readout" id="combine-phase-val">0°</div>
+      <button class="reset-btn" id="combine-phase-reset">Reset</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let ws = null;
+// Commands sent before the socket finishes connecting were silently
+// dropped in the main console too — a real bug found live 2026-09-11
+// (RX2 audio stayed disabled after a server restart because
+// set_audio_enabled raced the handshake and vanished, no retry). Same
+// fix here from the start rather than waiting to hit it: queue, flush on open.
+let wsQueue = [];
+
+function sendCmd(obj) {
+  const msg = JSON.stringify(obj);
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
+  else wsQueue.push(msg);
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => {
+    document.getElementById('ws-dot').className = 'conn-dot on';
+    document.getElementById('ws-status').textContent = 'Connected';
+    const q = wsQueue; wsQueue = [];
+    q.forEach(m => ws.send(m));
+    // RX1/RX2's own fine spectrum only runs server-side while someone's
+    // actually asking for it — re-subscribe on every (re)connect, e.g.
+    // after a server restart. See sdr/audio_demod.py fine_spectrum_enabled.
+    ws.send(JSON.stringify({ cmd: 'subscribe_fine_spectrum' }));
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-dot').className = 'conn-dot off';
+    document.getElementById('ws-status').textContent = 'Disconnected';
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'state') handleState(msg.data.rig || {});
+    if (msg.type === 'cmd_response' && msg.cmd === 'calibrate_combine') {
+      // Was silently ignored (Terry 2026-09-12: couldn't tell a real
+      // recalibration from a failed one just leaving the old number on
+      // screen — calibrate() returns None and touches nothing if there
+      // isn't enough buffered history yet, e.g. right after RX0 is
+      // (re)enabled, now that the window is 8s instead of 1s).
+      if (msg.ok) {
+        renderDelay(msg.sample_delay);
+      } else {
+        combineDelayVal.textContent = 'delay: not enough history yet — wait a few seconds';
+      }
+    }
+  };
+}
+
+// ── Phase rotation control ──────────────────────────────────────────
+const phase2Slider = document.getElementById('phase2-slider');
+const phase2Val = document.getElementById('phase2-val');
+
+function setPhase2(deg, send) {
+  phase2Slider.value = deg;
+  phase2Val.textContent = Math.round(deg) + '°';
+  if (send) sendCmd({ cmd: 'set_phase_offset', channel: 'B', deg: parseFloat(deg) });
+}
+
+phase2Slider.addEventListener('input', () => setPhase2(phase2Slider.value, true));
+document.getElementById('phase2-reset').addEventListener('click', () => setPhase2(0, true));
+
+// ── Phase scope ──────────────────────────────────────────────────────
+const canvas = document.getElementById('scope');
+const ctx = canvas.getContext('2d');
+const CENTER = 140, RADIUS = 110;
+const HISTORY_S = 8.0;         // how long a trail point stays visible
+let history = [];              // [{ts, deg}]
+
+function polarToXY(deg, r) {
+  // 0° at top (12 o'clock), clockwise — matches a compass, reads naturally.
+  const rad = (deg - 90) * Math.PI / 180;
+  return [CENTER + r * Math.cos(rad), CENTER + r * Math.sin(rad)];
+}
+
+function drawScope() {
+  ctx.clearRect(0, 0, 280, 280);
+
+  // Rings + degree ticks
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  [0.33, 0.66, 1.0].forEach(f => {
+    ctx.beginPath();
+    ctx.arc(CENTER, CENTER, RADIUS * f, 0, 2 * Math.PI);
+    ctx.stroke();
+  });
+  ctx.fillStyle = '#555';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  [0, 90, 180, 270].forEach(deg => {
+    const [x, y] = polarToXY(deg, RADIUS + 14);
+    ctx.fillText(deg === 0 ? '0°' : deg + '°', x, y);
+    const [x2, y2] = polarToXY(deg, RADIUS);
+    ctx.strokeStyle = '#333';
+    ctx.beginPath();
+    ctx.moveTo(CENTER, CENTER);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  });
+
+  // Trail — fades with age
+  const now = performance.now() / 1000;
+  history = history.filter(p => now - p.ts < HISTORY_S);
+  history.forEach(p => {
+    const age = (now - p.ts) / HISTORY_S;
+    const alpha = Math.max(0, 1 - age);
+    const [x, y] = polarToXY(p.deg, RADIUS);
+    ctx.fillStyle = `rgba(0,229,255,${alpha * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, 2 * Math.PI);
+    ctx.fill();
+  });
+
+  // Current point, bright
+  if (history.length > 0) {
+    const p = history[history.length - 1];
+    const [x, y] = polarToXY(p.deg, RADIUS);
+    ctx.fillStyle = '#00e5ff';
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+}
+
+function circularStdDeg(samples) {
+  // Mean resultant length of unit vectors at each angle — standard
+  // circular-statistics measure, handles wraparound at ±180° correctly
+  // (a plain numeric stddev of the degree values would not).
+  if (samples.length < 3) return null;
+  let sx = 0, sy = 0;
+  for (const deg of samples) {
+    const rad = deg * Math.PI / 180;
+    sx += Math.cos(rad);
+    sy += Math.sin(rad);
+  }
+  const r = Math.sqrt(sx * sx + sy * sy) / samples.length;
+  if (r <= 0) return 180;
+  return Math.sqrt(-2 * Math.log(r)) * 180 / Math.PI;
+}
+
+function updateReadout() {
+  const valEl = document.getElementById('phase-val');
+  const badgeEl = document.getElementById('coherence-badge');
+  if (history.length === 0) {
+    valEl.textContent = '— °';
+    valEl.className = 'value dim';
+    badgeEl.innerHTML = '<span class="badge no-signal">NO SIGNAL</span>';
+    return;
+  }
+  const last = history[history.length - 1];
+  valEl.textContent = last.deg.toFixed(1) + ' °';
+  valEl.className = 'value';
+
+  const std = circularStdDeg(history.map(p => p.deg));
+  if (std === null) {
+    badgeEl.innerHTML = '<span class="badge no-signal">GATHERING…</span>';
+  } else if (std < 25) {
+    badgeEl.innerHTML = '<span class="badge locked">LOCKED</span>';
+  } else {
+    badgeEl.innerHTML = '<span class="badge drifting">DRIFTING</span>';
+  }
+}
+
+let phase2EverSynced = false;
+
+// ── RX0 combine ───────────────────────────────────────────────────────
+let combineEnabled = false;
+let combineEverSynced = false;
+let audioCtx0 = null, audioWorkletNode0 = null, audioWorkletReady0 = null, audioWs0 = null;
+
+// Narrowband ("fine") spectra — RX1's and RX2's own already existed
+// server-side (same mechanism as the main console's digital-mode zoom,
+// riding the existing /ws/spectrum and /ws/spectrum_b channels alongside
+// their wideband frames, distinguished by kind:"fine" vs "wide"). RX0's
+// is new (sdr/combiner.py's own FINE_FFT — legitimate because it FFTs
+// RX0's own already-combined single coherent stream, unlike a
+// hypothetical wideband multi-bin difference spectrum, which would have
+// the cross-channel alignment problem flagged earlier). All three share
+// one fixed dB scale and drawing routine so they're directly comparable
+// (Terry 2026-09-12: three-way spectrum view).
+const SPEC0_FLOOR = -120, SPEC0_CEIL = -20;   // fixed dBFS range — never auto-scales
+
+function connectSpecState(wsPath, kindFilter) {
+  const state = { latest: null, pendingHeader: null };
+  function connect() {
+    const ws = new WebSocket(`ws://${location.host}${wsPath}`);
+    ws.binaryType = 'arraybuffer';
+    ws.onclose = () => setTimeout(connect, 2000);
+    ws.onmessage = evt => {
+      if (typeof evt.data === 'string') { state.pendingHeader = JSON.parse(evt.data); return; }
+      if (!state.pendingHeader) return;
+      if (state.pendingHeader.kind === kindFilter) {
+        state.latest = { ...state.pendingHeader, data: new Float32Array(evt.data) };
+      }
+      state.pendingHeader = null;
+    };
+  }
+  connect();
+  return state;
+}
+
+function makeSpecPanel(canvasId, state) {
+  const canvas = document.getElementById(canvasId);
+  return { canvas, ctx: canvas.getContext('2d'), state };
+}
+
+function drawSpecPanel(panel) {
+  const { canvas, ctx, state } = panel;
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  // Fixed horizontal gridlines — matches each panel's own .spec-db-axis
+  // labels exactly, so the scale is always visibly the same regardless
+  // of what's on screen (Terry 2026-09-12: "I need a larger spectrum
+  // that doesn't auto scale").
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  for (let db = SPEC0_CEIL; db >= SPEC0_FLOOR; db -= 25) {
+    const y = h - ((db - SPEC0_FLOOR) / (SPEC0_CEIL - SPEC0_FLOOR)) * h;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  if (state.latest) {
+    const points = state.latest.data;
+    ctx.strokeStyle = '#00e5ff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < points.length; i++) {
+      const x = (i / (points.length - 1)) * w;
+      const pct = Math.max(0, Math.min(1, (points[i] - SPEC0_FLOOR) / (SPEC0_CEIL - SPEC0_FLOOR)));
+      const y = h - pct * h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // Marks the tuned frequency (center of the fixed 16kHz span).
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.beginPath();
+  ctx.moveTo(w / 2, 0);
+  ctx.lineTo(w / 2, h);
+  ctx.stroke();
+}
+
+const specState1 = connectSpecState('/ws/spectrum', 'fine');
+const specState2 = connectSpecState('/ws/spectrum_b', 'fine');
+const specState0 = connectSpecState('/ws/spectrum_0', 'fine');   // shared by both RX0 canvases below
+const specPanel1 = makeSpecPanel('spec1-canvas', specState1);
+const specPanel2 = makeSpecPanel('spec2-canvas', specState2);
+const specPanel0Small = makeSpecPanel('spec0-small-canvas', specState0);
+const specPanel0Big = makeSpecPanel('combine-spectrum', specState0);
+
+function drawAllSpectra() {
+  drawSpecPanel(specPanel1);
+  drawSpecPanel(specPanel2);
+  drawSpecPanel(specPanel0Small);
+  drawSpecPanel(specPanel0Big);
+  requestAnimationFrame(drawAllSpectra);
+}
+requestAnimationFrame(drawAllSpectra);
+
+function ensureAudioWorklet0() {
+  if (!audioCtx0) audioCtx0 = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioWorkletReady0) {
+    audioWorkletReady0 = audioCtx0.audioWorklet.addModule('/audio-worklet.js').then(() => {
+      audioWorkletNode0 = new AudioWorkletNode(audioCtx0, 'pcm-stream-processor');
+      audioWorkletNode0.connect(audioCtx0.destination);
+    });
+  }
+  return audioWorkletReady0;
+}
+
+function ensureAudioWs0() {
+  if (audioWs0 && audioWs0.readyState <= WebSocket.OPEN) return;
+  audioWs0 = new WebSocket(`ws://${location.host}/ws/audio_0`);
+  audioWs0.binaryType = 'arraybuffer';
+  audioWs0.onclose = () => { if (combineEnabled) setTimeout(ensureAudioWs0, 1000); };
+  audioWs0.onmessage = evt => {
+    if (!audioWorkletNode0) return;
+    const pcm16 = new Int16Array(evt.data);
+    const f32 = new Float32Array(pcm16.length);
+    for (let i = 0; i < pcm16.length; i++) f32[i] = pcm16[i] / 32768;
+    audioWorkletNode0.port.postMessage(f32);
+  };
+}
+
+const combineEnableBtn = document.getElementById('combine-enable');
+combineEnableBtn.addEventListener('click', () => {
+  combineEnabled = !combineEnabled;
+  combineEnableBtn.style.borderColor = combineEnabled ? '#00e5ff' : '#333';
+  combineEnableBtn.style.color = combineEnabled ? '#00e5ff' : '#ccc';
+  sendCmd({ cmd: 'set_combine_enabled', enabled: combineEnabled });
+  if (combineEnabled) {
+    ensureAudioWorklet0().then(() => {
+      if (audioCtx0.state === 'suspended') audioCtx0.resume();
+      ensureAudioWs0();
+    });
+  }
+});
+
+const combineGainSlider = document.getElementById('combine-gain-slider');
+const combineGainVal = document.getElementById('combine-gain-val');
+function setCombineGain(sliderVal, send) {
+  combineGainSlider.value = sliderVal;
+  const gain = sliderVal / 100;
+  combineGainVal.textContent = gain.toFixed(2);
+  if (send) sendCmd({ cmd: 'set_combine_weight', gain });
+}
+combineGainSlider.addEventListener('input', () => setCombineGain(combineGainSlider.value, true));
+document.getElementById('combine-gain-reset').addEventListener('click', () => setCombineGain(100, true));
+
+const combinePhaseSlider = document.getElementById('combine-phase-slider');
+const combinePhaseVal = document.getElementById('combine-phase-val');
+function setCombinePhase(deg, send) {
+  combinePhaseSlider.value = deg;
+  combinePhaseVal.textContent = Math.round(deg) + '°';
+  if (send) sendCmd({ cmd: 'set_combine_weight', phase_deg: parseFloat(deg) });
+}
+combinePhaseSlider.addEventListener('input', () => setCombinePhase(combinePhaseSlider.value, true));
+document.getElementById('combine-phase-reset').addEventListener('click', () => setCombinePhase(0, true));
+
+const combineDelayVal = document.getElementById('combine-delay-val');
+function renderDelay(samples) {
+  if (samples === null || samples === undefined) { combineDelayVal.textContent = 'delay: —'; return; }
+  const ms = (samples / 16000 * 1000).toFixed(2);
+  combineDelayVal.textContent = `delay: ${samples} samples (${ms}ms)`;
+}
+document.getElementById('combine-calibrate').addEventListener('click', () => {
+  combineDelayVal.textContent = 'delay: calibrating…';
+  sendCmd({ cmd: 'calibrate_combine' });
+});
+
+function handleState(rig) {
+  const deg = rig.iq_phase_diff_deg;
+  if (deg !== null && deg !== undefined) {
+    history.push({ ts: performance.now() / 1000, deg });
+  }
+  // Reflect the server's actual value once on load/reconnect (so a page
+  // refresh shows the real current rotation, not a reset-looking 0°),
+  // then leave it alone — don't fight the operator's own drag with every
+  // ~1-2s state broadcast afterward.
+  const serverDeg = rig.sdr_phase_offset_deg_b;
+  if (!phase2EverSynced && serverDeg !== null && serverDeg !== undefined) {
+    phase2EverSynced = true;
+    setPhase2(serverDeg, false);
+  }
+  if (!combineEverSynced && rig.combine_gain !== undefined) {
+    combineEverSynced = true;
+    setCombineGain(Math.round(rig.combine_gain * 100), false);
+    setCombinePhase(rig.combine_phase_deg || 0, false);
+    renderDelay(rig.combine_sample_delay);
+    combineEnabled = !!rig.combine_enabled;
+    combineEnableBtn.style.borderColor = combineEnabled ? '#00e5ff' : '#333';
+    combineEnableBtn.style.color = combineEnabled ? '#00e5ff' : '#ccc';
+    if (combineEnabled) {
+      ensureAudioWorklet0().then(() => {
+        if (audioCtx0.state === 'suspended') audioCtx0.resume();
+        ensureAudioWs0();
+      });
+    }
+  } else if (rig.combine_sample_delay !== undefined) {
+    renderDelay(rig.combine_sample_delay);
+  }
+  renderLevel(rig.combine_level_dbfs);
+}
+
+const combineMeterBar = document.getElementById('combine-meter-bar');
+const combineLevelVal = document.getElementById('combine-level-val');
+function renderLevel(dbfs) {
+  if (dbfs === null || dbfs === undefined) {
+    combineLevelVal.textContent = '— dBFS';
+    combineMeterBar.style.width = '0%';
+    return;
+  }
+  combineLevelVal.textContent = dbfs.toFixed(1) + ' dBFS';
+  // -90dBFS (near silence) .. 0dBFS (full scale) -> 0..100% — same range
+  // the console's own S-meter bars use, so it reads consistently.
+  const pct = Math.max(0, Math.min(100, ((dbfs + 90) / 90) * 100));
+  combineMeterBar.style.width = pct + '%';
+  combineMeterBar.classList.toggle('hot', dbfs > -6);
+}
+
+function tick() {
+  drawScope();
+  updateReadout();
+  requestAnimationFrame(tick);
+}
+
+connect();
+requestAnimationFrame(tick);
+</script>
+
+</body>
+</html>

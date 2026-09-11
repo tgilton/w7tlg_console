@@ -323,9 +323,10 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
 .smeter-readout { display: flex; justify-content: space-between; align-items: center; color: var(--chrome-muted); margin-bottom: 8px; min-height: 19.5px; }
 .smeter-readout .val { color: var(--data-trace); font-weight: 600; }
 /* Realtime dBFS reading, centered under the S-meter bar as its own line
-   (Terry 2026-09-11) rather than sharing the label/S9-Cal row — same
-   --chrome-muted color as before, just bigger/bolder to stand out. */
-.smeter-dbfs { text-align: center; font-size: 14px; font-weight: 700; color: var(--chrome-muted); margin-bottom: 4px; }
+   (Terry 2026-09-11). --data-trace, not --chrome-muted (Terry 2026-09-11:
+   "brighter and maybe a little bigger") — same data-value color the S0/S9
+   label next to it already uses, per DESIGN.md §2.3. */
+.smeter-dbfs { text-align: center; font-size: 16px; font-weight: 700; color: var(--data-trace); margin-bottom: 4px; }
 /* min-height pinned to RX1's own measured height (which includes the S9
    Cal input RX2 doesn't have) so both rows occupy identical space instead
    of RX2's row collapsing ~2.7px shorter — part of the "spectra must line
@@ -336,10 +337,10 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
   border: 1px solid var(--border); color: var(--fg-0); padding: 1px 4px;
   border-radius: 2px; width: 40px;
 }
-/* RX2 tuning input/button dim while "Link to RX1" is on — RX2's
-   frequency is being driven by RX1's rig VFO, not by manual entry, so
-   editing them would just get overwritten on the next RX1 freq change. */
-#freq2-input:disabled, #tune2-btn:disabled { opacity: 0.4; }
+/* RX2 tuning input/button/span dim while "Link to RX1" is on — RX2's
+   frequency and span are being driven by RX1, not by manual entry, so
+   editing them would just get overwritten on the next RX1 change. */
+#freq2-input:disabled, #tune2-btn:disabled, #span2-slider:disabled { opacity: 0.4; }
 
 .tx-meters { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; transition: opacity 0.15s; }
 .tx-meters.inactive { opacity: 0.35; }
@@ -618,6 +619,7 @@ select#palette-select {
     <span class="nav-link"><a href="/propagation" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Propagation &#8599;</a></span>
     <span class="nav-link"><a href="/spotseek" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Spot/Seek &#8599;</a></span>
     <span class="nav-link"><a href="/advisor" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Advisor &#8599;</a></span>
+    <span class="nav-link"><a href="/diversity" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">Diversity &#8599;</a></span>
   </div>
 
   <!-- ── 2. Mode / DSP ────────────────────────────────────── -->
@@ -1447,6 +1449,17 @@ const SPAN_MAX_HZ = 2000000;
 
 // ── Main /ws — rig/amp state + commands ─────────────────────
 let ws = null;
+// Outgoing commands sent before the socket finishes connecting were
+// silently dropped (send() only ever checked readyState === OPEN, no
+// queue) — real, reproducible race on a fresh page load/reload: enableAudio()
+// awaits ensureAudioWorklet() before calling send({cmd:'set_audio_enabled'}),
+// and if that resolves before the WS handshake completes, the command
+// vanishes with no retry, leaving audio silently disabled server-side
+// forever (Terry 2026-09-11, hit on RX2 after a server restart — same
+// latent bug exists here for RX1, just apparently not yet unlucky enough
+// to hit it). Queue-and-flush-on-open fixes this for every command sent
+// through send(), not just audio-enable.
+let wsQueue = [];
 let rigPtt = false;
 let rigBand = null;
 let rigMode = null;
@@ -1478,7 +1491,10 @@ function updateDisplayedRigFreq() {
 
 function connectWs() {
   ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => {};
+  ws.onopen = () => {
+    const q = wsQueue; wsQueue = [];
+    q.forEach(m => ws.send(m));
+  };
   ws.onclose = () => setTimeout(connectWs, 2000);
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
@@ -1556,7 +1572,9 @@ function txSilenceEnd() {
 }
 
 function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  const msg = JSON.stringify(obj);
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
+  else wsQueue.push(msg);
 }
 
 // ── Spectrum /ws/spectrum — binary frames ────────────────────
@@ -1667,10 +1685,28 @@ function sliderFromSpan(hz) {
   return Math.round(t * 1000);
 }
 
+// RX2's own Link toggle (Terry 2026-09-11: "if I zoom in on RX1 the same
+// thing happens on RX2 and they maintain the same passband width")
+// listens for this on every RX1 span change, from whichever of the 2
+// call sites below actually changed it — direct cross-module call, not
+// routed through the server's periodic state broadcast (2s interval,
+// far too slow for a live "zoom together" feel; this is a same-page,
+// client-only concern). RX1 has zero awareness of Link — it just always
+// notifies, and Panadapter2.onRx1SpanChange decides whether to care.
+function notifyRx1SpanChange() {
+  // Panadapter2 is a page-global top-level const from a later <script>
+  // tag (not a window property, but visible by name — same cross-script
+  // pattern RigControl.setDragging(...) already relies on elsewhere in
+  // this file), guaranteed defined by the time this runs since it only
+  // ever fires from a user gesture, long after every script tag has run.
+  Panadapter2.onRx1SpanChange(viewSpanHz);
+}
+
 function setViewSpan(hz) {
   viewSpanHz = Math.max(SPAN_MIN_HZ, Math.min(SPAN_MAX_HZ, hz));
   document.getElementById('span-slider').value = sliderFromSpan(viewSpanHz);
   updateSpanLabel();
+  notifyRx1SpanChange();
 }
 
 function updateSpanLabel() {
@@ -1683,6 +1719,7 @@ function onSpanSlider(v) {
   viewSpanHz = spanFromSlider(parseInt(v, 10));
   wholeBandView = false;   // manual span change exits the locked whole-band view
   updateSpanLabel();
+  notifyRx1SpanChange();
 }
 
 function tuneTo(freqHz, recenterView = true) {
@@ -2119,6 +2156,11 @@ function ensureAudioWorklet() {
       audioWorkletNode.connect(muteGain);
       if (panner) { panner.pan.value = -1; muteGain.connect(panner); panner.connect(audioCtx.destination); }
       else { muteGain.connect(audioCtx.destination); }
+    }).catch(err => {
+      // See ensureAudioWorklet2's own comment — same latent bug, same fix.
+      console.error('[RX1 audio] worklet setup failed, will retry next click:', err);
+      audioWorkletReady = null;
+      throw err;
     });
   }
   return audioWorkletReady;
@@ -2332,18 +2374,43 @@ function bandForFreq2(hz) {
   return null;
 }
 
+// Local copies — Panadapter's rigPtt/rigMode/rigIsDigital are private to
+// that module's closure (see BAND_EDGES_HZ2's own comment above for why).
+// There's only one radio, so these mirror the exact same rig.ptt/rig.mode/
+// rig.is_digital fields RX1 reads, just tracked independently here (Terry
+// 2026-09-12: "When i transmit, RX2 doesn't freeze the way RX1 does...
+// the frequency indication turns red on the RX1 panel, but the RX2 panel
+// does not" — RX2's spectrum/view code had no PTT or digital-mode
+// awareness at all before this).
+let rigPtt = false;
+let rigIsDigital = false;
+const DIGITAL_VIEW_SPAN_HZ = 3000;
+
 // ── Private /ws — PTT/tx_mute + this channel's S-meter only ───────────
 let ws2 = null;
+// See Panadapter's own wsQueue comment — same fix, same reason: this is
+// the actual bug behind "no audio on RX2 after restart" (Terry
+// 2026-09-11) — enableAudio()'s set_audio_enabled send was racing
+// connectWs2()'s handshake and getting silently dropped.
+let ws2Queue = [];
 
 function connectWs2() {
   ws2 = new WebSocket(`ws://${location.host}/ws`);
+  ws2.onopen = () => {
+    const q = ws2Queue; ws2Queue = [];
+    q.forEach(m => ws2.send(m));
+  };
   ws2.onclose = () => setTimeout(connectWs2, 2000);
   ws2.onmessage = evt => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'tx_mute') { txSilenceStart(); return; }
     if (msg.type === 'state') {
       const rig = msg.data.rig || {};
-      if (rig.ptt) txSilenceStart(); else txSilenceEnd();
+      rigPtt = !!rig.ptt;
+      if (rigPtt) txSilenceStart(); else txSilenceEnd();
+      // Guarded on !rigPtt same as RX1's own rigIsDigital update — mode
+      // reads can be unreliable mid-TX, don't let a stray one flip this.
+      if (!rigPtt) rigIsDigital = !!rig.is_digital;
       updateSmeter(rig);
       // "Link to RX1" (Terry 2026-09-11: no way to tune RX2 since the
       // radio's VFO knob only ever drives RX1's CAT frequency) — while
@@ -2377,22 +2444,32 @@ function connectWs2() {
         viewCenterHz = rig.sdr_rf_freq_hz_b;
         document.getElementById('freq2-input').value = (audioTargetFreqHz / 1e6).toFixed(6);
       }
-      followOwnTuning2();
       // See wholeBandApplied2's own declaration comment — race-free
-      // startup default, independent of Link/Copy's own span sync.
+      // startup default, independent of Link/Copy's own span sync. Must
+      // run BEFORE handleDigitalViewMode2(), same ordering as RX1's own
+      // wholeBandApplied/handleDigitalViewMode() — otherwise, on the very
+      // first frame while already in a digital session, this fired AFTER
+      // handleDigitalViewMode2() had just set the correct narrow 3kHz
+      // window and clobbered it back to whole-band for one visible tick
+      // (Terry 2026-09-11: "we do not want snapToWholeBand() in FT8
+      // mode"). Same as RX1, handleDigitalViewMode2() still silently
+      // overrides this on the very next line whenever already digital —
+      // this just makes that correction same-tick instead of next-tick.
       if (!wholeBandApplied2 && audioTargetFreqHz !== null && latestFrame2) {
         wholeBandApplied2 = true;
         snapToWholeBand();
       }
+      followOwnTuning2();
+      handleDigitalViewMode2();
     }
   };
 }
 
 function send2(obj) {
-  if (ws2 && ws2.readyState === WebSocket.OPEN) {
-    obj.channel = 'B';
-    ws2.send(JSON.stringify(obj));
-  }
+  obj.channel = 'B';
+  const msg = JSON.stringify(obj);
+  if (ws2 && ws2.readyState === WebSocket.OPEN) ws2.send(msg);
+  else ws2Queue.push(msg);
 }
 
 // s9CalDb2/smeterLabel2 are local copies, NOT the Panadapter/RigControl
@@ -2429,6 +2506,7 @@ function updateSmeter(rig) {
 let specWs2 = null;
 let pendingHeader2 = null;
 let latestFrame2 = null;
+let latestFineFrame2 = null;
 let pendingRetuneHz2 = null;
 let pendingRetuneAt2 = 0;
 // Defaults ON (Terry 2026-09-11: "It needs to startup with RX1 and RX2
@@ -2461,13 +2539,21 @@ function connectSpectrumWs2() {
     if (!pendingHeader2) return;
     const data = new Float32Array(evt.data);
     const frame = { centerFreqHz: pendingHeader2.center_freq_hz, spanHz: pendingHeader2.span_hz, data };
-    if (pendingRetuneHz2 !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz2) > 1000) {
+    if (pendingHeader2.kind === 'fine') {
+      // Mirrors channel A's own latestFineFrame/rigIsDigital handling
+      // (Panadapter's connectSpectrumWs) — used when RX2 is selected as
+      // the digital-audio source, same as RX1's DATA-U zoom.
+      latestFineFrame2 = frame;
+      if (rigIsDigital && !rigPtt) pushWaterfallRow2(frame);
+    } else if (rigPtt) {
+      // SDR Switch disconnects the antenna from the SDR during TX — freeze.
+    } else if (pendingRetuneHz2 !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz2) > 1000) {
       // Waiting for an explicit retune to land — freeze, same as Panadapter.
     } else {
       pendingRetuneHz2 = null;
       if (viewCenterHz === null || !isViewWithinCapture2(frame)) viewCenterHz = frame.centerFreqHz;
       latestFrame2 = frame;
-      pushWaterfallRow2(frame);
+      if (!rigIsDigital) pushWaterfallRow2(frame);
     }
     pendingHeader2 = null;
   };
@@ -2506,6 +2592,20 @@ function updateSpanLabel2() {
   el.textContent = viewSpanHz >= 1e6 ? (viewSpanHz / 1e6).toFixed(2) + ' MHz' : (viewSpanHz / 1e3).toFixed(2) + ' kHz';
 }
 function onSpanSlider(v) { viewSpanHz = spanFromSlider(parseInt(v, 10)); updateSpanLabel2(); }
+
+// Called directly by Panadapter's own setViewSpan/onSpanSlider on every
+// RX1 span change (wheel-zoom, slider drag, or Whole Band) — see
+// notifyRx1SpanChange's comment there. Only acts while linked, so RX1
+// can freely broadcast unconditionally without knowing anything about
+// Link state. Deliberately NOT the same path as followRx1's own
+// margin-gated hardware-capture recenter (that one exists specifically
+// to avoid an unwanted pan on every incidental CAT tick) — span-linking
+// is triggered by the operator's own deliberate zoom gesture on RX1, so
+// mirroring it immediately is the whole point, not something to gate.
+function onRx1SpanChange(hz) {
+  if (!linkToRx1) return;
+  setViewSpan(hz);
+}
 
 function tuneTo(freqHz, recenterView = true) {
   freqHz = Math.round(freqHz);
@@ -2566,10 +2666,31 @@ function followRx1(freqHz) {
 // capture margin check (much wider, deliberately not this) still governs
 // whether the SDR itself retunes; this only moves the local view crop.
 function followOwnTuning2() {
+  // Digital mode has its own centering convention (dial at the left edge,
+  // not centered) — see handleDigitalViewMode2, called instead from
+  // connectWs2's state handler. Mirrors RX1's own followRigFrequency()
+  // early-return for rigIsDigital.
+  if (rigIsDigital || lastRigMode === 'PKTUSB') return;
   if (audioTargetFreqHz === null || viewCenterHz === null) return;
   const halfSpan = viewSpanHz / 2;
   if (Math.abs(audioTargetFreqHz - viewCenterHz) > halfSpan * 0.8) {
     viewCenterHz = audioTargetFreqHz;
+  }
+}
+
+// Mirrors RX1's own handleDigitalViewMode() — RX2's own tuned frequency
+// (audioTargetFreqHz, not rigFreqHz: RX2 has no CAT counterpart) goes to
+// the left edge of a DIGITAL_VIEW_SPAN_HZ window instead of the center,
+// matching RX1's convention so the two panadapters line up when RX2 is
+// selected as the digital-audio source (Terry 2026-09-12: "RX2 also
+// forces the 3k window, but it puts the selected frequency in the
+// center... we need the dial frequency on the far left for both").
+function handleDigitalViewMode2() {
+  if (!rigIsDigital && lastRigMode !== 'PKTUSB') return;
+  if (!latestFineFrame2) return;
+  setViewSpan(DIGITAL_VIEW_SPAN_HZ);
+  if (audioTargetFreqHz !== null) {
+    viewCenterHz = audioTargetFreqHz + viewSpanHz / 2;
   }
 }
 
@@ -2578,6 +2699,12 @@ function toggleLink() {
   document.getElementById('link2-btn').classList.toggle('active', linkToRx1);
   document.getElementById('freq2-input').disabled = linkToRx1;
   document.getElementById('tune2-btn').disabled = linkToRx1;
+  // Span/zoom too (Terry 2026-09-11: "if I zoom in on RX1 the same thing
+  // happens on RX2... maintain the same passband width") — read-only
+  // while linked, same reasoning as freq2-input: letting the operator
+  // zoom RX2 independently while claiming the two are "linked" would
+  // silently break the antenna comparison the whole feature is for.
+  document.getElementById('span2-slider').disabled = linkToRx1;
   // Snap the view once when Link is first turned on (like a Copy), but
   // continuous updates afterward (below, in connectWs2) pass
   // recenterView=false — see applyRx1ToRx2's own comment for why.
@@ -2665,7 +2792,17 @@ function snapToWholeBand() {
 }
 
 function setAudioTarget() {
-  if (audioMuted2) return;
+  // NOT gated on audioMuted2: local-speaker mute and "where the backend
+  // demod should tune" are separate concerns. This used to bail out while
+  // muted, which meant AudioDemodulator.target_freq_hz on the server could
+  // sit at None indefinitely (RX2 has no rig to keep it fresh the way RX1
+  // does every rig-state tick) — feed() silently drops every sample
+  // whenever target_freq_hz is None, so selecting RX2 as the WSJT-X
+  // digital source produced dead silence there until the operator
+  // happened to also click something in RX2's own panel (e.g. its Mode
+  // button) that called this function while unmuted (Terry 2026-09-11:
+  // "if I select RX2 as source, WSJT-X does NOT get the sound... but if I
+  // remember to click the USB pill on RX2 it works correctly").
   send2({ cmd: 'set_audio_target', freq_hz: audioTargetFreqHz, mode: mode2, bandwidth_hz: bandwidth2Hz });
 }
 
@@ -2813,17 +2950,28 @@ function drawSpectrum2() {
   ctx2.clearRect(0, 0, w, h);
 
   if (audioTargetFreqHz !== null) {
-    document.getElementById('vfo2').textContent = formatFreqHz2(audioTargetFreqHz);
+    const vfo2El = document.getElementById('vfo2');
+    vfo2El.textContent = formatFreqHz2(audioTargetFreqHz);
+    // Mirrors RigControl's own vfoEl className toggle (Terry 2026-09-12:
+    // "the frequency indication turns red on the RX1 panel, but the RX2
+    // panel does not").
+    vfo2El.className = 'freq-readout' + (rigPtt ? ' tx' : '');
   }
 
-  if (latestFrame2 && viewCenterHz !== null) {
+  // Mirrors RX1's own frame selection (drawSpectrum) — fine-resolution
+  // frames while RX2 is the digital-audio source, same as RX1's own
+  // DATA-U zoom (Terry 2026-09-12: "RX2 window doesn't use the fine
+  // resolution on the 3k spectrum").
+  const frame2 = (rigIsDigital && latestFineFrame2) ? latestFineFrame2 : latestFrame2;
+
+  if (frame2 && viewCenterHz !== null) {
     document.getElementById('axis2-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);
     document.getElementById('axis2-hi').textContent = ((viewCenterHz + viewSpanHz / 2) / 1e6).toFixed(4);
     if (document.activeElement !== document.getElementById('freq2-input')) {
       document.getElementById('freq2-input').value = (audioTargetFreqHz / 1e6).toFixed(6);
     }
 
-    const points = cropToView2(latestFrame2, Math.round(w));
+    const points = cropToView2(frame2, Math.round(w));
     if (autoScale2) updateDbRange2(points);
     const [floor, ceil] = effectiveFloorCeil2();
     const drawPoints = applySpectrumSmoothing2(points);
@@ -2947,8 +3095,22 @@ function ensureAudioWorklet2() {
       // migration's dual-watch stereo plan.
       const panner = audioCtx2.createStereoPanner ? audioCtx2.createStereoPanner() : null;
       audioWorkletNode2.connect(muteGain2);
-      if (panner) { panner.pan.value = 1; muteGain2.connect(panner); panner.connect(audioCtx2.destination); }
+      // TEMP diagnostic (Terry 2026-09-12): pan=0 (center, both speakers)
+      // instead of 1 (hard right) — testing whether RX2 audio is actually
+      // silent everywhere or just not reaching the right channel
+      // specifically. Revert to 1 once resolved.
+      if (panner) { panner.pan.value = 0; muteGain2.connect(panner); panner.connect(audioCtx2.destination); }
       else { muteGain2.connect(audioCtx2.destination); }
+    }).catch(err => {
+      // Was cached as audioWorkletReady2 even on failure — every future
+      // click of Audio just silently did nothing for playback forever
+      // (the WS/enabled-flag side of enableAudio() doesn't depend on this
+      // promise, so it looked like nothing was wrong). Terry 2026-09-12:
+      // "I tried clicking Audio but it did not help" — reset so the next
+      // click gets a real retry instead of the same cached rejection.
+      console.error('[RX2 audio] worklet setup failed, will retry next click:', err);
+      audioWorkletReady2 = null;
+      throw err;
     });
   }
   return audioWorkletReady2;
@@ -3095,9 +3257,14 @@ function init() {
   document.getElementById('link2-btn').classList.toggle('active', linkToRx1);
   document.getElementById('freq2-input').disabled = linkToRx1;
   document.getElementById('tune2-btn').disabled = linkToRx1;
+  document.getElementById('span2-slider').disabled = linkToRx1;
 
   spectrumWrap2.addEventListener('wheel', evt => {
     evt.preventDefault();
+    // Same "read-only while linked" as the Span slider itself — without
+    // this, scrolling directly on RX2's spectrum would zoom it out from
+    // under RX1's own mirrored span on the very next RX1 zoom tick.
+    if (linkToRx1) return;
     const factor = evt.deltaY > 0 ? 1.15 : (1 / 1.15);
     setViewSpan(viewSpanHz * factor);
   }, { passive: false });
@@ -3200,7 +3367,7 @@ function init() {
 }
 
 return {
-  init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1,
+  init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1, onRx1SpanChange,
   onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect,
   setMode, setAudioTarget, setWidth, setFilterWidthMode, toggleNR, setNR, setAGC, setRxVolume, setRfGain, toggleEQ, setEQ,
 };
@@ -3223,6 +3390,9 @@ Panadapter2.init();
 const RigControl = (function () {
 
 let ws = null;
+// See Panadapter's own wsQueue comment for why this exists — same fix,
+// this module's own separate ws connection and send().
+let wsQueue = [];
 let state = {};
 
 // Dragging guards, keyed rather than bare globals — inline event handlers
@@ -3316,7 +3486,11 @@ function measureNoise() {
 
 function connectWs() {
   ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => { send({ cmd: 'monitor_heartbeat' }); send({ cmd: 'session_status' }); };
+  ws.onopen = () => {
+    const q = wsQueue; wsQueue = [];
+    q.forEach(m => ws.send(m));
+    send({ cmd: 'monitor_heartbeat' }); send({ cmd: 'session_status' });
+  };
   ws.onclose = () => { setTimeout(connectWs, 2000); };
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
@@ -3422,6 +3596,23 @@ function setSession(id) { send({ cmd: 'session_switch', session_id: id }); }
 
 function confirmSessionQuit() { send({ cmd: 'session_confirm_quit' }); }
 
+// FT8/JS8Call always dial USB regardless of band (unlike voice SSB, which
+// flips to LSB below 20m) — Terry 2026-09-11: "If running FT8, we always
+// use USB for all bands." RX2 has no CAT mode of its own to pick this up
+// from a rig-mode broadcast the way RX1 does, so the one point a digital
+// session actually starts is here: current_session_id landing on 'ft8'/
+// 'js8' for the first time (session_manager only ever sets it once a
+// switch completes — see its own current_session_id assignment). Edge-
+// triggered so it fires once on entry, not on every status broadcast
+// while already in the session, which would stomp a deliberate manual
+// LSB pick on RX2 mid-session.
+let _lastSessionId = null;
+function _applyDigitalDefaultsOnSessionEntry(id) {
+  if (id === _lastSessionId) return;
+  _lastSessionId = id;
+  if (id === 'ft8' || id === 'js8') Panadapter2.setMode('USB');
+}
+
 function updateSessionUI(d) {
   const grid = document.getElementById('session-grid');
   const profiles = d.profiles || _sessionProfiles;
@@ -3439,6 +3630,7 @@ function updateSessionUI(d) {
     // button label never changes to report status.
     btn.className = 'btn' + (isTarget ? ' active pulse-tx' : (isCurrent ? ' active' : ''));
   });
+  _applyDigitalDefaultsOnSessionEntry(d.current_session_id ?? null);
 
   const stepEl = document.getElementById('session-step');
   if (d.status === 'error') stepEl.textContent = 'Error: ' + d.error;
@@ -3447,7 +3639,9 @@ function updateSessionUI(d) {
 }
 
 function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  const msg = JSON.stringify(obj);
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg);
+  else wsQueue.push(msg);
 }
 
 function updateUI(s) {
@@ -3948,6 +4142,16 @@ function setDigitalSource(channel) {
   send({ cmd: 'set_digital_source', channel });
   document.getElementById('digisrc-A').classList.toggle('active', channel === 'A');
   document.getElementById('digisrc-B').classList.toggle('active', channel === 'B');
+  // RX1 keeps AudioDemodulator.target_freq_hz fresh on its own (every rig-
+  // state tick, since it follows the live CAT frequency). RX2 has no rig
+  // to do that for it — its target_freq_hz only ever gets set by an
+  // explicit set_audio_target from RX2's own panel, so if none has fired
+  // yet this server lifetime (e.g. right after a restart, before the
+  // operator has touched RX2's Mode/Tune/Audio controls), selecting RX2
+  // here would otherwise wire up the WSJT-X feed to a channel whose
+  // feed() is silently dropping every sample. Force a resync now so
+  // selecting RX2 as source is self-sufficient.
+  if (channel === 'B') Panadapter2.setAudioTarget();
 }
 
 function updateDSP(s) {

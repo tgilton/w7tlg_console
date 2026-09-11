@@ -168,6 +168,15 @@ class AudioDemodulator:
         # listening still found 2.0 too quiet — slider goes to 10.0 (1000%)
         # if more is still needed.
         self.manual_gain = 4.0
+        # Diversity phase-rotate experiment (2026-09-11) — a static phase
+        # shift applied to this channel's baseband right after downmix,
+        # before decimation/filtering (commutes with both, so where
+        # exactly doesn't matter mathematically — here is simplest). 0 by
+        # default: byte-for-byte the old behavior. Manual dial, not an
+        # auto-homing algorithm — the operator turns it while listening
+        # for a null/reinforcement against the other channel in the
+        # stereo mix. See dashboard/diversity.html.
+        self.phase_offset_deg = 0.0
         self.tx_active = False
         self._was_tx_active = False
         self.dropped_count = 0
@@ -209,9 +218,15 @@ class AudioDemodulator:
         self._voice_profile_snapshot: Optional[dict] = None
         self.in_digital_mode = False
 
-        # Fine spectrum — see FINE_FFT_SIZE. Only accumulated/computed in
-        # digital mode (cheap either way, but no reason to spend it when
-        # nobody's looking at it).
+        # Fine spectrum — see FINE_FFT_SIZE. Computed whenever in digital
+        # mode OR an explicit subscriber (the diversity page) wants it —
+        # NOT unconditionally: 2026-09-12 made it run any time audio is
+        # enabled (for the diversity page's RX1/RX2 panels in plain SSB),
+        # which measurably added to sustained CPU load with nobody
+        # necessarily watching. fine_spectrum_enabled is set by
+        # server.py from real subscriber presence on /ws (see
+        # subscribe_fine_spectrum/unsubscribe_fine_spectrum).
+        self.fine_spectrum_enabled = False
         self._fine_window = np.hanning(FINE_FFT_SIZE).astype(np.float32)
         self._fine_fullscale_ref = 32767.0 * float(np.sum(self._fine_window))
         self._fine_buf = np.zeros(FINE_FFT_SIZE, dtype=np.complex64)
@@ -659,6 +674,13 @@ class AudioDemodulator:
         mix = np.exp(-1j * 2 * np.pi * offset_hz / self.input_rate_hz * t).astype(np.complex64)
         baseband = (block_i.astype(np.float32) + 1j * block_q.astype(np.float32)) * mix
 
+        if self.phase_offset_deg:
+            # A static per-batch scalar rotation commutes with the LTI
+            # decimation/filtering below, so applying it here (once, on
+            # the whole batch) is equivalent to applying it anywhere
+            # further downstream — this is just the simplest place.
+            baseband = baseband * complex(np.exp(1j * np.radians(self.phase_offset_deg)))
+
         # Two-stage stateful decimation (overlap-save) — see
         # _choose_decim_stages/_STAGE1_NUM_TAPS. Stage 1 (coarse, cheap
         # filter) does most of the rate reduction at the expensive full
@@ -677,7 +699,10 @@ class AudioDemodulator:
         self._decim_overlap_fine = fine_extended[-(len(self._decim_filter_fine) - 1):]
         intermediate = fine_filtered[::self._fine_decim_factor]
 
-        if self.in_digital_mode:
+        # in_digital_mode also toggles AGC/NR/EQ/passband for FT8-style
+        # operation and is independent of this — fine_spectrum_enabled is
+        # the diversity page's explicit subscription (see server.py).
+        if self.in_digital_mode or self.fine_spectrum_enabled:
             self._update_fine_spectrum(intermediate)
 
         filter_key = (self.bandwidth_hz, self.mode, self.low_cut_hz)

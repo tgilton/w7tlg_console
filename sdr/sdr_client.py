@@ -45,6 +45,7 @@ import numpy as np
 
 from . import sdrplay_capi as capi
 from .audio_demod import AudioDemodulator
+from .combiner import Combiner
 from .virtual_audio_output import DigitalAudioOutput
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,18 @@ class SdrClient:
         # A's above, same reasoning throughout.
         self._avg_power_b: Optional[np.ndarray] = None
         self._reset_avg_event_b = threading.Event()
+        # Diversity phase-coherence tap (2026-09-11) — the raw (unaveraged)
+        # complex FFT bin nearest each channel's own tuned frequency, from
+        # the same per-frame FFT _compute_frame/_compute_frame_b already
+        # computes for the spectrum display. See iq_phase_diff_deg for why
+        # this exists: Dual Tuner mode's two tuners share one ADC/sample
+        # clock, but whether their downconversion LOs also stay phase-
+        # locked to each other (not just the sample clock) was flagged as
+        # unverified when this project started. None while unavailable
+        # (no frame yet, or mid-TX, where the SDR Switch disconnects the
+        # antenna and the bin is disconnected-input noise, not a reading).
+        self._last_phasor_a: Optional[complex] = None
+        self._last_phasor_b: Optional[complex] = None
 
         self.available = False
         self.status = "stopped"   # stopped | live | unavailable
@@ -247,6 +260,11 @@ class SdrClient:
         # still frontend/server.py work, not built this pass — defaults to
         # Channel A, matching today's behavior exactly until it exists.
         self.audio_b = AudioDemodulator(input_rate_hz=sample_rate_hz)
+        # RX0 — manual tunable RX1/RX2 combine (diversity experiment,
+        # 2026-09-12). Off until the Diversity page actually enables it
+        # (Combiner.enabled), so it costs nothing when nobody's looking at
+        # it. See sdr/combiner.py for the full design.
+        self.combiner = Combiner(input_rate_hz=sample_rate_hz)
         # Second subscriber on the same demodulated audio — feeds digital-mode
         # software (WSJT-X etc.) via a virtual audio cable instead of needing
         # the antenna switched back to the radio's own receiver.
@@ -311,6 +329,7 @@ class SdrClient:
         (_compute_frame_b's tx_active check) is a no-op in practice."""
         self.audio.gate_tx()
         self.audio_b.gate_tx()
+        self.combiner.gate_tx()
         self.digital_audio.flush()
 
     async def start(self):
@@ -369,6 +388,7 @@ class SdrClient:
         self.audio.start(self._loop)
         self.audio_b.rf_center_hz = self.rf_freq_hz_b
         self.audio_b.start(self._loop)
+        self.combiner.start(self._loop)
         self.digital_audio.start()
         # Fresh baseline so the watchdog doesn't trip on the gap before the
         # first callback arrives.
@@ -394,6 +414,7 @@ class SdrClient:
         def _blocking_teardown():
             self.audio.stop()
             self.audio_b.stop()
+            self.combiner.stop()
             self.digital_audio.stop()
             if consumer:
                 consumer.join(3.0)
@@ -652,6 +673,24 @@ class SdrClient:
             except queue.Full:
                 pass
         self.audio.feed(i, q_arr)
+        if self.combiner.enabled:
+            # RX0's target/filter tracks RX1's own live settings each
+            # callback — cheap attribute reads/copies, no separate sync
+            # path needed. rf_center_hz_a is set on retune, below.
+            # try/except: this runs inside a ctypes-registered vendor
+            # callback — an uncaught exception here can be silently
+            # swallowed by ctypes instead of surfacing as a normal
+            # traceback, so log explicitly rather than trust the default
+            # thread exception hook to catch it.
+            try:
+                self.combiner.target_freq_hz = self.audio.target_freq_hz
+                self.combiner.mode = self.audio.mode
+                self.combiner.bandwidth_hz = self.audio.bandwidth_hz
+                self.combiner.low_cut_hz = self.audio.low_cut_hz
+                self.combiner.rf_center_hz_a = self.audio.rf_center_hz
+                self.combiner.feed_a(i, q_arr)
+            except Exception:
+                logger.exception("Combiner feed_a error")
 
     def _on_stream_data_b(self, xi, xq, params, num_samples, reset, cb_context):
         """Channel B (Tuner 2 / Antenna 2) — mirrors _on_stream_data
@@ -680,6 +719,12 @@ class SdrClient:
             except queue.Full:
                 pass
         self.audio_b.feed(i, q_arr)
+        if self.combiner.enabled:
+            try:
+                self.combiner.rf_center_hz_b = self.audio_b.rf_center_hz
+                self.combiner.feed_b(i, q_arr)
+            except Exception:
+                logger.exception("Combiner feed_b error")
 
     def _on_event(self, event_id, tuner, params, cb_context):
         # Both events mean "the stream against this device is now invalid."
@@ -843,6 +888,17 @@ class SdrClient:
         spectrum = np.fft.fftshift(np.fft.fft(iq))
         power = (np.abs(spectrum) ** 2).astype(np.float32)
 
+        # Diversity phase tap — raw (unaveraged) bin nearest the tuned
+        # frequency, every frame. See iq_phase_diff_deg / _last_phasor_a.
+        if self.audio.tx_active or self.audio.target_freq_hz is None:
+            self._last_phasor_a = None
+        else:
+            n = len(spectrum)
+            bin_hz = self.sample_rate_hz / n
+            full_lo_hz = self.rf_freq_hz - self.sample_rate_hz / 2
+            target_bin = int(round((self.audio.target_freq_hz - full_lo_hz) / bin_hz))
+            self._last_phasor_a = complex(spectrum[max(0, min(n - 1, target_bin))])
+
         if self.audio.tx_active:
             # SDR Switch disconnects the antenna during TX — this magnitude
             # is disconnected-input noise, not a real reading. Same reasoning
@@ -936,6 +992,16 @@ class SdrClient:
         spectrum = np.fft.fftshift(np.fft.fft(iq))
         power = (np.abs(spectrum) ** 2).astype(np.float32)
 
+        # Diversity phase tap — see _compute_frame's own comment.
+        if self.audio_b.tx_active or self.audio_b.target_freq_hz is None:
+            self._last_phasor_b = None
+        else:
+            n = len(spectrum)
+            bin_hz = self.sample_rate_hz / n
+            full_lo_hz = self.rf_freq_hz_b - self.sample_rate_hz / 2
+            target_bin = int(round((self.audio_b.target_freq_hz - full_lo_hz) / bin_hz))
+            self._last_phasor_b = complex(spectrum[max(0, min(n - 1, target_bin))])
+
         if self.audio_b.tx_active:
             self._avg_power_b = None
             mag_db = (10.0 * np.log10(power / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
@@ -991,6 +1057,25 @@ class SdrClient:
         end_bin = max(start_bin + 1, min(n, end_bin))
         avg_power = float(np.mean(self._avg_power_b[start_bin:end_bin]))
         return 10.0 * float(np.log10(avg_power / (self._fullscale_ref ** 2) + 1e-30))
+
+    def iq_phase_diff_deg(self) -> Optional[float]:
+        """Instantaneous phase difference (-180..+180) between Channel A's
+        and Channel B's tuned-frequency FFT bin, in degrees. Diversity
+        diagnostic, not an S-meter-style average — see the phasor fields'
+        own comment for why. This number's absolute value is meaningless
+        (it includes whatever arbitrary phase offset each channel's own
+        capture happened to start at) — what matters is its behavior over
+        TIME: if the RSPduo's two tuners are genuinely phase-locked to each
+        other (not just sample-clock-locked, which Dual Tuner mode
+        guarantees regardless), this stays close to a fixed value, wobbling
+        only with real propagation differences between the two antennas.
+        If the tuners' own LOs are free-running relative to each other,
+        this rotates continuously at their beat frequency instead. None
+        if either channel has no live reading right now (no frame yet, no
+        audio target tuned, or either side is mid-TX)."""
+        if self._last_phasor_a is None or self._last_phasor_b is None:
+            return None
+        return float(np.degrees(np.angle(self._last_phasor_a * np.conj(self._last_phasor_b))))
 
     async def _publish(self, frame: dict):
         for cb in self._spectrum_callbacks:

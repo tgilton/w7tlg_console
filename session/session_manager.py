@@ -18,10 +18,12 @@ Structurally modeled on amplifier/antenna_ab_test.py's AntennaAbTest: same
 status/on_status()/_publish() observer shape, same awaiting_*/asyncio.Event
 confirm-step pattern, same "one clear error, then stop" failure handling.
 
-Deliberately does NOT touch sdr.audio directly — the existing
-on_rig_state_for_audio_mode edge-trigger (dashboard/server.py) already
-flips the SDR's voice/digital profile off the rig's own reported CAT
-mode. Setting rig_mode here is enough; that machinery fires on its own.
+Deliberately does NOT touch sdr.audio/sdr.audio_b directly — the
+existing on_session_status_for_audio_mode callback (dashboard/server.py),
+registered on this manager's own on_status(), already flips both
+channels' voice/digital audio profile off this manager's own
+current_session_id once a switch completes. Publishing status here is
+enough; that machinery fires on its own.
 
 Deliberately does NOT touch amplifier.acom_bridge.OperatingMode
 (AMP_ON/AMP_OFF) — that's a separate, manually-controlled amp-safety
