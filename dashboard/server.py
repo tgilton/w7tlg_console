@@ -297,6 +297,8 @@ def build_state_payload(state: StationState) -> dict:
         data["rig"]["digital_audio_qsize"] = sdr.digital_audio._q.qsize()
         data["rig"]["sdr_antenna"] = sdr.antenna_label
         data["rig"]["sdr_rf_gain_pct"] = sdr.rf_gain_pct
+        data["rig"]["sdr_rf_notch_enabled"] = sdr.rf_notch_enabled
+        data["rig"]["sdr_dab_notch_enabled"] = sdr.dab_notch_enabled
         # Phase 0 dual-tuner proof-of-life — Channel B (Tuner 2 / Antenna 2)
         # has no pipeline of its own yet, just a liveness check, so this is
         # the only way to confirm Dual Tuner mode actually worked without
@@ -310,6 +312,8 @@ def build_state_payload(state: StationState) -> dict:
         # its own AudioDemodulator's target is the ground truth instead.
         data["rig"]["sdr_rf_freq_hz_b"] = sdr.rf_freq_hz_b
         data["rig"]["sdr_rf_gain_pct_b"] = sdr.rf_gain_pct_b
+        data["rig"]["sdr_rf_notch_enabled_b"] = sdr.rf_notch_enabled_b
+        data["rig"]["sdr_dab_notch_enabled_b"] = sdr.dab_notch_enabled_b
         data["rig"]["sdr_antenna_b"] = sdr.antenna_label_b
         data["rig"]["sdr_target_freq_hz_b"] = sdr.audio_b.target_freq_hz
         data["rig"]["sdr_mode_b"] = sdr.audio_b.mode
@@ -1187,6 +1191,28 @@ async def handle_ws_command(text: str, ws: WebSocket):
                     sdr.set_rf_gain_pct_b(float(msg["pct"]))
                 else:
                     sdr.set_rf_gain_pct(float(msg["pct"]))
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_rf_notch":
+            ok = False
+            if sdr is not None and sdr.available:
+                if msg.get("channel") == "B":
+                    sdr.set_rf_notch_b(bool(msg["enabled"]))
+                else:
+                    sdr.set_rf_notch(bool(msg["enabled"]))
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_dab_notch":
+            ok = False
+            if sdr is not None and sdr.available:
+                if msg.get("channel") == "B":
+                    sdr.set_dab_notch_b(bool(msg["enabled"]))
+                else:
+                    sdr.set_dab_notch(bool(msg["enabled"]))
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))

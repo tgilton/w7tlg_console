@@ -768,13 +768,13 @@ select#palette-select {
       </div>
       <div class="vol-control">
         <div class="tx-meter-label">RF GAIN</div>
-        <input type="range" min="0" max="100" step="1" value="80" id="rf-gain-slider" class="vol-slider-full"
-          oninput="document.getElementById('rf-gain-val').textContent = this.value + '%'"
+        <input type="range" min="0" max="6" step="1" value="5" id="rf-gain-slider" class="vol-slider-full"
+          oninput="document.getElementById('rf-gain-val').textContent = RigControl.hfGainLabel(this.value)"
           onmousedown="RigControl.setDragging('rfGain', true)"
-          onmouseup="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(document.getElementById('rf-gain-slider').value))"
+          onmouseup="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(RigControl.hfStateToPct(document.getElementById('rf-gain-slider').value)))"
           ontouchstart="RigControl.setDragging('rfGain', true)"
-          ontouchend="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(document.getElementById('rf-gain-slider').value))">
-        <div class="tx-meter-value" id="rf-gain-val">80%</div>
+          ontouchend="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(RigControl.hfStateToPct(document.getElementById('rf-gain-slider').value)))">
+        <div class="tx-meter-value" id="rf-gain-val">6 dB atten</div>
       </div>
       <div class="vol-control">
         <div class="tx-meter-label">MODE</div>
@@ -845,10 +845,10 @@ select#palette-select {
     <h2>RX1 Tuning</h2>
     <div class="center-controls-row row-tuning">
       <input type="text" id="freq-input" value="14.074000">
-      <button class="btn" onmousedown="event.preventDefault()" onclick="Panadapter.tuneToInput()">Tune</button>
-      <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()">Whole Band</button>
-      <button class="btn" onclick="Panadapter.recenterView()">Center</button>
-      <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()">Audio</button>
+      <button class="btn" onmousedown="event.preventDefault()" onclick="Panadapter.tuneToInput()" title="Tune">TUN</button>
+      <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()" title="Whole Band">BAND</button>
+      <button class="btn" onclick="Panadapter.recenterView()" title="Center">CTR</button>
+      <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()" title="Audio">AUD</button>
     </div>
     </div>
 
@@ -881,6 +881,10 @@ select#palette-select {
       </div>
       <div class="dsp-toggle-row">
         <button class="dsp-toggle" id="nr-btn" onclick="RigControl.toggleNR()">DNR</button>
+      </div>
+      <div class="dsp-toggle-row">
+        <button class="dsp-toggle" id="rf-notch-btn" onclick="RigControl.toggleRfNotch()">RF NOTCH</button>
+        <button class="dsp-toggle" id="dab-notch-btn" onclick="RigControl.toggleDabNotch()">DAB NOTCH</button>
       </div>
       <div class="dsp-toggle-row">
         <span class="slider-label" style="margin:0">AGC</span>
@@ -969,13 +973,13 @@ select#palette-select {
       </div>
       <div class="vol-control">
         <div class="tx-meter-label">RF GAIN</div>
-        <input type="range" min="0" max="100" step="1" value="80" id="rf-gain2-slider" class="vol-slider-full"
-          oninput="document.getElementById('rf-gain2-val').textContent = this.value + '%'"
+        <input type="range" min="0" max="6" step="1" value="5" id="rf-gain2-slider" class="vol-slider-full"
+          oninput="document.getElementById('rf-gain2-val').textContent = Panadapter2.hfGainLabel2(this.value)"
           onmousedown="RigControl.setDragging('rfGain2', true)"
-          onmouseup="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(document.getElementById('rf-gain2-slider').value))"
+          onmouseup="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(Panadapter2.hfStateToPct2(document.getElementById('rf-gain2-slider').value)))"
           ontouchstart="RigControl.setDragging('rfGain2', true)"
-          ontouchend="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(document.getElementById('rf-gain2-slider').value))">
-        <div class="tx-meter-value" id="rf-gain2-val">80%</div>
+          ontouchend="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(Panadapter2.hfStateToPct2(document.getElementById('rf-gain2-slider').value)))">
+        <div class="tx-meter-value" id="rf-gain2-val">6 dB atten</div>
       </div>
       <div class="vol-control">
         <div class="tx-meter-label">MODE</div>
@@ -1044,14 +1048,14 @@ select#palette-select {
     <h2>RX2 Tuning</h2>
     <div class="center-controls-row row-tuning">
       <input type="text" id="freq2-input" value="14.074000">
-      <button class="btn" id="tune2-btn" onmousedown="event.preventDefault()" onclick="Panadapter2.tuneToInput()">Tune</button>
-      <button class="btn" onclick="Panadapter2.snapToWholeBand()">Whole Band</button>
-      <button class="btn" onclick="Panadapter2.recenterView()">Center</button>
-      <button class="btn active" id="mute2-btn" onclick="Panadapter2.toggleMute()">Audio</button>
+      <button class="btn" id="tune2-btn" onmousedown="event.preventDefault()" onclick="Panadapter2.tuneToInput()" title="Tune">TUN</button>
+      <button class="btn" onclick="Panadapter2.snapToWholeBand()" title="Whole Band">BAND</button>
+      <button class="btn" onclick="Panadapter2.recenterView()" title="Center">CTR</button>
+      <button class="btn active" id="mute2-btn" onclick="Panadapter2.toggleMute()" title="Audio">AUD</button>
       <button class="btn" id="link2-btn" onclick="Panadapter2.toggleLink()"
-        title="Link to RX1 — RX2 continuously follows RX1's tuning (the radio's VFO knob) instead of being tuned independently">Link</button>
+        title="Link to RX1 — RX2 continuously follows RX1's tuning (the radio's VFO knob) instead of being tuned independently">LNK</button>
       <button class="btn" id="copy2-btn" onclick="Panadapter2.copyFromRx1()"
-        title="Copy RX1 -> RX2 — one-time copy of RX1's current frequency, mode, filter width and view onto RX2 (does not keep following unless Link is also on)">Copy</button>
+        title="Copy RX1 -> RX2 — one-time copy of RX1's current frequency, mode, filter width and view onto RX2 (does not keep following unless Link is also on)">CPY</button>
     </div>
     </div>
 
@@ -1084,6 +1088,10 @@ select#palette-select {
       </div>
       <div class="dsp-toggle-row">
         <button class="dsp-toggle" id="nr2-btn" onclick="Panadapter2.toggleNR()">DNR</button>
+      </div>
+      <div class="dsp-toggle-row">
+        <button class="dsp-toggle" id="rf-notch2-btn" onclick="Panadapter2.toggleRfNotch()">RF NOTCH</button>
+        <button class="dsp-toggle" id="dab-notch2-btn" onclick="Panadapter2.toggleDabNotch()">DAB NOTCH</button>
       </div>
       <div class="dsp-toggle-row">
         <span class="slider-label" style="margin:0">AGC</span>
@@ -1532,7 +1540,20 @@ function connectWs() {
 
       if (!wholeBandApplied && rigBand && latestFrame) {
         wholeBandApplied = true;
-        snapToWholeBand();
+        // Only auto-snap if the rig's actual frequency really falls inside
+        // that band's own channelized edges — the radio's own CAT band tag
+        // can be looser than that (e.g. the FT-991A reports "60m" for
+        // WWV's 5.000.000, which isn't an actual 60m channel). Snapping to
+        // the wrong edges then permanently locks out normal recentering,
+        // since followRigFrequency() intentionally does nothing while
+        // wholeBandView is true (Terry 2026-09-12: RX1 stuck showing
+        // 5.3305-5.4035 while parked on 5.000.000, never self-correcting).
+        // RX2 already avoids this because bandForFreq2 derives its band
+        // label from the frequency itself instead of trusting a CAT tag.
+        const edges = BAND_EDGES_HZ[rigBand];
+        if (edges && rigFreqHz >= edges[0] && rigFreqHz <= edges[1]) {
+          snapToWholeBand();
+        }
       }
       handleDigitalViewMode();
       followRigFrequency();
@@ -2444,6 +2465,16 @@ function connectWs2() {
         viewCenterHz = rig.sdr_rf_freq_hz_b;
         document.getElementById('freq2-input').value = (audioTargetFreqHz / 1e6).toFixed(6);
       }
+      // RX2's RF Gain slider had no sync from server state at all before
+      // this (Terry 2026-09-12: real gain changes never moved the slider,
+      // and dragging it then reverted the real value back to whatever
+      // stale number it happened to be sitting at) — mirrors RX1's own
+      // equivalent block (isDragging('rfGain')/sdr_rf_gain_pct) one-for-one.
+      if (!RigControl.isDragging('rfGain2') && rig.sdr_rf_gain_pct_b !== undefined) {
+        const gainState2 = hfPctToState2(rig.sdr_rf_gain_pct_b);
+        document.getElementById('rf-gain2-slider').value = gainState2;
+        document.getElementById('rf-gain2-val').textContent = hfGainLabel2(gainState2);
+      }
       // See wholeBandApplied2's own declaration comment — race-free
       // startup default, independent of Link/Copy's own span sync. Must
       // run BEFORE handleDigitalViewMode2(), same ordering as RX1's own
@@ -2736,9 +2767,12 @@ function applyRx1ToRx2(recenterView) {
   }
   if (lastRigPassband) {
     bandwidth2Hz = lastRigPassband;
-    document.getElementById('width2-slider').value = bandwidth2Hz;
-    document.getElementById('width2-val').textContent = bandwidth2Hz + 'Hz';
   }
+  // Recomputes width2-slider's min/max for the (possibly just-changed)
+  // mode2/bandwidth2Hz above, and applies the value/label — see its own
+  // comment for why this can't just be a value assignment like the two
+  // lines this replaced used to be.
+  syncFilterRange2();
   // Match RX1's actual current view (span AND center) too, one-shot only
   // (Terry 2026-09-11: RX2 was stuck at its own default 15kHz span even
   // when RX1 was zoomed out to the whole band) — not during continuous
@@ -2811,6 +2845,7 @@ function setMode(m) {
   document.getElementById('mode2-USB').classList.toggle('active', m === 'USB');
   document.getElementById('mode2-LSB').classList.toggle('active', m === 'LSB');
   document.getElementById('badge2-mode').textContent = m;
+  syncFilterRange2();
   setAudioTarget();
 }
 
@@ -3171,6 +3206,17 @@ function toggleNR() {
   send2({ cmd: 'set_audio_nr', on: _nr2On });
   document.getElementById('nr2-btn').classList.toggle('active', _nr2On);
 }
+let _rfNotch2On = false, _dabNotch2On = false;
+function toggleRfNotch() {
+  _rfNotch2On = !_rfNotch2On;
+  send2({ cmd: 'set_rf_notch', enabled: _rfNotch2On });
+  document.getElementById('rf-notch2-btn').classList.toggle('active', _rfNotch2On);
+}
+function toggleDabNotch() {
+  _dabNotch2On = !_dabNotch2On;
+  send2({ cmd: 'set_dab_notch', enabled: _dabNotch2On });
+  document.getElementById('dab-notch2-btn').classList.toggle('active', _dabNotch2On);
+}
 function setAGC(value) {
   send2({ cmd: 'set_agc', value });
   document.getElementById('agc2-off').classList.toggle('active', value === 0);
@@ -3179,6 +3225,28 @@ function setAGC(value) {
 }
 function setRxVolume(v) { send2({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 }); }
 function setRfGain(v) { send2({ cmd: 'set_rf_gain', pct: parseFloat(v) }); }
+
+// See RigControl's own HF_LNA_GR_DB/hfStateToPct/hfPctToState/hfGainLabel
+// for the full reasoning — same real 7-state HF gain-reduction table,
+// duplicated here rather than exposed from RigControl since this module
+// already keeps its own independent copies of shared small constants
+// (see PALETTES/s9CalDb2 above).
+const HF_LNA_GR_DB2 = [0, 6, 12, 18, 37, 42, 61];
+const HF_MAX_LNA_STATE2 = HF_LNA_GR_DB2.length - 1;
+
+function hfStateToPct2(sliderValue) {
+  return (parseFloat(sliderValue) / HF_MAX_LNA_STATE2) * 100;
+}
+
+function hfPctToState2(pct) {
+  const state = Math.round(HF_MAX_LNA_STATE2 * (1 - pct / 100));
+  return HF_MAX_LNA_STATE2 - state;
+}
+
+function hfGainLabel2(sliderValue) {
+  const state = HF_MAX_LNA_STATE2 - Math.round(parseFloat(sliderValue));
+  return HF_LNA_GR_DB2[state] + ' dB atten';
+}
 function toggleEQ() {
   _eq2On = !_eq2On;
   document.getElementById('eq2-btn').classList.toggle('active', _eq2On);
@@ -3197,6 +3265,50 @@ function setWidth(val) {
   bandwidth2Hz = parseInt(val, 10);
   document.getElementById('width2-val').textContent = bandwidth2Hz + 'Hz';
   setAudioTarget();
+}
+
+// Keeps width2-slider's min/max (and the NARROW/WIDE active button) tracking
+// mode2 and bandwidth2Hz, mirroring RigControl's updateFilterWidth(rig) for
+// RX1 — which recomputes wrap.min/max from live rig telemetry on every state
+// broadcast. RX2 has no such periodic broadcast for its own filter, so
+// without this call the slider's min/max stay wherever they were last set
+// (its HTML default 200-3000, or a stale range left over from a previous
+// mode) even after mode2 changes — same value then sits at a different
+// fractional position on RX1 vs RX2 (Terry 2026-09-13: "ball is in a
+// different location"), and wheel/drag can silently clamp against a stale
+// bound that looks like "only works in one direction."
+function syncFilterRange2(skipDragCheck) {
+  const range = FILTER_RANGES2[mode2] || FILTER_RANGES2.USB;
+  const slider = document.getElementById('width2-slider');
+  const narBtn = document.getElementById('filt2-NAR');
+  const widBtn = document.getElementById('filt2-WID');
+  if (!range) {
+    slider.disabled = true;
+    narBtn.classList.add('disabled');
+    widBtn.classList.add('disabled');
+    document.getElementById('width2-val').textContent = 'N/A';
+    return;
+  }
+  slider.disabled = false;
+  narBtn.classList.remove('disabled');
+  widBtn.classList.remove('disabled');
+  // Same zone-sticky logic as updateFilterWidth: stay in the current NAR/WID
+  // zone as long as bandwidth2Hz still fits inside it, only re-derive from
+  // the raw value when it doesn't (mode change, or a value set some other
+  // way) — see that function's own comment for why (NAR's upper bound and
+  // WID's lower bound share the same Hz value).
+  const curRange = range[_widthMode2];
+  const which = (curRange && bandwidth2Hz >= curRange[0] && bandwidth2Hz <= curRange[1])
+    ? _widthMode2
+    : (bandwidth2Hz >= range.WID[0] ? 'WID' : 'NAR');
+  _widthMode2 = which;
+  narBtn.className = 'btn' + (which === 'NAR' ? ' active' : '');
+  widBtn.className = 'btn' + (which === 'WID' ? ' active' : '');
+  const [lo, hi] = range[which];
+  slider.min = lo;
+  slider.max = hi;
+  if (skipDragCheck || !RigControl.isDragging('width2')) slider.value = bandwidth2Hz;
+  document.getElementById('width2-val').textContent = bandwidth2Hz + 'Hz';
 }
 
 // Mirrors RigControl's FILTER_RANGES narDefault/widDefault values — not
@@ -3247,6 +3359,17 @@ function init() {
   wfOverlayCanvas2 = document.getElementById('waterfall2-overlay-canvas');
   wfOverlayCtx2 = wfOverlayCanvas2.getContext('2d');
   spectrumWrap2 = document.getElementById('spectrum2-wrap');
+
+  // Narrows width2-slider's min/max off its HTML-default 200-3000 to match
+  // mode2's actual WID zone at load, instead of leaving it wrong until the
+  // first mode change or Link/Copy — see syncFilterRange2's own comment.
+  // skipDragCheck=true: this runs before RigControl exists yet (RigControl
+  // is declared later in the file and Panadapter2.init() fires immediately
+  // after this IIFE, well before RigControl's own script block runs) — a
+  // bare RigControl.isDragging() reference here threw a ReferenceError that
+  // silently aborted the rest of init(), which is why RX2 came up with no
+  // spectrum/waterfall and no audio (Terry 2026-09-13).
+  syncFilterRange2(true);
 
   // Reflect linkToRx1's default-on state (see its own declaration
   // comment) — same UI sync toggleLink() applies on a manual click.
@@ -3339,7 +3462,7 @@ function init() {
     ['width2-slider',    v => setWidth(v),     'width2'],
     ['nr2-slider',       v => setNR(v),        'nr2'],
     ['rx-vol2-slider',   v => setRxVolume(v),  'rxVol2'],
-    ['rf-gain2-slider',  v => setRfGain(v),    'rfGain2'],
+    ['rf-gain2-slider',  v => setRfGain(hfStateToPct2(v)),    'rfGain2'],
     ['eq2-bass-slider',  () => setEQ(),        'eq2'],
     ['eq2-mid-slider',   () => setEQ(),        'eq2'],
     ['eq2-treble-slider',() => setEQ(),        'eq2'],
@@ -3366,6 +3489,8 @@ return {
   init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1, onRx1SpanChange,
   onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect,
   setMode, setAudioTarget, setWidth, setFilterWidthMode, toggleNR, setNR, setAGC, setRxVolume, setRfGain, toggleEQ, setEQ,
+  toggleRfNotch, toggleDabNotch,
+  hfStateToPct2, hfPctToState2, hfGainLabel2,
 };
 
 })();
@@ -3399,6 +3524,12 @@ let state = {};
 const _dragging = {};
 function setDragging(key, val) { _dragging[key] = val; }
 function isDragging(key) { return !!_dragging[key]; }
+// Exposed publicly (unlike setDragging/sliderRelease before it, this was
+// pure oversight) so Panadapter2's own state-sync code can check RX2
+// sliders' drag state — _dragging is otherwise private to this closure,
+// and Panadapter2 has no dragging tracker of its own; it already writes
+// to this same shared state via setDragging (see rf-gain2-slider's
+// onmousedown), just never had a way to read it back.
 function sliderRelease(key, sendFn) {
   sendFn();
   setTimeout(() => { _dragging[key] = false; }, 350);
@@ -3784,9 +3915,9 @@ function updateUI(s) {
     document.getElementById('rx-vol-val').textContent = volPct + '%';
   }
   if (!isDragging('rfGain') && rig.sdr_rf_gain_pct !== undefined) {
-    const gainPct = Math.round(rig.sdr_rf_gain_pct);
-    document.getElementById('rf-gain-slider').value = gainPct;
-    document.getElementById('rf-gain-val').textContent = gainPct + '%';
+    const gainState = hfPctToState(rig.sdr_rf_gain_pct);
+    document.getElementById('rf-gain-slider').value = gainState;
+    document.getElementById('rf-gain-val').textContent = hfGainLabel(gainState);
   }
 
   [1, 2, 3, 4].forEach(n => {
@@ -4088,6 +4219,20 @@ function inhibitTx() { send({ cmd: 'inhibit_tx', reason: 'Manual operator inhibi
 function allowTx() { send({ cmd: 'allow_tx' }); }
 
 var _nbOn = false, _nrOn = false, _dnfOn = false, _eqOn = true;
+var _rfNotchOn = false, _dabNotchOn = false;
+
+function toggleRfNotch() { _rfNotchOn = !_rfNotchOn; send({ cmd: 'set_rf_notch', enabled: _rfNotchOn }); _applyRfNotch(_rfNotchOn); }
+function _applyRfNotch(on) {
+  const btn = document.getElementById('rf-notch-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+}
+function toggleDabNotch() { _dabNotchOn = !_dabNotchOn; send({ cmd: 'set_dab_notch', enabled: _dabNotchOn }); _applyDabNotch(_dabNotchOn); }
+function _applyDabNotch(on) {
+  const btn = document.getElementById('dab-notch-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', on);
+}
 
 function toggleNB() { _nbOn = !_nbOn; send({ cmd: 'set_nb', on: _nbOn }); _applyNB(_nbOn); }
 function _applyNB(on) {
@@ -4115,6 +4260,37 @@ function _applyDNF(on) {
 function setAGC(value) { send({ cmd: 'set_agc', value }); }
 function setRxVolume(v) { send({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 }); }
 function setRfGain(v) { send({ cmd: 'set_rf_gain', pct: parseFloat(v) }); }
+
+// RF Gain is really a 7-position discrete control at HF (0-60MHz — every
+// band this console operates in), not a continuous 0-100% knob — see
+// sdr/sdr_client.py's _max_lna_state_for_freq/_rf_gain_params for the
+// real gain-reduction table this mirrors (confirmed against
+// SDRplay_API_Specification_v3.15.pdf Sec. 5). Presenting it as 101
+// slider positions produced long dead zones then a sudden double-digit
+// dB jump (Terry 2026-09-12: "From 88 or so to 91 there is no
+// difference, then the signal jumps about 10dB when I go to 92" — exactly
+// the state=1->0 boundary predicted by the table). The slider itself now
+// only has 7 real positions (0-6); still communicates over the wire as a
+// 0-100 pct (server-side contract unchanged) via hfStateToPct.
+const HF_LNA_GR_DB = [0, 6, 12, 18, 37, 42, 61];   // state 0..6, dB atten
+const HF_MAX_LNA_STATE = HF_LNA_GR_DB.length - 1;  // 6
+
+function hfStateToPct(sliderValue) {
+  // sliderValue: 0 (min gain) .. HF_MAX_LNA_STATE (max gain). Exact
+  // inverse of _rf_gain_params' round(6*(1-pct/100)) — no rounding
+  // ambiguity since HF_MAX_LNA_STATE - sliderValue is already an integer.
+  return (parseFloat(sliderValue) / HF_MAX_LNA_STATE) * 100;
+}
+
+function hfPctToState(pct) {
+  const state = Math.round(HF_MAX_LNA_STATE * (1 - pct / 100));
+  return HF_MAX_LNA_STATE - state;   // slider value, not raw LNAstate
+}
+
+function hfGainLabel(sliderValue) {
+  const state = HF_MAX_LNA_STATE - Math.round(parseFloat(sliderValue));
+  return HF_LNA_GR_DB[state] + ' dB atten';
+}
 function setSsbTxBpf(value) { send({ cmd: 'set_ssb_tx_bpf', value }); }
 
 function toggleEQ() { _eqOn = !_eqOn; setEQ(); _applyEQ(_eqOn); }
@@ -4153,6 +4329,8 @@ function setDigitalSource(channel) {
 function updateDSP(s) {
   if (s.nb_on !== undefined && s.nb_on !== _nbOn) { _nbOn = !!s.nb_on; _applyNB(_nbOn); }
   if (s.sdr_nr_enabled !== undefined && s.sdr_nr_enabled !== _nrOn) { _nrOn = !!s.sdr_nr_enabled; _applyNR(_nrOn); }
+  if (s.sdr_rf_notch_enabled !== undefined && s.sdr_rf_notch_enabled !== _rfNotchOn) { _rfNotchOn = !!s.sdr_rf_notch_enabled; _applyRfNotch(_rfNotchOn); }
+  if (s.sdr_dab_notch_enabled !== undefined && s.sdr_dab_notch_enabled !== _dabNotchOn) { _dabNotchOn = !!s.sdr_dab_notch_enabled; _applyDabNotch(_dabNotchOn); }
   if (!isDragging('nr')) {
     const nrSlider = document.getElementById('nr-slider');
     const nrVal = document.getElementById('nr-val');
@@ -4211,7 +4389,7 @@ function init() {
   addWheelToSlider('width-slider',    v => setWidth(v),    'width');
   addWheelToSlider('nr-slider',       v => setNR(v),        'nr');
   addWheelToSlider('rx-vol-slider',   v => setRxVolume(v),  'rxVol');
-  addWheelToSlider('rf-gain-slider',  v => setRfGain(v),    'rfGain');
+  addWheelToSlider('rf-gain-slider',  v => setRfGain(hfStateToPct(v)),    'rfGain');
   addWheelToSlider('eq-bass-slider',  () => setEQ(),         'eq');
   addWheelToSlider('eq-mid-slider',   () => setEQ(),         'eq');
   addWheelToSlider('eq-treble-slider',() => setEQ(),         'eq');
@@ -4222,11 +4400,13 @@ function init() {
 }
 
 return {
-  init, setDragging, sliderRelease, onS9CalInput, measureNoise,
+  init, setDragging, sliderRelease, isDragging, onS9CalInput, measureNoise,
+  hfStateToPct, hfPctToState, hfGainLabel,
   setBand, setMode, setFilterWidthMode, onWidthSlider, setWidth,
   setPower, setPreamp, setAtt, setOpMode, setMicGain, setComp,
   nextAntenna, inhibitTx, allowTx,
   toggleNB, toggleNR, onNRChange, setNR, toggleDNF, setAGC, setRxVolume, setRfGain, setSsbTxBpf,
+  toggleRfNotch, toggleDabNotch,
   toggleEQ, setEQ, setDtGain, setDigitalSource,
   startAbTest, stopAbTest, toggleAbtManual, confirmAbtSwitch,
   setSession, confirmSessionQuit,

@@ -35,7 +35,7 @@ import time
 from typing import Optional
 
 import numpy as np
-from scipy.signal import correlate
+from scipy.signal import correlate, fftconvolve
 
 logger = logging.getLogger(__name__)
 
@@ -169,16 +169,30 @@ class _ChannelStage:
         mix = np.exp(-1j * 2 * np.pi * offset_hz / self.input_rate_hz * t).astype(np.complex64)
         baseband = (block_i.astype(np.float32) + 1j * block_q.astype(np.float32)) * mix
 
+        # fftconvolve, not np.convolve: identical result (mode="valid" is
+        # the same mathematical operation either way — verified against
+        # np.convolve on synthetic complex64 data before this swap, max
+        # relative error ~3e-7, i.e. float32 rounding noise, nothing that
+        # affects the phase-alignment work this module exists for), just
+        # computed via FFT instead of direct sliding-window multiply-add.
+        # This was the actual CPU bottleneck starving the combiner's own
+        # thread (confirmed live 2026-09-12: combine_dropped_a/b climbing
+        # and calibrate() returning uniformly random delays even with
+        # RX2's own AudioDemodulator disabled, ruling out cross-thread
+        # contention as the cause) — direct convolution here duplicates
+        # RX1's/RX2's own per-channel decimation a third time, at the
+        # full 2Msps input rate, and was too slow to keep up regardless
+        # of what else was running.
         if self._filter_coarse is not None:
             ext = np.concatenate([self._overlap_coarse, baseband])
-            coarse = np.convolve(ext, self._filter_coarse, mode="valid")
+            coarse = fftconvolve(ext, self._filter_coarse, mode="valid").astype(np.complex64)
             self._overlap_coarse = ext[-(len(self._filter_coarse) - 1):]
             coarse_out = coarse[::self._coarse_factor]
         else:
             coarse_out = baseband
 
         ext = np.concatenate([self._overlap_fine, coarse_out])
-        fine = np.convolve(ext, self._filter_fine, mode="valid")
+        fine = fftconvolve(ext, self._filter_fine, mode="valid").astype(np.complex64)
         self._overlap_fine = ext[-(len(self._filter_fine) - 1):]
         return fine[::self._fine_factor]
 

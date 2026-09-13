@@ -61,15 +61,26 @@ SpectrumCallback = Callable[[dict], Coroutine]
 _GR_DB_MAX_GAIN = 20
 _GR_DB_MIN_GAIN = 59
 
-# Highest valid LNAstate (see sdrplay_capi.RSPDUO_NUM_LNA_STATES* — max
-# valid state is count - 1). The RSPdx-R2's per-band tables don't carry
-# over: RSPduo has no software antenna-port switching, and which of its
-# four LNA-state tables applies at which frequency/port isn't in the
-# installed header (SDRplay's API guide has that, not on hand here) — so
-# this uses the general table uniformly across both tuners/all bands for
-# now, pending live confirmation the way the RSPdx-R2 gain zones were
-# (see project memory on the 2026-08-30 RF Gain sweep).
-_MAX_LNA_STATE = capi.RSPDUO_NUM_LNA_STATES - 1
+# Highest valid LNAstate, BY FREQUENCY — confirmed 2026-09-12 against
+# SDRplay_API_Specification_v3.15.pdf Sec. 5 (Gain Reduction Tables), not
+# on hand when this was first written, hence the uniform-10 placeholder
+# that used to be here. The RSPduo's normal (50 Ohm) port is NOT a
+# uniform state count across the tuning range: 0-60MHz (everything this
+# station operates in — every HF ham band plus WWV) has only 7 valid
+# states (0-6), not 10; 60-1000MHz has 10 (0-9); 1000-2000MHz/L-band has
+# 9 (0-8). Using 10 uniformly wasted the bottom of the RF Gain slider's
+# range on invalid states for HF, producing large flat spots and sudden
+# jumps instead of smooth response — confirmed live (Terry 2026-09-12: no
+# audible/visible change until ~12% away from 80% on either channel, at
+# both 5 and 10 MHz).
+def _max_lna_state_for_freq(freq_hz: float) -> int:
+    freq_mhz = freq_hz / 1e6
+    if freq_mhz < 60:
+        return 6
+    elif freq_mhz < 1000:
+        return 9
+    else:
+        return 8
 
 # Raw ADC rate written to dp.devParams.contents.fsHz — NOT the rate IQ
 # samples actually arrive at (that's SdrClient.sample_rate_hz, the
@@ -88,11 +99,12 @@ _MAX_LNA_STATE = capi.RSPDUO_NUM_LNA_STATES - 1
 _DEVICE_FS_HZ = 6_000_000.0
 
 
-def _rf_gain_params(pct: float) -> tuple:
-    """Map the 0-100% RF Gain knob to (gRdB, LNAstate)."""
+def _rf_gain_params(pct: float, freq_hz: float) -> tuple:
+    """Map the 0-100% RF Gain knob to (gRdB, LNAstate) — see
+    _max_lna_state_for_freq for why LNAstate's max varies by frequency."""
     pct = max(0.0, min(100.0, pct))
     gr_db = round(_GR_DB_MIN_GAIN - (_GR_DB_MIN_GAIN - _GR_DB_MAX_GAIN) * pct / 100.0)
-    lna_state = round(_MAX_LNA_STATE * (1.0 - pct / 100.0))
+    lna_state = round(_max_lna_state_for_freq(freq_hz) * (1.0 - pct / 100.0))
     return gr_db, lna_state
 
 
@@ -151,6 +163,19 @@ class SdrClient:
         # Phase 1 adds these for; see set_center_freq_hz_b/set_rf_gain_pct_b.
         self.rf_freq_hz_b = rf_freq_hz
         self.rf_gain_pct_b = rf_gain_pct
+        # RF/DAB notch — RSPduo hardware filters ahead of the mixer, per-
+        # tuner, off by default (matches the API's own default). Existed
+        # for the old RSPdx-R2 client but never carried over to the
+        # RSPduo backend when that hardware swapped in (2026-09-10) — see
+        # project memory on the migration. RF notch pulls down strong MW/
+        # AM broadcast energy that could desense the front end; DAB notch
+        # targets the European/UK digital-radio band, rarely relevant on
+        # HF but included for parity since both fields live in the same
+        # rspDuoTunerParams struct either way.
+        self.rf_notch_enabled = False
+        self.rf_notch_enabled_b = False
+        self.dab_notch_enabled = False
+        self.dab_notch_enabled_b = False
         self.lib_path = lib_path
         # Exponential moving average in linear power across consecutive FFT
         # frames, weighted to match the steady-state variance reduction of an
@@ -476,6 +501,34 @@ class SdrClient:
         if self._loop:
             self._loop.run_in_executor(None, self._apply_rf_gain_b)
 
+    def set_rf_notch(self, enabled: bool):
+        if not self.available:
+            return
+        self.rf_notch_enabled = bool(enabled)
+        if self._loop:
+            self._loop.run_in_executor(None, self._apply_rf_notch)
+
+    def set_rf_notch_b(self, enabled: bool):
+        if not self.available:
+            return
+        self.rf_notch_enabled_b = bool(enabled)
+        if self._loop:
+            self._loop.run_in_executor(None, self._apply_rf_notch_b)
+
+    def set_dab_notch(self, enabled: bool):
+        if not self.available:
+            return
+        self.dab_notch_enabled = bool(enabled)
+        if self._loop:
+            self._loop.run_in_executor(None, self._apply_dab_notch)
+
+    def set_dab_notch_b(self, enabled: bool):
+        if not self.available:
+            return
+        self.dab_notch_enabled_b = bool(enabled)
+        if self._loop:
+            self._loop.run_in_executor(None, self._apply_dab_notch_b)
+
     # ------------------------------------------------------------------
     # Internal: device lifecycle (runs on executor threads, not the loop)
     # ------------------------------------------------------------------
@@ -517,7 +570,7 @@ class SdrClient:
             # self.sample_rate_hz (the effective/delivered rate) — see
             # _DEVICE_FS_HZ's own comment.
             dp.devParams.contents.fsHz = _DEVICE_FS_HZ
-            gr_db, lna_state = _rf_gain_params(self.rf_gain_pct)
+            gr_db, lna_state = _rf_gain_params(self.rf_gain_pct, self.rf_freq_hz)
 
             # Dual Tuner mode requires Low IF, not Zero IF (see datasheet).
             # ifType isn't freely choosable, though — the SDRplay API's
@@ -538,6 +591,8 @@ class SdrClient:
             ch_a.tunerParams.gain.gRdB = gr_db
             ch_a.tunerParams.gain.LNAstate = lna_state
             ch_a.ctrlParams.agc.enable = capi.AGC_DISABLE
+            ch_a.rspDuoTunerParams.rfNotchEnable = int(self.rf_notch_enabled)
+            ch_a.rspDuoTunerParams.rfDabNotchEnable = int(self.dab_notch_enabled)
 
             # Channel B (Tuner 2 / Antenna 2) — rxChannelB is only valid
             # once Dual Tuner mode is actually granted above. Phase 0:
@@ -551,6 +606,8 @@ class SdrClient:
             ch_b.tunerParams.gain.gRdB = gr_db
             ch_b.tunerParams.gain.LNAstate = lna_state
             ch_b.ctrlParams.agc.enable = capi.AGC_DISABLE
+            ch_b.rspDuoTunerParams.rfNotchEnable = int(self.rf_notch_enabled_b)
+            ch_b.rspDuoTunerParams.rfDabNotchEnable = int(self.dab_notch_enabled_b)
 
             # Warm up numpy's FFT planning cache now, off the real-time path —
             # Phase 0 measured a one-time ~68ms first-call cost otherwise.
@@ -574,7 +631,7 @@ class SdrClient:
             return
         ch_a = dp_ptr.contents.rxChannelA.contents
         ch_a.tunerParams.rfFreq.rfHz = freq_hz
-        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct)
+        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct, freq_hz)
         ch_a.tunerParams.gain.gRdB = gr_db
         ch_a.tunerParams.gain.LNAstate = lna_state
         self._lib.sdrplay_api_Update(
@@ -587,7 +644,7 @@ class SdrClient:
         dp_ptr = C.POINTER(capi.DeviceParamsT)()
         if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
             return
-        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct)
+        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct, self.rf_freq_hz)
         ch_a = dp_ptr.contents.rxChannelA.contents
         ch_a.tunerParams.gain.gRdB = gr_db
         ch_a.tunerParams.gain.LNAstate = lna_state
@@ -606,7 +663,7 @@ class SdrClient:
             return
         ch_b = dp_ptr.contents.rxChannelB.contents
         ch_b.tunerParams.rfFreq.rfHz = freq_hz
-        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct_b)
+        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct_b, freq_hz)
         ch_b.tunerParams.gain.gRdB = gr_db
         ch_b.tunerParams.gain.LNAstate = lna_state
         self._lib.sdrplay_api_Update(
@@ -620,7 +677,7 @@ class SdrClient:
         dp_ptr = C.POINTER(capi.DeviceParamsT)()
         if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
             return
-        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct_b)
+        gr_db, lna_state = _rf_gain_params(self.rf_gain_pct_b, self.rf_freq_hz_b)
         ch_b = dp_ptr.contents.rxChannelB.contents
         ch_b.tunerParams.gain.gRdB = gr_db
         ch_b.tunerParams.gain.LNAstate = lna_state
@@ -628,6 +685,60 @@ class SdrClient:
                                             capi.Update_Tuner_Gr, capi.Update_Ext1_None)
         if err != 0:
             logger.warning(f"RSPduo Channel B RF gain update failed: err={err}")
+
+    def _apply_rf_notch(self):
+        if not self._has_device or self._lib is None:
+            return
+        dp_ptr = C.POINTER(capi.DeviceParamsT)()
+        if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
+            return
+        ch_a = dp_ptr.contents.rxChannelA.contents
+        ch_a.rspDuoTunerParams.rfNotchEnable = int(self.rf_notch_enabled)
+        err = self._lib.sdrplay_api_Update(self._device.dev, capi.Tuner_A,
+                                            capi.Update_RspDuo_RfNotchControl, capi.Update_Ext1_None)
+        if err != 0:
+            logger.warning(f"RSPduo Channel A RF notch update failed: err={err}")
+
+    def _apply_rf_notch_b(self):
+        """Channel B's RF notch — see _apply_rf_notch, targets Tuner_B."""
+        if not self._has_device or self._lib is None:
+            return
+        dp_ptr = C.POINTER(capi.DeviceParamsT)()
+        if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
+            return
+        ch_b = dp_ptr.contents.rxChannelB.contents
+        ch_b.rspDuoTunerParams.rfNotchEnable = int(self.rf_notch_enabled_b)
+        err = self._lib.sdrplay_api_Update(self._device.dev, capi.Tuner_B,
+                                            capi.Update_RspDuo_RfNotchControl, capi.Update_Ext1_None)
+        if err != 0:
+            logger.warning(f"RSPduo Channel B RF notch update failed: err={err}")
+
+    def _apply_dab_notch(self):
+        if not self._has_device or self._lib is None:
+            return
+        dp_ptr = C.POINTER(capi.DeviceParamsT)()
+        if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
+            return
+        ch_a = dp_ptr.contents.rxChannelA.contents
+        ch_a.rspDuoTunerParams.rfDabNotchEnable = int(self.dab_notch_enabled)
+        err = self._lib.sdrplay_api_Update(self._device.dev, capi.Tuner_A,
+                                            capi.Update_RspDuo_RfDabNotchControl, capi.Update_Ext1_None)
+        if err != 0:
+            logger.warning(f"RSPduo Channel A DAB notch update failed: err={err}")
+
+    def _apply_dab_notch_b(self):
+        """Channel B's DAB notch — see _apply_dab_notch, targets Tuner_B."""
+        if not self._has_device or self._lib is None:
+            return
+        dp_ptr = C.POINTER(capi.DeviceParamsT)()
+        if self._lib.sdrplay_api_GetDeviceParams(self._device.dev, C.byref(dp_ptr)) != 0:
+            return
+        ch_b = dp_ptr.contents.rxChannelB.contents
+        ch_b.rspDuoTunerParams.rfDabNotchEnable = int(self.dab_notch_enabled_b)
+        err = self._lib.sdrplay_api_Update(self._device.dev, capi.Tuner_B,
+                                            capi.Update_RspDuo_RfDabNotchControl, capi.Update_Ext1_None)
+        if err != 0:
+            logger.warning(f"RSPduo Channel B DAB notch update failed: err={err}")
 
     def _safe_release(self):
         if self._has_device and self._lib is not None:

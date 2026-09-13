@@ -105,6 +105,9 @@ Update_Tuner_BwType = 0x00040000
 Update_Tuner_IfType = 0x00080000
 Update_Ext1_None = 0x00000000
 Update_RspDx_AntennaControl = 0x00000004
+# Confirmed against the same installed header as the constants above.
+Update_RspDuo_RfNotchControl = 0x40000000
+Update_RspDuo_RfDabNotchControl = 0x80000000
 
 # Tuner select (sdrplay_api_tuner.h) — confirmed against the installed
 # header. Tuner_Both is what requesting Dual Tuner mode uses (set on
