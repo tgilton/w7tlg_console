@@ -2762,6 +2762,20 @@ function toggleLink() {
   if (linkToRx1 && lastRigFreqHz !== null) applyRx1ToRx2(true);
 }
 
+// Local copy of Panadapter's own sidebandForRigMode — that one is private
+// to the Panadapter (RX1) IIFE's closure, not page-global, so applyRx1ToRx2
+// below (inside this, the Panadapter2 IIFE) cannot call it directly: doing
+// so threw "ReferenceError: sidebandForRigMode is not defined" on every
+// Link/Copy, which aborted applyRx1ToRx2 before it ever reached the
+// view-sync/set_panadapter_freq/setAudioTarget code beneath the mode
+// assignment — the actual cause of Copy/Link silently no longer moving
+// RX2's frequency (Terry 2026-09-19 smoke test). Duplicated rather than
+// exposed from Panadapter, same cross-closure reason as s9CalDb2/
+// smeterLabel2 above.
+function sidebandForRigMode2(mode) {
+  return (mode && mode.includes('L')) ? 'LSB' : 'USB';
+}
+
 // Shared by continuous Link and the one-shot Copy button — applies RX1's
 // last-known frequency/mode/passband (tracked unconditionally in
 // connectWs2's state handler, so Copy has fresh values even if Link has
@@ -2780,7 +2794,7 @@ function toggleLink() {
 function applyRx1ToRx2(recenterView) {
   if (lastRigFreqHz === null) return;
   if (lastRigMode) {
-    mode2 = lastRigMode;
+    mode2 = sidebandForRigMode2(lastRigMode);
     document.getElementById('mode2-USB').classList.toggle('active', mode2 === 'USB');
     document.getElementById('mode2-LSB').classList.toggle('active', mode2 === 'LSB');
     document.getElementById('badge2-mode').textContent = mode2;
