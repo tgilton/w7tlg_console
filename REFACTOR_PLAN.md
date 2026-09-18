@@ -24,7 +24,7 @@ smoke test before merge.
 | ID | Name | Tier | Depends on | Own branch? |
 |---|---|---|---|---|
 | T0 | Fake-hardware test scaffolding | 0 — foundation | — | Yes (low hardware risk) |
-| T1 | Frequency/mode input validation + band-plan guard | 1 — safety | T0 | Yes (CRITICAL path) |
+| T1 | Frequency/mode validation — hardware-range (all paths) + band-plan guard (advisor only) | 1 — safety | T0 | Yes (CRITICAL path) |
 | T2a | Amp HV/mode-divergence cross-check + telemetry error-code fix | 1 — safety | T0 | Yes |
 | T2b | ACOM serial port rediscovery fix | 1 — safety | T0 | Yes |
 | T3 | Atomic audio-target updates | 1 — safety | T0 | Optional (small) |
@@ -79,42 +79,71 @@ actually match `dashboard/server.py`'s real call sites (grep, don't guess).
 
 ---
 
-### T1 — Frequency/mode input validation + band-plan guard
+### T1 — Frequency/mode input validation (two-tier: hardware-range + advisor band-plan guard)
 
 **Goal.** Close the CRITICAL path where the LLM advisor's `qsy_to_band` tool
-(and, more generally, any WebSocket client) can push an out-of-band
-frequency or an unvalidated mode string straight to the rig with no check.
+can push an unvalidated frequency or mode straight to the rig, **without**
+blocking the operator's own established need to manually tune outside
+amateur-band segments — WWV/WWVH, CHU, and other reference/beacon
+frequencies used in propagation and antenna-diversity work. A single
+band-plan gate on every path would break that, so validation is two-tiered:
+
+- **Tier A — hardware-range sanity check, applies to every path** (advisor
+  and manual UI alike): reject a frequency outside the rig's actual
+  tunable hardware range, and reject a mode string outside the rig's valid
+  mode set. This is a pure capability check, not a band-plan restriction —
+  it exists to reject garbage/out-of-range input, not to restrict where
+  the operator can listen or transmit.
+- **Tier B — amateur band-plan guard, advisor `qsy_to_band` path only**:
+  additionally require the frequency/mode pair to resolve to a valid
+  amateur band segment via `freq_to_band` (non-`UNKNOWN`). This is the
+  actual fix for Finding 9 — the advisor's whole purpose is amateur-band
+  operation, and it has no legitimate reason to command WWV/CHU/beacon
+  frequencies, so it stays restricted. Manual UI-driven `set_frequency`/
+  `set_mode`/`set_panadapter_freq` do **not** get Tier B — they only need
+  to pass Tier A.
 
 **Addresses.** AUDIT.md Finding 9 (CRITICAL — `advisor/claude_advisor.py:217-223`,
-unvalidated `qsy_to_band` actuation) and Finding 6 (MEDIUM —
-`dashboard/server.py`'s `set_frequency`/`set_mode`/`set_panadapter_freq`
-handlers and `rig/rigctld_client.py:307-308`'s `set_frequency` writer path
-have no range/band check, unlike the reader side's existing
-`FREQ_SANITY_MIN_HZ/MAX_HZ`/`BAND_EDGES`).
+unvalidated `qsy_to_band` actuation → closed by Tier A + Tier B) and
+Finding 6 (MEDIUM — `dashboard/server.py`'s `set_frequency`/`set_mode`/
+`set_panadapter_freq` handlers and `rig/rigctld_client.py:307-308`'s
+`set_frequency` writer path have no check at all, unlike the reader side's
+existing `FREQ_SANITY_MIN_HZ/MAX_HZ` → closed by Tier A only, per the
+operator's explicit out-of-band manual-tuning requirement).
 
-**Depends on.** T0 (tests for the new validation logic use the fake rig to
-assert a bad WS command is rejected before it reaches `RigctldClient`).
+**Depends on.** T0 (tests for both tiers use the fake rig to assert a bad
+command is rejected before it reaches `RigctldClient`, and that a
+legitimate out-of-band manual command is accepted).
 
-**Files/modules touched.** `rig/rigctld_client.py` (reuse/extend the
-existing `BAND_EDGES`/`freq_to_band` table as the validation source of
-truth — don't invent a second table), `dashboard/server.py` (`set_frequency`,
-`set_mode`, `set_panadapter_freq` handlers), `advisor/claude_advisor.py`
-(the `qsy` tool-call handler, validate `frequency_hz` against `freq_to_band`
-returning non-`UNKNOWN` and `mode` against the tool's own declared enum
-before calling `rig.set_frequency`/`set_mode`).
+**Files/modules touched.** `rig/rigctld_client.py` (add the Tier A
+hardware-range check as its own constant/function, kept separate from the
+existing `BAND_EDGES`/`freq_to_band` table — do not conflate a capability
+bound with a band-plan table; confirm the actual tunable range from the
+FT-991A documentation rather than assuming a value), `dashboard/server.py`
+(`set_frequency`, `set_mode`, `set_panadapter_freq` handlers — Tier A
+only), `advisor/claude_advisor.py` (the `qsy` tool-call handler — Tier A,
+then Tier B via `freq_to_band`, before calling
+`rig.set_frequency`/`set_mode`).
 
-**Non-goals.** Do not change the advisor's tool schema, prompt, or which
-tools it's offered. Do not touch the amp or SDR write paths — this package
-is rig-frequency/mode only. Do not add validation UI/UX (e.g. a toast
-explaining rejection) beyond returning a clear error to the caller — that's
-cosmetic and can ride on T4 or a later pass.
+**Non-goals.** Do not apply Tier B (band-plan restriction) to any
+UI-driven path — that's the whole point of the split. Do not build or
+maintain an allowlist of specific known non-ham frequencies (WWV, CHU,
+etc.) for the manual path; the correct bound there is "within the rig's
+hardware range," not a curated list that would need upkeep as new
+reference/beacon work comes up. Do not change the advisor's tool schema or
+prompt beyond adding the two checks. Do not touch the amp or SDR write
+paths — this package is rig-frequency/mode only. Do not add validation
+UI/UX beyond a clear error to the caller — cosmetic, can ride on T4 or a
+later pass.
 
-**Validation.** Fully unit-testable against T0's fake rig — band-edge
-checking is pure computation, no hardware needed for the logic itself.
-Manual smoke test required only as a regression check: confirm a legitimate
-in-band frequency/mode change from the real console UI still reaches the
-real rig unchanged after the guard is added (i.e. the guard doesn't
-accidentally reject valid traffic).
+**Validation.** Fully unit-testable against T0's fake rig — both tiers are
+pure computation, no hardware needed. New test cases beyond the original
+scope: (1) a manual UI command to a legitimate out-of-band frequency (e.g.
+WWV at 10 MHz) is accepted; (2) the same frequency sent via the advisor's
+`qsy_to_band` tool is rejected. Manual smoke test required only as a
+regression check: confirm a legitimate in-band frequency/mode change from
+the real console UI still reaches the real rig unchanged after the guard
+is added.
 
 ---
 
