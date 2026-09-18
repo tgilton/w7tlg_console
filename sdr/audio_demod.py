@@ -18,6 +18,7 @@ verify without being able to listen directly.
 
 import asyncio
 import logging
+import os
 import queue
 import sys
 import threading
@@ -64,6 +65,23 @@ except Exception as _df_import_error:  # pragma: no cover - NR deps missing/brok
         f"DeepFilterNet unavailable, noise reduction disabled: {_df_import_error}")
 
 logger = logging.getLogger(__name__)
+
+# Temporary instrumentation for the dual-RX + DNR CPU-contention investigation
+# (2026-09-13) — logs each enhance() call's wall-clock latency (instance id,
+# seconds) so solo vs. concurrent-both-channels timing can be compared to
+# tell GIL-serialization-between-threads apart from genuine compute-bound
+# cost. Ordinary logging call from within the audio thread's own execution —
+# no signals involved, unlike the faulthandler approach that crashed the
+# process. Safe to delete once the investigation concludes.
+_nr_latency_logger = logging.getLogger("nr_latency")
+_nr_latency_logger.setLevel(logging.INFO)
+_nr_latency_logger.propagate = False
+if not _nr_latency_logger.handlers:
+    _nr_latency_log_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "nr_latency.log")
+    _nr_latency_handler = logging.FileHandler(_nr_latency_log_path)
+    _nr_latency_handler.setFormatter(logging.Formatter("%(asctime)s,%(message)s"))
+    _nr_latency_logger.addHandler(_nr_latency_handler)
 
 AudioCallback = Callable[[bytes], Coroutine]
 
@@ -574,6 +592,7 @@ class AudioDemodulator:
         self._nr_new_samples = 0
 
         try:
+            _nr_t0 = time.perf_counter()
             window_48k = resample_poly(window, NR_RESAMPLE_RATIO, 1).astype(np.float32)
             with torch.no_grad():
                 t = torch.from_numpy(window_48k).unsqueeze(0)
@@ -582,6 +601,7 @@ class AudioDemodulator:
                     atten_lim_db=self.nr_atten_limit_db)
             enhanced_16k = resample_poly(
                 enhanced_t.squeeze(0).numpy(), 1, NR_RESAMPLE_RATIO).astype(np.float32)
+            _nr_latency_logger.info(f"{id(self)},{time.perf_counter() - _nr_t0:.4f}")
         except Exception:
             logger.exception("DeepFilterNet processing error — disabling noise reduction")
             self.nr_enabled = False

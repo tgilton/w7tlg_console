@@ -21,6 +21,19 @@ from dotenv import load_dotenv
 # processes inherit the parent's environment.
 load_dotenv()
 
+# Must happen before either RX's AudioDemodulator loads its DeepFilterNet
+# model (sdr/audio_demod.py). By default PyTorch's CPU backend spawns
+# intra-op threads across every logical core for each inference call; with
+# two independent AudioDemodulator instances (one per receiver) each running
+# enhance() 10x/sec, both try to claim all cores simultaneously, causing
+# thread-pool oversubscription and audio dropouts under dual-RX + DNR load.
+try:
+    import torch
+    torch.set_num_threads(2)
+    torch.set_num_interop_threads(1)
+except ImportError:
+    pass  # DNR deps not installed — nothing to cap
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(name)s: %(message)s'

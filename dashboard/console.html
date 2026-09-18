@@ -688,8 +688,8 @@ select#palette-select {
     <div class="divider"></div>
     <div class="dsp-toggle-row rx-inert" title="FT-991A's own receiver isn't in the RF path while the SDR handles RX (see FUNCTIONS.md §4) — these have no audible effect right now">
       <span class="amp-diag-label">FT-991A RX</span>
-      <button class="dsp-toggle" id="nb-btn" onclick="RigControl.toggleNB()">NB</button>
-      <button class="dsp-toggle" id="dnf-btn" onclick="RigControl.toggleDNF()">DNF</button>
+      <button class="dsp-toggle" id="nb-btn" onmousedown="event.preventDefault()" onclick="RigControl.toggleNB()">NB</button>
+      <button class="dsp-toggle" id="dnf-btn" onmousedown="event.preventDefault()" onclick="RigControl.toggleDNF()">DNF</button>
     </div>
     <div class="divider"></div>
     <div class="rx-inert" title="FT-991A's own receiver isn't in the RF path while the SDR handles RX (see FUNCTIONS.md §4) — these have no audible effect right now">
@@ -880,11 +880,11 @@ select#palette-select {
         <span class="dsp-val" id="nr-val">1</span>
       </div>
       <div class="dsp-toggle-row">
-        <button class="dsp-toggle" id="nr-btn" onclick="RigControl.toggleNR()">DNR</button>
+        <button class="dsp-toggle" id="nr-btn" onmousedown="event.preventDefault()" onclick="RigControl.toggleNR()">DNR</button>
       </div>
       <div class="dsp-toggle-row">
-        <button class="dsp-toggle" id="rf-notch-btn" onclick="RigControl.toggleRfNotch()">RF NOTCH</button>
-        <button class="dsp-toggle" id="dab-notch-btn" onclick="RigControl.toggleDabNotch()">DAB NOTCH</button>
+        <button class="dsp-toggle" id="rf-notch-btn" onmousedown="event.preventDefault()" onclick="RigControl.toggleRfNotch()">RF NOTCH</button>
+        <button class="dsp-toggle" id="dab-notch-btn" onmousedown="event.preventDefault()" onclick="RigControl.toggleDabNotch()">DAB NOTCH</button>
       </div>
       <div class="dsp-toggle-row">
         <span class="slider-label" style="margin:0">AGC</span>
@@ -1087,11 +1087,11 @@ select#palette-select {
         <span class="dsp-val" id="nr2-val">1</span>
       </div>
       <div class="dsp-toggle-row">
-        <button class="dsp-toggle" id="nr2-btn" onclick="Panadapter2.toggleNR()">DNR</button>
+        <button class="dsp-toggle" id="nr2-btn" onmousedown="event.preventDefault()" onclick="Panadapter2.toggleNR()">DNR</button>
       </div>
       <div class="dsp-toggle-row">
-        <button class="dsp-toggle" id="rf-notch2-btn" onclick="Panadapter2.toggleRfNotch()">RF NOTCH</button>
-        <button class="dsp-toggle" id="dab-notch2-btn" onclick="Panadapter2.toggleDabNotch()">DAB NOTCH</button>
+        <button class="dsp-toggle" id="rf-notch2-btn" onmousedown="event.preventDefault()" onclick="Panadapter2.toggleRfNotch()">RF NOTCH</button>
+        <button class="dsp-toggle" id="dab-notch2-btn" onmousedown="event.preventDefault()" onclick="Panadapter2.toggleDabNotch()">DAB NOTCH</button>
       </div>
       <div class="dsp-toggle-row">
         <span class="slider-label" style="margin:0">AGC</span>
@@ -2490,6 +2490,14 @@ function connectWs2() {
         wholeBandApplied2 = true;
         snapToWholeBand();
       }
+      // Runs after the Whole Band snap above so Link wins when both apply
+      // on the same tick. Gated on RX1's own view actually being ready
+      // (Panadapter.getViewCenterHz()), which can lag RX2's own first
+      // frame by a tick or more — see linkBootstrapApplied2's own comment.
+      if (!linkBootstrapApplied2 && linkToRx1 && Panadapter.getViewCenterHz() !== null) {
+        linkBootstrapApplied2 = true;
+        applyRx1ToRx2(true);
+      }
       followOwnTuning2();
       handleDigitalViewMode2();
     }
@@ -2607,6 +2615,18 @@ let everTuned = false;
 // each side reaches Whole Band on its own once it's ready, no
 // cross-referencing RX1's transient state required.
 let wholeBandApplied2 = false;
+// One-shot: land RX2's view already matched to RX1's when Link starts on
+// by default (linkToRx1 defaults true — toggleLink()'s own
+// applyRx1ToRx2(true) center/span copy only fires on an actual on/off
+// flip, which never happens if the operator never touches Link). Without
+// this, RX2 boots into its own independent Whole Band default above,
+// uncoordinated with wherever RX1's view lands, and nothing reconciles
+// the two afterward except manually toggling Link, clicking Copy, or
+// Center/Whole Band on both sides (Terry 2026-09-13: "it's like they're
+// not linked when they first exist until I re-tune it" — the spectra
+// looked unlinked because each was drawing the same, correctly-synced
+// dial frequency against its own independently-drifted view window).
+let linkBootstrapApplied2 = false;
 let mode2 = 'USB';
 let bandwidth2Hz = 3000;
 
