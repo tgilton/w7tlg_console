@@ -68,6 +68,12 @@ class AcomSerial:
     port: str
     baud: int = 9600
     reconnect_interval: float = 5.0   # seconds between reconnect attempts
+    # Optional: called before each connect attempt to re-resolve the port
+    # (e.g. re-scan for the ACOM's FTDI adapter). Without this, a serial
+    # re-enumeration that changes the device path (common on macOS) leaves
+    # the driver retrying a path that will never come back. Returning None
+    # means "keep using the current port".
+    port_resolver: Optional[Callable[[], Optional[str]]] = None
 
     # Internal state
     _serial: Optional[serial.Serial] = field(default=None, init=False, repr=False)
@@ -180,6 +186,12 @@ class AcomSerial:
 
     async def _connect(self) -> bool:
         """Open serial port. Returns True on success."""
+        if self.port_resolver is not None:
+            resolved = self.port_resolver()
+            if resolved and resolved != self.port:
+                logger.info(
+                    f"ACOM port changed: {self.port} -> {resolved}")
+                self.port = resolved
         try:
             self._serial = serial.Serial(
                 port=self.port,

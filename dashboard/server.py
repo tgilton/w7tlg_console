@@ -16,6 +16,7 @@ Endpoints:
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -53,6 +54,22 @@ RIGCTLD_PORT  = 4532
 # ACOM_PORT     = "/dev/cu.usbserial-A9V19CH7"
 ACOM_PORT = "/dev/cu.usbserial-A92518IM"
 ACOM_BAUD     = 9600
+
+
+def resolve_acom_port() -> Optional[str]:
+    """Prefer the configured ACOM_PORT, but fall back to auto-discovery
+    when it no longer exists — e.g. after a macOS USB-serial
+    re-enumeration changes the /dev/cu.usbserial-* path. Previously this
+    was `ACOM_PORT or find_acom_port()`, which never actually fell back
+    since ACOM_PORT is always a non-empty string."""
+    if ACOM_PORT and os.path.exists(ACOM_PORT):
+        return ACOM_PORT
+    if ACOM_PORT:
+        logger.warning(
+            f"Configured ACOM_PORT {ACOM_PORT} not found — "
+            f"attempting auto-discovery.")
+    return find_acom_port()
+
 
 # ---------------------------------------------------------------------------
 # WebSocket connection manager
@@ -603,12 +620,12 @@ async def lifespan(app: FastAPI):
     # like a series of jumps rather than smooth motion.
     rig = RigctldClient(host=RIGCTLD_HOST, port=RIGCTLD_PORT, poll_interval=0.1)
 
-    acom_port = ACOM_PORT or find_acom_port()
+    acom_port = resolve_acom_port()
     if not acom_port:
         logger.warning("No ACOM serial port found — amp features disabled.")
         acom_port = "/dev/null"
 
-    amp = AcomSerial(port=acom_port, baud=ACOM_BAUD)
+    amp = AcomSerial(port=acom_port, baud=ACOM_BAUD, port_resolver=resolve_acom_port)
     bridge = AcomBridge(rig=rig, amp=amp)
     bridge.on_state_change(on_station_state)
     bridge.on_trend_sample(trend_csv.log)
