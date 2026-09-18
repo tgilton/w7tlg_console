@@ -412,10 +412,6 @@ def parse_full_telemetry(data: bytes) -> Optional[AmpTelemetry]:
     t.error_code  = data[60]
     t.error_param = struct.unpack_from('<H', data, 61)[0]
 
-    # Bytes 63-65: Error code display
-    t.error_code  = data[63]
-    t.error_param = struct.unpack_from('<H', data, 64)[0]
-
     return t
 
 

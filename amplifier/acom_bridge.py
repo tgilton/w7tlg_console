@@ -175,6 +175,19 @@ DUMMY_LOAD_CURVE_MARGIN = 0.85
 SWR_WARNING_THRESHOLD = 2.5
 SWR_WARNING_CLEAR_THRESHOLD = 2.3
 
+# HV rail collapse cross-check: mode-sync (above) trusts the telemetry mode
+# byte's class bits alone, so an OPR-class byte with a collapsed HV rail
+# during TX would otherwise show AMP_ON with the amp contributing nothing
+# and no indication why (AUDIT.md Finding 3). "Near zero" is a conservative
+# bound, not a value read off real telemetry — the amp's actual OPR-class HV
+# rail has not been characterized against this constant on live hardware;
+# confirm/tune it during the real-hardware smoke test before relying on it.
+HV_COLLAPSE_THRESHOLD_V = 5.0
+# Frames of confirmed collapse required before inhibiting, mirroring the
+# 3-frame filter used above for OPR/STB mode-class transients (~300ms @
+# 10Hz) so a momentary relay-switching dip at TX start doesn't false-trip.
+HV_COLLAPSE_FRAMES = 3
+
 
 def _dummy_load_curve_watts(elapsed_s: float) -> float:
     """Manufacturer-rated max sustained forward watts at this elapsed
@@ -330,6 +343,7 @@ class AcomBridge:
         # sub-states (e.g. 0x51 during the OPR/RX→OPR/TX relay sequence).
         self._amp_opr_frames: int = 0
         self._amp_stdby_frames: int = 0
+        self._hv_collapse_frames: int = 0
         self._state_callbacks: list[StationStateCallback] = []
         self._trend_sample_callbacks: list[Callable[[TrendSample], None]] = []
 
@@ -660,6 +674,23 @@ class AcomBridge:
         self.station.amp_current_ma = t.id1_ma
         self.station.amp_ptt_active = t.flag_keyin
         self.station.amp_atu_tuned  = t.flag_atu_tuned
+
+        # HV rail cross-check: the mode-sync block above trusts the telemetry
+        # mode byte's class bits alone. If the amp reports an OPR-class mode
+        # byte while the HV rail has actually collapsed during TX — short of
+        # a hard PAM1 HV fault bit firing on the 0x21 message, handled
+        # separately in _on_fault — the console would otherwise keep showing
+        # AMP_ON with the amp contributing nothing. This is additional and
+        # layered on top of, not a replacement for, that fault-bit path.
+        if (self._mode == OperatingMode.AMP_ON and t.flag_keyin
+                and t.hv1_v < HV_COLLAPSE_THRESHOLD_V):
+            self._hv_collapse_frames = min(self._hv_collapse_frames + 1, 10)
+            if self._hv_collapse_frames >= HV_COLLAPSE_FRAMES:
+                await self.inhibit_tx(
+                    f"Amp HV rail collapsed during TX ({t.hv1_v:.1f}V while "
+                    f"mode reports AMP_ON) — amp likely not amplifying")
+        else:
+            self._hv_collapse_frames = 0
 
         # Dummy load power/duration limit — checked every telemetry frame
         # (~100ms) rather than on the separate 250ms watchdog poll, since a
