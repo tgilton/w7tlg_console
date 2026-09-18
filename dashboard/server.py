@@ -606,6 +606,33 @@ async def on_session_status_for_audio_mode(status: dict):
     _last_is_digital = is_digital
 
 
+def seed_channel_b_audio_target(sdr_client) -> None:
+    """Give Channel B's AudioDemodulator a real, non-None target the
+    instant the SDR comes up, instead of leaving it at the constructor
+    default (AudioTarget(freq_hz=None, ...), see sdr/audio_demod.py) until
+    something sends set_audio_target. feed() silently drops every sample
+    while target.freq_hz is None.
+
+    Channel A doesn't need this: the operator's own speaker-unmute click
+    (sendAudioTargetFromRig in console.html) reliably forces a real target
+    early. Channel B has no equivalent guaranteed-early trigger — its
+    first set_audio_target depended entirely on the client's cold-start
+    Link bootstrap (applyRx1ToRx2/linkBootstrapApplied2) winning a race
+    against RX1's own view finishing initialization, which it could lose,
+    leaving RX2 silent to WSJT-X until the operator happened to click
+    something in its panel (e.g. its own USB mode button) that called
+    setAudioTarget().
+
+    rf_freq_hz_b is a plain constructor-time attribute (never reassigned
+    to None anywhere in SdrClient), so it's always real by the time this
+    runs right after `await sdr.start()` — no need to wait for a first
+    RF-frequency callback. The client's own Link bootstrap still runs
+    afterward as normal and immediately retargets to RX1's actual
+    frequency/mode; this just removes the dead-silence window before that
+    happens."""
+    sdr_client.audio_b.set_target(sdr_client.rf_freq_hz_b, "USB", 3000.0)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -657,6 +684,8 @@ async def lifespan(app: FastAPI):
     await sdr.start()
     if not sdr.available:
         logger.warning("SDR unavailable — panadapter features disabled.")
+    else:
+        seed_channel_b_audio_target(sdr)
     asyncio.create_task(_fast_ptt_monitor())
     asyncio.create_task(_monitor_liveness_watcher())
 
