@@ -332,9 +332,9 @@ def build_state_payload(state: StationState) -> dict:
         data["rig"]["sdr_rf_notch_enabled_b"] = sdr.rf_notch_enabled_b
         data["rig"]["sdr_dab_notch_enabled_b"] = sdr.dab_notch_enabled_b
         data["rig"]["sdr_antenna_b"] = sdr.antenna_label_b
-        data["rig"]["sdr_target_freq_hz_b"] = sdr.audio_b.target_freq_hz
-        data["rig"]["sdr_mode_b"] = sdr.audio_b.mode
-        data["rig"]["sdr_bandwidth_hz_b"] = sdr.audio_b.bandwidth_hz
+        data["rig"]["sdr_target_freq_hz_b"] = sdr.audio_b.target.freq_hz
+        data["rig"]["sdr_mode_b"] = sdr.audio_b.target.mode
+        data["rig"]["sdr_bandwidth_hz_b"] = sdr.audio_b.target.bandwidth_hz
         data["rig"]["sdr_rx_volume_b"] = sdr.audio_b.manual_gain
         data["rig"]["sdr_agc_mode_b"] = sdr.audio_b.agc_mode
         data["rig"]["sdr_eq_enabled_b"] = sdr.audio_b.eq_enabled
@@ -368,9 +368,9 @@ def build_state_payload(state: StationState) -> dict:
             # target_freq_hz starts None until something sends
             # set_audio_target for channel B (no frontend does yet) — same
             # reason Channel A's block above guards on freq_hz being set.
-            if sdr.audio_b.target_freq_hz is not None:
+            if sdr.audio_b.target.freq_hz is not None:
                 db_fs_b = sdr.passband_strength_db_b(
-                    sdr.audio_b.target_freq_hz, sdr.audio_b.bandwidth_hz)
+                    sdr.audio_b.target.freq_hz, sdr.audio_b.target.bandwidth_hz)
                 if db_fs_b is not None:
                     data["rig"]["sdr_strength_db_b"] = db_fs_b
     data["station_profile"] = station_profile.to_dict()
@@ -1296,9 +1296,10 @@ async def handle_ws_command(text: str, ws: WebSocket):
             ok = False
             if sdr is not None and sdr.available:
                 audio = sdr.audio_b if msg.get("channel") == "B" else sdr.audio
-                audio.target_freq_hz = float(msg["freq_hz"])
-                audio.mode = msg.get("mode", "USB")
-                audio.bandwidth_hz = float(msg.get("bandwidth_hz", 3000))
+                audio.set_target(
+                    float(msg["freq_hz"]),
+                    msg.get("mode", "USB"),
+                    float(msg.get("bandwidth_hz", 3000)))
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))

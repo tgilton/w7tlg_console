@@ -25,6 +25,7 @@ import threading
 import time
 import types
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, replace
 from typing import Optional
 
 import numpy as np
@@ -153,6 +154,16 @@ FINE_AVG_FRAMES = 4.0
 FINE_AVG_DECAY = max(0.0, (FINE_AVG_FRAMES - 1.0) / (FINE_AVG_FRAMES + 1.0))
 
 
+@dataclass(frozen=True)
+class AudioTarget:
+    """freq_hz/mode/bandwidth_hz bundled so a demod cycle on the audio
+    thread always sees them as a matched set — see
+    AudioDemodulator.set_target."""
+    freq_hz: Optional[float]
+    mode: str
+    bandwidth_hz: float
+
+
 class AudioDemodulator:
     def __init__(self, input_rate_hz: float = 2_000_000.0, batch_samples: int = 16384):
         self.input_rate_hz = input_rate_hz
@@ -167,10 +178,11 @@ class AudioDemodulator:
         self.batch_samples = (batch_samples // self.decim_factor) * self.decim_factor
 
         self.enabled = False
-        self.target_freq_hz: Optional[float] = None
+        # freq_hz/mode/bandwidth_hz always replaced together via set_target()
+        # — see AudioTarget — so _process() never reads a half-updated
+        # combination while a demod cycle is in flight on the audio thread.
+        self.target = AudioTarget(freq_hz=None, mode="USB", bandwidth_hz=3000.0)
         self.rf_center_hz: Optional[float] = None
-        self.mode = "USB"          # USB | LSB
-        self.bandwidth_hz = 3000.0
         self.agc_gain = 1.0
         # Auto-leveling speed, driven by the console's AGC OFF/FAST/SLOW
         # buttons — repurposed to control this instead of the radio's own
@@ -302,6 +314,13 @@ class AudioDemodulator:
     def on_fine_spectrum(self, cb: Callable[[dict], Coroutine]):
         self._fine_spectrum_callbacks.append(cb)
 
+    def set_target(self, freq_hz: float, mode: str, bandwidth_hz: float):
+        """Atomically replace freq/mode/bandwidth as one unit — a single
+        attribute assignment (GIL-atomic), so a demod cycle running
+        concurrently on the audio thread always sees a matched combination,
+        never new freq paired with stale bandwidth/mode for one block."""
+        self.target = AudioTarget(freq_hz, mode, bandwidth_hz)
+
     def enter_digital_mode(self):
         """Reconfigure for digital-mode listening (FT8 etc.): AGC off,
         NR/EQ bypassed, passband widened to start right at the dial
@@ -316,7 +335,7 @@ class AudioDemodulator:
             "nr_enabled": self.nr_enabled,
             "eq_enabled": self.eq_enabled,
             "low_cut_hz": self.low_cut_hz,
-            "bandwidth_hz": self.bandwidth_hz,
+            "bandwidth_hz": self.target.bandwidth_hz,
         }
         # Operator preference: AGC fast in digital mode too (much louder for
         # monitoring FT8). Was "off" for clean linear audio to WSJT-X — if FT8
@@ -325,7 +344,7 @@ class AudioDemodulator:
         self.nr_enabled = False
         self.eq_enabled = False
         self.low_cut_hz = 0.0
-        self.bandwidth_hz = 3000.0
+        self.target = replace(self.target, bandwidth_hz=3000.0)
         self.in_digital_mode = True
         self._fine_buf_len = 0
         self._fine_avg_power = None
@@ -342,7 +361,7 @@ class AudioDemodulator:
         self.nr_enabled = snap["nr_enabled"]
         self.eq_enabled = snap["eq_enabled"]
         self.low_cut_hz = snap["low_cut_hz"]
-        self.bandwidth_hz = snap["bandwidth_hz"]
+        self.target = replace(self.target, bandwidth_hz=snap["bandwidth_hz"])
         self.in_digital_mode = False
         self._fine_buf_len = 0
         self._fine_avg_power = None
@@ -492,7 +511,7 @@ class AudioDemodulator:
             self._fine_avg_power / (self._fine_fullscale_ref ** 2) + 1e-12)).astype(np.float32)
         frame = {
             "ts": time.time(),
-            "center_freq_hz": self.target_freq_hz,
+            "center_freq_hz": self.target.freq_hz,
             "span_hz": float(INTERMEDIATE_RATE_HZ),
             "sample_rate_hz": float(INTERMEDIATE_RATE_HZ),
             "kind": "fine",
@@ -670,7 +689,7 @@ class AudioDemodulator:
                     break
 
                 self._acc_len = 0
-                if self.target_freq_hz is None or self.rf_center_hz is None:
+                if self.target.freq_hz is None or self.rf_center_hz is None:
                     self._sample_counter += self.batch_samples
                     continue
 
@@ -686,8 +705,13 @@ class AudioDemodulator:
                         pass   # loop closing/closed during shutdown
 
     def _process(self, block_i: np.ndarray, block_q: np.ndarray) -> Optional[bytes]:
+        # Snapshot once — self.target is replaced as a single unit by
+        # set_target(), so one read here guarantees freq/mode/bandwidth
+        # stay a matched combination for this whole call, even if
+        # set_target() runs concurrently on the WS/asyncio thread mid-call.
+        target = self.target
         n = len(block_i)
-        offset_hz = self.target_freq_hz - self.rf_center_hz
+        offset_hz = target.freq_hz - self.rf_center_hz
         t = self._sample_counter + np.arange(n)
         self._sample_counter += n
 
@@ -725,10 +749,10 @@ class AudioDemodulator:
         if self.in_digital_mode or self.fine_spectrum_enabled:
             self._update_fine_spectrum(intermediate)
 
-        filter_key = (self.bandwidth_hz, self.mode, self.low_cut_hz)
+        filter_key = (target.bandwidth_hz, target.mode, self.low_cut_hz)
         if self._ssb_filter is None or self._ssb_filter_key != filter_key:
             self._ssb_filter = self._design_ssb_filter(
-                self.bandwidth_hz, self.mode, self.low_cut_hz)
+                target.bandwidth_hz, target.mode, self.low_cut_hz)
             self._ssb_filter_key = filter_key
             self._ssb_overlap = np.zeros(len(self._ssb_filter) - 1, dtype=np.complex64)
 

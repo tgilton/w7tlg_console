@@ -794,9 +794,10 @@ class SdrClient:
             # traceback, so log explicitly rather than trust the default
             # thread exception hook to catch it.
             try:
-                self.combiner.target_freq_hz = self.audio.target_freq_hz
-                self.combiner.mode = self.audio.mode
-                self.combiner.bandwidth_hz = self.audio.bandwidth_hz
+                target = self.audio.target
+                self.combiner.target_freq_hz = target.freq_hz
+                self.combiner.mode = target.mode
+                self.combiner.bandwidth_hz = target.bandwidth_hz
                 self.combiner.low_cut_hz = self.audio.low_cut_hz
                 self.combiner.rf_center_hz_a = self.audio.rf_center_hz
                 self.combiner.feed_a(i, q_arr)
@@ -1001,13 +1002,13 @@ class SdrClient:
 
         # Diversity phase tap — raw (unaveraged) bin nearest the tuned
         # frequency, every frame. See iq_phase_diff_deg / _last_phasor_a.
-        if self.audio.tx_active or self.audio.target_freq_hz is None:
+        if self.audio.tx_active or self.audio.target.freq_hz is None:
             self._last_phasor_a = None
         else:
             n = len(spectrum)
             bin_hz = self.sample_rate_hz / n
             full_lo_hz = self.rf_freq_hz - self.sample_rate_hz / 2
-            target_bin = int(round((self.audio.target_freq_hz - full_lo_hz) / bin_hz))
+            target_bin = int(round((self.audio.target.freq_hz - full_lo_hz) / bin_hz))
             self._last_phasor_a = complex(spectrum[max(0, min(n - 1, target_bin))])
 
         if self.audio.tx_active:
@@ -1104,13 +1105,13 @@ class SdrClient:
         power = (np.abs(spectrum) ** 2).astype(np.float32)
 
         # Diversity phase tap — see _compute_frame's own comment.
-        if self.audio_b.tx_active or self.audio_b.target_freq_hz is None:
+        if self.audio_b.tx_active or self.audio_b.target.freq_hz is None:
             self._last_phasor_b = None
         else:
             n = len(spectrum)
             bin_hz = self.sample_rate_hz / n
             full_lo_hz = self.rf_freq_hz_b - self.sample_rate_hz / 2
-            target_bin = int(round((self.audio_b.target_freq_hz - full_lo_hz) / bin_hz))
+            target_bin = int(round((self.audio_b.target.freq_hz - full_lo_hz) / bin_hz))
             self._last_phasor_b = complex(spectrum[max(0, min(n - 1, target_bin))])
 
         if self.audio_b.tx_active:
