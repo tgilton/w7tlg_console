@@ -984,6 +984,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
 async def handle_ws_command(text: str, ws: WebSocket):
     if bridge is None:
+        await ws.send_text(json.dumps({
+            "type": "error", "message": "Bridge not initialized"}))
         return
     try:
         msg = json.loads(text)
@@ -1440,7 +1442,8 @@ async def handle_ws_command(text: str, ws: WebSocket):
 
     except Exception as e:
         logger.error(f"WebSocket command error: {e}")
-        await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
+        await ws.send_text(json.dumps({
+            "type": "error", "message": "Internal error processing command"}))
 
 
 # ---------------------------------------------------------------------------

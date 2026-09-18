@@ -17,7 +17,7 @@ import anthropic
 
 from config.station_profile import station_profile
 
-MODEL = "claude-sonnet-4-5"
+MODEL = "claude-sonnet-5"
 
 SPOT_JUMP_THRESHOLD = 50
 SPOT_DROP_THRESHOLD = 50

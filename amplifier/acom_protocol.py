@@ -71,6 +71,9 @@ class AmpCmd(IntEnum):
     ANT_BAND_SELECT    = 0x09  # Byte4 = antenna#, Byte5 = band#
     BUZZER             = 0x0A
     SEND_LOG           = 0x0B
+    # Intentional alias of CLEAR_SOFT_FAULTS (same wire value 0x08), not a
+    # duplicate/typo — the amp protocol has no separate "hard fault clear"
+    # code, so both names resolve to one IntEnum member.
     CLEAR_FAULTS       = 0x08
 
 # Amplifier mode codes (used with MODE_CHANGE)
