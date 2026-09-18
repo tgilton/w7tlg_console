@@ -35,6 +35,7 @@ import logging
 import time
 from typing import Callable, Coroutine, Optional
 
+from rig.rigctld_client import is_valid_hw_mode
 from session.session_profiles import PROFILES, SessionProfile
 from wsjtx.protocol import Status as WsjtxStatus
 from wsjtx.udp_listener import WsjtxListener
@@ -191,6 +192,13 @@ class SessionManager:
                 return await self._fail(reason)
             self.step = f"Setting rig mode → {target.rig_mode}…"
             await self._publish()
+            # Tier A (T1) hardware-capability check — same bound the manual
+            # UI/advisor paths enforce. Every shipped SessionProfile.rig_mode
+            # is a valid mode today; this only ever fires if a profile is
+            # ever misconfigured with a bad mode string.
+            if not is_valid_hw_mode(target.rig_mode):
+                return await self._fail(
+                    f"Session profile {target_id!r} has an invalid rig_mode: {target.rig_mode!r}")
             ok = await self.bridge.rig.set_mode(target.rig_mode, target.passband_hz)
             if not ok:
                 return await self._fail(f"Failed to set rig mode to {target.rig_mode}")

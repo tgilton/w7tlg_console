@@ -26,7 +26,9 @@ from typing import Optional
 import anthropic
 
 from config.station_profile import station_profile
-from rig.rigctld_client import RigctldClient
+from rig.rigctld_client import (
+    Band, RigctldClient, freq_to_band, is_valid_hw_frequency, is_valid_hw_mode,
+)
 
 MODEL = "claude-sonnet-5"
 
@@ -218,9 +220,28 @@ class ClaudeAdvisor:
                 freq = data.get("frequency_hz")
                 mode = data.get("mode", "PKTUSB")
                 if freq:
-                    await self._rig.set_frequency(int(freq))
-                    await self._rig.set_mode(mode)
-                yield ("qsy", data)
+                    # Tier A (hardware-range/mode sanity, same bound the
+                    # manual UI path enforces) then Tier B (amateur
+                    # band-plan guard — advisor-only, see T1 in
+                    # REFACTOR_PLAN.md): reject before ever touching the
+                    # rig, rather than passing an unvalidated tool call
+                    # straight through.
+                    freq_hz = int(freq)
+                    if not is_valid_hw_frequency(freq_hz):
+                        yield ("error", f"Rejected qsy_to_band: {freq_hz} Hz is "
+                                         f"outside the rig's tunable range")
+                    elif not is_valid_hw_mode(mode):
+                        yield ("error", f"Rejected qsy_to_band: '{mode}' is not "
+                                         f"a mode this rig supports")
+                    elif freq_to_band(freq_hz) is Band.UNKNOWN:
+                        yield ("error", f"Rejected qsy_to_band: {freq_hz} Hz "
+                                         f"does not fall in an amateur band")
+                    else:
+                        await self._rig.set_frequency(freq_hz)
+                        await self._rig.set_mode(mode)
+                        yield ("qsy", data)
+                else:
+                    yield ("qsy", data)
             elif kind == "error":
                 yield ("error", data)
             elif kind == "done":

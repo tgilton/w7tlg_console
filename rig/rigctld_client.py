@@ -112,6 +112,57 @@ def freq_to_band(freq_hz: int) -> Band:
             return band
     return Band.UNKNOWN
 
+# ---------------------------------------------------------------------------
+# Tier A: hardware-range capability check (T1) — NOT a band-plan restriction.
+#
+# This bounds what the FT-991A can physically tune to at all, per Yaesu's
+# service-manual RX coverage spec — three separate, non-contiguous bands,
+# NOT one contiguous span from lowest to highest:
+#   30 kHz  -  56 MHz
+#   118 MHz - 164 MHz
+#   420 MHz - 470 MHz
+# (76-108 MHz WFM broadcast coverage is intentionally excluded — this
+# console never sets WFM.) A single min/max envelope previously used here
+# silently accepted the two dead zones between these bands (56-118 MHz,
+# 164-420 MHz) that the rig cannot actually receive on — Tier A is a
+# hardware-*capability* check, so it must reject those too, not just
+# obvious garbage. The point is still to reject a value the rig cannot
+# honor, not to restrict where the operator can listen or transmit within
+# what it CAN honor — WWV/WWVH/CHU and other reference/beacon work all
+# fall inside the first (HF/6m) band here. Deliberately a separate table
+# from FREQ_SANITY_MIN_HZ/MAX_HZ above: that pair exists to catch a
+# desynced *reply* stream on the polling/read side and is a single padded
+# span on purpose; this table exists to reject a *write* the rig cannot
+# honor. Deliberately NOT merged with BAND_EDGES/freq_to_band either —
+# that table is the amateur band-plan used for display and, separately,
+# for the advisor-only Tier B guard below.
+HW_RX_COVERAGE_BANDS = (
+    (30_000, 56_000_000),
+    (118_000_000, 164_000_000),
+    (420_000_000, 470_000_000),
+)
+
+def is_valid_hw_frequency(freq_hz: int) -> bool:
+    """Tier A frequency check — pure hardware-capability bound, applies to
+    every write path (manual UI and the advisor alike)."""
+    return any(lo <= freq_hz <= hi for lo, hi in HW_RX_COVERAGE_BANDS)
+
+# Every mode string this codebase actually sends to rig.set_mode today
+# (dashboard/console.html's mode buttons, RigState.update_derived's
+# digital_modes) plus CWR, which the advisor's own tool schema already
+# offers as an option. Deliberately excludes "DATA-U"/"DATA-L" from that
+# same schema (advisor/claude_advisor.py's QSY_TOOL enum) — those are this
+# console's own UI button labels, not real rigctld mode strings, and were
+# never valid input to rig.set_mode in the first place.
+HW_VALID_MODES = frozenset({
+    "USB", "LSB", "CW", "CWR", "AM", "FM", "PKTUSB", "PKTLSB",
+})
+
+def is_valid_hw_mode(mode: str) -> bool:
+    """Tier A mode check — pure hardware-capability bound, applies to every
+    write path (manual UI and the advisor alike)."""
+    return mode in HW_VALID_MODES
+
 def freq_display(freq_hz: int) -> str:
     mhz = freq_hz // 1_000_000
     khz = (freq_hz % 1_000_000) // 1_000

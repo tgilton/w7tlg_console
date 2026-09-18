@@ -31,7 +31,7 @@ from amplifier.antenna_ab_test import AntennaAbTest
 from amplifier.tx_power_calibration import TxPowerCalibration
 from amplifier.trend_csv_logger import TrendCsvLogger
 from config.station_profile import station_profile
-from rig.rigctld_client import RigctldClient
+from rig.rigctld_client import RigctldClient, is_valid_hw_frequency, is_valid_hw_mode
 from sdr.sdr_client import SdrClient
 from session.session_manager import SessionManager
 from session.session_profiles import PROFILES
@@ -981,15 +981,26 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 "ok": ok, "message": reply}))
 
         elif cmd == "set_frequency":
-            ok = await bridge.rig.set_frequency(int(msg["freq_hz"]))
-            await ws.send_text(json.dumps({
-                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+            freq_hz = int(msg["freq_hz"])
+            if not is_valid_hw_frequency(freq_hz):
+                await ws.send_text(json.dumps({
+                    "type": "cmd_response", "cmd": cmd, "ok": False,
+                    "error": f"{freq_hz} Hz is outside the rig's tunable range"}))
+            else:
+                ok = await bridge.rig.set_frequency(freq_hz)
+                await ws.send_text(json.dumps({
+                    "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
         elif cmd == "set_mode":
-            ok = await bridge.rig.set_mode(
-                msg["mode"], int(msg.get("passband", 0)))
-            await ws.send_text(json.dumps({
-                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+            mode = msg["mode"]
+            if not is_valid_hw_mode(mode):
+                await ws.send_text(json.dumps({
+                    "type": "cmd_response", "cmd": cmd, "ok": False,
+                    "error": f"'{mode}' is not a mode this rig supports"}))
+            else:
+                ok = await bridge.rig.set_mode(mode, int(msg.get("passband", 0)))
+                await ws.send_text(json.dumps({
+                    "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
         elif cmd == "set_rf_power":
             requested = int(msg["pct"])
@@ -1244,16 +1255,25 @@ async def handle_ws_command(text: str, ws: WebSocket):
             # ground truth — see project memory on the panadapter tuning
             # model); this command is the manual-override path. Channel B
             # has no rig at all, so for it this IS the only way to tune —
-            # not an override of anything.
+            # not an override of anything. Tier A (T1) still applies to
+            # both: reuse the rig's hardware-range bound as the sanity
+            # check here too, since this console's SDR channels only ever
+            # tune within the same amateur-adjacent spectrum the rig covers.
             ok = False
-            if sdr is not None and sdr.available:
+            error = None
+            freq_hz = float(msg["freq_hz"])
+            if not is_valid_hw_frequency(freq_hz):
+                error = f"{freq_hz:.0f} Hz is outside the rig's tunable range"
+            elif sdr is not None and sdr.available:
                 if msg.get("channel") == "B":
-                    sdr.set_center_freq_hz_b(float(msg["freq_hz"]))
+                    sdr.set_center_freq_hz_b(freq_hz)
                 else:
-                    sdr.set_center_freq_hz(float(msg["freq_hz"]))
+                    sdr.set_center_freq_hz(freq_hz)
                 ok = True
-            await ws.send_text(json.dumps({
-                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+            response = {"type": "cmd_response", "cmd": cmd, "ok": ok}
+            if error:
+                response["error"] = error
+            await ws.send_text(json.dumps(response))
 
         elif cmd == "set_audio_target":
             ok = False
