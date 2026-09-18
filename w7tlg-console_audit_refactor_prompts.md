@@ -110,7 +110,36 @@ How to use this: run Phase 1 first, in its own session, with no code-writing per
 	owner's own list of bugs, missing features, and hardware-expansion goals.
 	
 	KNOWN ISSUES & FEATURE BACKLOG:
-	[paste your filled-in section from above here]
+	This is a very loose list and should be discussed and evaluated. The goal is to scope the project correctly adn we can get into the detials of each item when the time comes to code.
+	## Known issues & feature backlog
+	
+	**Little things / bugs:**
+	- In opening the app for the first time, RX1 and RX2 are not aligned. RX2 has no mode set and this often results in no audio for RX2; I am required to click on USB in the mode to get RX2 to send audio to  WSJT-X.
+	- The User Interface is still a bit rough. There are places in the UI where buttons/pills are too close. There are control groups that are separate from the other functions that they work with.
+	- The Main display where the frequency is shown needs to have a live output power display; the one in the AMP (ACOM 1200S) box is useful but too small.
+	- The S meter would be better if it was a skeuomorphic analog S-meter for both RXs.
+	- The AF GAIN and RF GAIN sliders need to be more prominent as I use them very often.
+	- The MODE selecting buttons need to be evaluated. They are too close to the AF GAIN and RF GAIN sliders, and they do not match between the RXs. RX2 has only USB and LSB, but it needs all the options shown in RX1
+		- This means we need to evaluate using RX1 as the main DATA-U receiver. It really isn’t as there is an option to select which RX is used for WSJT-X
+	- We need a way to adjust the frequency within the console that is not entering the frequency in a box. Evaluate how some of the SDR software packages do this.
+	- The app is organized into columns: Left column, Middle Column, and Right Column. There is also a header and footer. I want to organize these as tightly coupled boxes of functions.
+		- The left column should be general operational functions. 
+			- SESSION, BAND, ANTENNA, ANTENNA A/B TEST, 
+		- The Middle Column houses the receivers
+			- There are two receivers and each should have it’s own column within the app’s middle column.
+				- Frequency, S-Meter for each
+				- Spectrum and waterfall
+				- Spectrum and waterfall controls and options
+				- 
+			- There are common controls for the receivers that should not be duplicated and should define operations for both receivers 
+				- Mode should be the same for both receivers. However, there might be a use case in the future where the two could be in different modes. Let’s not preclude that, but for now
+		- The Right Column is the Transmitter and should group together all the parameters, meters, and operational options for the TX.
+	
+	**Missing features:**
+	- Better integration with WSJT-X and possibly JS8CALL to allow more extensive parameters to be stored in the RumLogNG logs that are automatically loaded.
+	- Need to be able to trigger a log entry from within the w7tlg console. Need to discuss details.
+	- Create a useful feature that allows querying the previous monitoring results to compare previous operations to current operations and discover problems. 
+	- Can we get a voice envelop display to tune the SSB operations?
 	
 	Do NOT modify any code in this pass. Produce REFACTOR_PLAN.md at the
 	repo root.
