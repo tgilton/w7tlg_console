@@ -1707,27 +1707,39 @@ function sliderFromSpan(hz) {
 }
 
 // RX2's own Link toggle (Terry 2026-09-11: "if I zoom in on RX1 the same
-// thing happens on RX2 and they maintain the same passband width")
-// listens for this on every RX1 span change, from whichever of the 2
-// call sites below actually changed it — direct cross-module call, not
-// routed through the server's periodic state broadcast (2s interval,
-// far too slow for a live "zoom together" feel; this is a same-page,
+// thing happens on RX2 and they maintain the same passband width") listens
+// for this shared relay, called from every RX1 action that changes its own
+// view center and/or span (tune, Center, drag, wheel-zoom, span slider,
+// Whole Band, automatic drift-recenter) — direct cross-module call, not
+// routed through the server's periodic state broadcast (2s interval, far
+// too slow for a live "zoom together" feel; this is a same-page,
 // client-only concern). RX1 has zero awareness of Link — it just always
-// notifies, and Panadapter2.onRx1SpanChange decides whether to care.
-function notifyRx1SpanChange() {
+// notifies, and Panadapter2.onRx1ViewChange decides whether to care.
+//
+// Replaces the old span-only notifyRx1SpanChange/onRx1SpanChange pair
+// (2026-09-11..19): that relay carried span alone, leaving RX2's view
+// CENTER to a separate, independently-computed threshold guess
+// (followOwnTuning2()) that could silently disagree with RX1's own
+// followRigFrequency() logic, and had no path at all for tune/Center/
+// drift-recenter/drag. Center and the Whole Band flag are relayed
+// unconditionally alongside span now — even calls that only change span
+// (wheel-zoom, span slider) pass RX1's current (unchanged) center, so
+// RX2's direct-assignment handler never has to distinguish "span changed"
+// from "center changed": it just mirrors whatever RX1's view currently is.
+function notifyRx1ViewChange(centerHz, spanHz, wholeBand) {
   // Panadapter2 is a page-global top-level const from a later <script>
   // tag (not a window property, but visible by name — same cross-script
   // pattern RigControl.setDragging(...) already relies on elsewhere in
   // this file), guaranteed defined by the time this runs since it only
-  // ever fires from a user gesture, long after every script tag has run.
-  Panadapter2.onRx1SpanChange(viewSpanHz);
+  // ever fires from a user gesture or a WS state tick, long after every
+  // script tag has run.
+  Panadapter2.onRx1ViewChange(centerHz, spanHz, wholeBand);
 }
 
 function setViewSpan(hz) {
   viewSpanHz = Math.max(SPAN_MIN_HZ, Math.min(SPAN_MAX_HZ, hz));
   document.getElementById('span-slider').value = sliderFromSpan(viewSpanHz);
   updateSpanLabel();
-  notifyRx1SpanChange();
 }
 
 function updateSpanLabel() {
@@ -1740,7 +1752,7 @@ function onSpanSlider(v) {
   viewSpanHz = spanFromSlider(parseInt(v, 10));
   wholeBandView = false;   // manual span change exits the locked whole-band view
   updateSpanLabel();
-  notifyRx1SpanChange();
+  notifyRx1ViewChange(viewCenterHz, viewSpanHz, wholeBandView);
 }
 
 function tuneTo(freqHz, recenterView = true) {
@@ -1748,7 +1760,10 @@ function tuneTo(freqHz, recenterView = true) {
   wholeBandView = false;   // explicit tune (typed freq or click-to-tune) exits whole-band view
   send({ cmd: 'set_frequency', freq_hz: freqHz });
 
-  if (recenterView) viewCenterHz = freqHz;
+  if (recenterView) {
+    viewCenterHz = freqHz;
+    notifyRx1ViewChange(viewCenterHz, viewSpanHz, wholeBandView);
+  }
   if (latestFrame) {
     const margin = viewSpanHz / 2;
     const lo = latestFrame.centerFreqHz - latestFrame.spanHz / 2 + margin;
@@ -1767,6 +1782,7 @@ function snapToWholeBand() {
   setViewSpan(Math.min(hi - lo, SPAN_MAX_HZ));
   viewCenterHz = (lo + hi) / 2;
   wholeBandView = true;
+  notifyRx1ViewChange(viewCenterHz, viewSpanHz, wholeBandView);
   // The view alone doesn't move the SDR's actual ~2MHz capture window (see
   // SPAN_MAX_HZ, which is set to match sdr_client.py's sample_rate_hz) —
   // without an explicit retune here it stays wherever it last was, usually
@@ -1784,7 +1800,10 @@ function snapToWholeBand() {
 // the mockup's "Center" button. Harmless, view-only; doesn't touch the rig.
 function recenterView() {
   wholeBandView = false;
-  if (rigFreqHz !== null) viewCenterHz = rigFreqHz;
+  if (rigFreqHz !== null) {
+    viewCenterHz = rigFreqHz;
+    notifyRx1ViewChange(viewCenterHz, viewSpanHz, wholeBandView);
+  }
 }
 
 function followRigFrequency() {
@@ -1816,6 +1835,7 @@ function followRigFrequency() {
     const halfSpan = viewSpanHz / 2;
     if (Math.abs(rigFreqHz - viewCenterHz) > halfSpan * 0.8) {
       viewCenterHz = rigFreqHz;
+      notifyRx1ViewChange(viewCenterHz, viewSpanHz, wholeBandView);
     }
   }
 }
@@ -2253,6 +2273,7 @@ function init() {
     const factor = evt.deltaY > 0 ? 1.15 : (1 / 1.15);
     setViewSpan(viewSpanHz * factor);
     wholeBandView = false;   // manual zoom exits the locked whole-band view
+    notifyRx1ViewChange(viewCenterHz, viewSpanHz, wholeBandView);
   }, { passive: false });
 
   attachHoverCrosshair(spectrumWrap);
@@ -2286,6 +2307,15 @@ function init() {
     viewCenterHz = dragStartCenter - dx * hzPerPx;
     wholeBandView = false;   // manual pan exits the locked whole-band view
     clampViewToCapture();
+    // Not one of the relay points named in the original design spec (tune,
+    // Center, drift-recenter, span-slider, wheel-zoom, Whole Band) — found
+    // by the pre-implementation grep this task called for: drag-to-pan
+    // changes viewCenterHz same as those do, and had ZERO relay before
+    // this (not even the old span-only mechanism), so a linked RX2 was
+    // left visibly frozen while dragging RX1's spectrum. Added for
+    // consistency with "relay after any RX1 action that changes its own
+    // view center and/or span."
+    notifyRx1ViewChange(viewCenterHz, viewSpanHz, wholeBandView);
   });
 
   connectWs();
@@ -2627,6 +2657,13 @@ let wholeBandApplied2 = false;
 // looked unlinked because each was drawing the same, correctly-synced
 // dial frequency against its own independently-drifted view window).
 let linkBootstrapApplied2 = false;
+// Mirrors RX1's own wholeBandView — written only by onRx1ViewChange's
+// direct assignment when linked (no local RX2 logic reads it back; see
+// that function's own comment). Not wired into RX2's own standalone
+// snapToWholeBand()/followOwnTuning2() interaction — out of scope for this
+// pass, which only unifies the LINKED view-sync path per the design spec
+// (item 5: don't redesign wholeBandView/wholeBandView2 semantics).
+let wholeBandView2 = false;
 let mode2 = 'USB';
 let bandwidth2Hz = 3000;
 
@@ -2644,18 +2681,24 @@ function updateSpanLabel2() {
 }
 function onSpanSlider(v) { viewSpanHz = spanFromSlider(parseInt(v, 10)); updateSpanLabel2(); }
 
-// Called directly by Panadapter's own setViewSpan/onSpanSlider on every
-// RX1 span change (wheel-zoom, slider drag, or Whole Band) — see
-// notifyRx1SpanChange's comment there. Only acts while linked, so RX1
-// can freely broadcast unconditionally without knowing anything about
-// Link state. Deliberately NOT the same path as followRx1's own
-// margin-gated hardware-capture recenter (that one exists specifically
-// to avoid an unwanted pan on every incidental CAT tick) — span-linking
-// is triggered by the operator's own deliberate zoom gesture on RX1, so
-// mirroring it immediately is the whole point, not something to gate.
-function onRx1SpanChange(hz) {
+// Called directly by Panadapter's own notifyRx1ViewChange on every RX1
+// action that changes its own view (tune, Center, drag, wheel-zoom, span
+// slider, Whole Band, automatic drift-recenter) — see that function's
+// comment there. Only acts while linked, so RX1 can freely broadcast
+// unconditionally without knowing anything about Link state.
+//
+// Direct assignment, no threshold check — replaces the old span-only
+// onRx1SpanChange plus followOwnTuning2()'s independent threshold-guess
+// for the linked case (see followOwnTuning2's own comment): those two
+// uncoordinated mechanisms could disagree about where RX2's view should
+// be even while Link showed as on. RX1 is the sole source of truth for a
+// linked RX2's view now, same as it always has been for RX2's audio
+// target via followRx1()/applyRx1ToRx2().
+function onRx1ViewChange(centerHz, spanHz, wholeBand) {
   if (!linkToRx1) return;
-  setViewSpan(hz);
+  setViewSpan(spanHz);
+  viewCenterHz = centerHz;
+  wholeBandView2 = wholeBand;
 }
 
 function tuneTo(freqHz, recenterView = true) {
@@ -2717,6 +2760,15 @@ function followRx1(freqHz) {
 // capture margin check (much wider, deliberately not this) still governs
 // whether the SDR itself retunes; this only moves the local view crop.
 function followOwnTuning2() {
+  // While linked, RX2's view is driven entirely by RX1's own relay
+  // (onRx1ViewChange, direct assignment) — this independent threshold
+  // guess used to run unconditionally alongside that relay, computed from
+  // completely separate trigger logic than RX1's own equivalent
+  // (followRigFrequency()), and the two could disagree about where RX2's
+  // view should be even while Link showed as on (Terry 2026-09-19
+  // diagnosis). Retired for the linked case only — standalone (unlinked)
+  // behavior below is unchanged, since RX2 can be operated independently.
+  if (linkToRx1) return;
   // Digital mode has its own centering convention (dial at the left edge,
   // not centered) — see handleDigitalViewMode2, called instead from
   // connectWs2's state handler. Mirrors RX1's own followRigFrequency()
@@ -2840,9 +2892,19 @@ function applyRx1ToRx2(recenterView) {
 
 function copyFromRx1() { applyRx1ToRx2(true); }
 
-function recenterView() { if (audioTargetFreqHz !== null) viewCenterHz = audioTargetFreqHz; }
+// Gated like RX2's own wheel-zoom/span-slider: while linked, RX1 is the
+// only thing allowed to move RX2's view (via onRx1ViewChange) — this was
+// one of the four view-mutating RX2 controls with no Link gate at all
+// before this pass (Terry 2026-09-19 inventory).
+function recenterView() {
+  if (linkToRx1) return;
+  if (audioTargetFreqHz !== null) viewCenterHz = audioTargetFreqHz;
+}
 
 function snapToWholeBand() {
+  // Gated like RX2's own wheel-zoom/span-slider — see recenterView's
+  // comment just above; same missing-Link-gate bug.
+  if (linkToRx1) return;
   // Mirrors Panadapter's own snapToWholeBand: moves the wideband SDR
   // CAPTURE window to cover the whole band, purely for viewing — does
   // NOT touch audioTargetFreqHz/set_audio_target, since that would yank
@@ -3431,7 +3493,14 @@ function init() {
     spectrumWrap2.classList.add('dragging');
   });
   window.addEventListener('mouseup', evt => {
-    if (dragging2 && !dragMoved2 && latestFrame2 && viewCenterHz !== null) {
+    // !linkToRx1: click-to-tune was one of the four view-mutating RX2
+    // controls with no Link gate at all (Terry 2026-09-19 inventory) —
+    // worse than the other three, since this one doesn't just move the
+    // local view crop, it actually retunes RX2's own SDR audio target
+    // (tuneTo() below sends set_panadapter_freq/set_audio_target), so a
+    // stray click on RX2's spectrum while linked used to silently pull
+    // RX2's real audio away from whatever RX1 says it should be.
+    if (dragging2 && !dragMoved2 && latestFrame2 && viewCenterHz !== null && !linkToRx1) {
       const rect = spectrumWrap2.getBoundingClientRect();
       const x = evt.clientX - rect.left;
       const freqHz = (viewCenterHz - viewSpanHz / 2) + (x / rect.width) * viewSpanHz;
@@ -3445,6 +3514,11 @@ function init() {
     const dx = evt.clientX - dragStartX2;
     if (Math.abs(dx) > 3) dragMoved2 = true;
     if (!dragMoved2) return;
+    // Same missing-Link-gate bug as click-to-tune above (drag-to-pan was
+    // the other of the four listed controls). dragMoved2 is still tracked
+    // above so mouseup's click-to-tune branch correctly stays suppressed
+    // too, even for a tiny in-place click while linked.
+    if (linkToRx1) return;
     const rect = spectrumWrap2.getBoundingClientRect();
     const hzPerPx = viewSpanHz / rect.width;
     viewCenterHz = dragStartCenter2 - dx * hzPerPx;
@@ -3520,7 +3594,7 @@ function init() {
 }
 
 return {
-  init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1, onRx1SpanChange,
+  init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1, onRx1ViewChange,
   onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect,
   setMode, setAudioTarget, setWidth, setFilterWidthMode, toggleNR, setNR, setAGC, setRxVolume, setRfGain, toggleEQ, setEQ,
   toggleRfNotch, toggleDabNotch,
