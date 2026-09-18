@@ -12,6 +12,10 @@ python-dotenv==1.2.2
 httpx==0.28.1
 anthropic==0.113.0
 
+# --- Test scaffolding (T0) -------------------------------------------------
+pytest==9.1.1
+pytest-asyncio==1.4.0
+
 # --- DeepFilterNet3 noise reduction ---------------------------------------
 # deepfilternet's numpy-2-safe runtime deps, installed normally:
 appdirs==1.4.4
