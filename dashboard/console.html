@@ -609,6 +609,20 @@ select#palette-select {
    just inert for what you're actually hearing through the SDR. */
 .rx-inert { opacity: 0.4; }
 
+/* Antenna + A/B Test on 2m/70cm (U3a, finding B). Same dimmed look as the
+   FT-991A RX controls above, but these DO need the click suppressed:
+   acom_bridge.py refuses next_antenna/goto_antenna while the amp is out of
+   the RF path, so a click there buys nothing but an error line in SYSTEM
+   MSGS. Scoped to these two boxes by id, deliberately — this is not a
+   return to dimming by ancestry (see the zoning note at the Antenna box).
+
+   `> *` and not the box itself: pointer-events is inherited, so this
+   reaches the whole subtree, while leaving the BOX still hit-testable so
+   its title tooltip appears on hover. Putting pointer-events:none on the
+   box would kill the very explanation this is here to give. */
+#box-antenna.rx-inert > *,
+#box-abtest.rx-inert  > * { pointer-events: none; }
+
 .amp-state-badge {
   font-weight: 600; padding: 2px 7px;
   border-radius: 3px; border: 1px solid var(--border); background: var(--bg-0); color: var(--chrome-muted);
@@ -724,14 +738,13 @@ select#palette-select {
          They stay undimmed here because the dimmer's scope should be
          decided per control, not inherited (Terry 2026-09-19, option 3a).
 
-         NOTE: antenna switching genuinely IS unavailable on 2m/70cm —
+         Antenna switching genuinely IS unavailable on 2m/70cm —
          acom_bridge.py refuses next_antenna/goto_antenna when
-         amp_in_path is false. Today that surfaces only as a system-message
-         line at the bottom of the window, with nothing at the control
-         itself; giving these two boxes a local inert state (the .rx-inert
-         pattern) is open work, tracked for U3. Re-dimming them via
-         ancestry is NOT the fix — that hides the control without saying
-         why, which is what this change moved away from. -->
+         amp_in_path is false. As of U3a that is said AT the control: both
+         boxes get .rx-inert plus a title explaining why, toggled from the
+         same amp_in_path signal in updateUI(). Local inert state, decided
+         per control — still NOT ancestry dimming, which hid the control
+         without saying why. -->
     <div class="section-box" id="box-antenna">
     <h2>Antenna</h2>
     <div class="ant-grid">
@@ -912,8 +925,10 @@ select#palette-select {
           <button class="btn" data-mode="USB"    onclick="RigControl.setMode(this)">USB</button>
           <button class="btn" data-mode="LSB"    onclick="RigControl.setMode(this)">LSB</button>
           <button class="btn" data-mode="CW"     onclick="RigControl.setMode(this)">CW</button>
-          <button class="btn" data-mode="AM"     onclick="RigControl.setMode(this)">AM</button>
-          <button class="btn" data-mode="FM"     onclick="RigControl.setMode(this)">FM</button>
+          <button class="btn" data-mode="AM"     onclick="RigControl.setMode(this)"
+            title="Sets the radio, but console audio does not demodulate AM yet — the SDR path runs SSB demod regardless of rig mode, so what you hear will not change. Tracked as U3e.">AM</button>
+          <button class="btn" data-mode="FM"     onclick="RigControl.setMode(this)"
+            title="Sets the radio, but console audio does not demodulate FM yet — the SDR path runs SSB demod regardless of rig mode, so what you hear will not change. Tracked as U3e.">FM</button>
           <button class="btn" data-mode="PKTUSB" onclick="RigControl.setMode(this)">DATA-U</button>
         </div>
       </div>
@@ -2345,7 +2360,12 @@ function init() {
   canvas = document.getElementById('spectrum-canvas');
   ctx = canvas.getContext('2d');
   wfCanvas = document.getElementById('waterfall-canvas');
-  wfCtx = wfCanvas.getContext('2d');
+  // willReadFrequently: pushWaterfallRow reads this context back with
+  // getImageData every frame to scroll it. Without the hint Chrome keeps
+  // it GPU-backed and each read stalls on a readback — real CPU on a
+  // station already at its ceiling (U3a, finding F). The spectrum and
+  // overlay contexts are draw-only and stay GPU-backed.
+  wfCtx = wfCanvas.getContext('2d', { willReadFrequently: true });
   wfOverlayCanvas = document.getElementById('waterfall-overlay-canvas');
   wfOverlayCtx = wfOverlayCanvas.getContext('2d');
   spectrumWrap = document.getElementById('spectrum-wrap');
@@ -3533,7 +3553,12 @@ function init() {
   canvas2 = document.getElementById('spectrum2-canvas');
   ctx2 = canvas2.getContext('2d');
   wfCanvas2 = document.getElementById('waterfall2-canvas');
-  wfCtx2 = wfCanvas2.getContext('2d');
+  // willReadFrequently: pushWaterfallRow reads this context back with
+  // getImageData every frame to scroll it. Without the hint Chrome keeps
+  // it GPU-backed and each read stalls on a readback — real CPU on a
+  // station already at its ceiling (U3a, finding F). The spectrum and
+  // overlay contexts are draw-only and stay GPU-backed.
+  wfCtx2 = wfCanvas2.getContext('2d', { willReadFrequently: true });
   wfOverlayCanvas2 = document.getElementById('waterfall2-overlay-canvas');
   wfOverlayCtx2 = wfOverlayCanvas2.getContext('2d');
   spectrumWrap2 = document.getElementById('spectrum2-wrap');
@@ -3970,6 +3995,18 @@ function send(obj) {
 // this is accurate during exactly the window that matters.
 let lastRigConnected = true;
 
+// Why Antenna / Antenna A/B Test go inert on 2m/70cm. acom_bridge.py refuses
+// next_antenna and goto_antenna whenever amp_in_path is false, because the
+// ACOM's antenna relays are inside the amp the VHF/UHF path bypasses.
+const ANT_BYPASSED_TITLE = {
+  'box-antenna': 'Antenna switching is unavailable on 2m/70cm \u2014 the ACOM is out '
+    + 'of the RF path and its antenna relays go with it. These bands run direct '
+    + 'from the rig to their own antenna.',
+  'box-abtest': 'Antenna A/B testing is unavailable on 2m/70cm \u2014 it works by '
+    + 'switching the ACOM between antennas, and the ACOM is out of the RF path '
+    + 'on these bands.',
+};
+
 // What to actually show when a cmd_response comes back !ok.
 //
 // Was: `msg.message || (msg.cmd + ' rejected by rig')`, which invented a
@@ -4005,8 +4042,21 @@ function updateUI(s) {
   StatusBar.setDot('rig', lastRigConnected);
   StatusBar.setDot('amp', !!s.amp_connected);
 
+  const ampBypassed = s.amp_in_path === false;
   document.querySelector('.panel-bandamp')
-    .classList.toggle('amp-bypassed', s.amp_in_path === false);
+    .classList.toggle('amp-bypassed', ampBypassed);
+
+  // Antenna + A/B Test live in the LEFT column now, outside .panel-bandamp,
+  // so they need the gate applied explicitly rather than inherited (U3a,
+  // finding B). Same signal, per-control decision. The title is toggled with
+  // the class, not baked into the HTML: on HF these controls work fine and a
+  // permanent "unavailable" tooltip would be its own lie.
+  for (const id of ['box-antenna', 'box-abtest']) {
+    const el = document.getElementById(id);
+    el.classList.toggle('rx-inert', ampBypassed);
+    if (ampBypassed) el.title = ANT_BYPASSED_TITLE[id];
+    else el.removeAttribute('title');
+  }
 
   const vfoEl = document.getElementById('vfo');
   vfoEl.textContent = rig.freq_display || '  0.000.000';
