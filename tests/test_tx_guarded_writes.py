@@ -200,3 +200,53 @@ async def test_stale_telemetry_does_not_block_writes_forever(fake_rig, fake_amp)
     await fake_rig.push_state(mode="USB")
 
     assert cmd_select_band(Band.B40M) in fake_amp.sent_frames
+
+
+# ----------------------------------------------------------------------
+# The operator has to be told why, not left with a dead button
+# ----------------------------------------------------------------------
+
+import json
+
+import pytest
+
+import dashboard.server as server
+
+
+class _FakeWebSocket:
+    def __init__(self):
+        self.sent: list[dict] = []
+
+    async def send_text(self, text: str):
+        self.sent.append(json.loads(text))
+
+
+async def test_refused_next_antenna_reaches_the_operator_with_a_reason(
+        fake_rig, fake_amp, monkeypatch):
+    """End to end through the real WS handler: a NEXT ANT click refused
+    because RF is live must come back as ok:false WITH the reason, since
+    console.html's cmdFailureText renders msg.message into an error toast.
+    A bare ok:false would surface as "next_antenna failed — no reason
+    reported", and a silently-swallowed refusal as a dead button."""
+    bridge = await _ready_bridge(fake_rig, fake_amp)
+    monkeypatch.setattr(server, "bridge", bridge)
+    await fake_amp.emit_telemetry(_keyed())
+    ws = _FakeWebSocket()
+
+    await server.handle_ws_command(json.dumps({"cmd": "next_antenna"}), ws)
+
+    assert len(ws.sent) == 1
+    reply = ws.sent[0]
+    assert reply["type"] == "cmd_response"
+    assert reply["ok"] is False
+    assert "Cannot switch antenna while TX is active" in reply["message"]
+    assert "amp-keyin" in reply["message"]
+
+
+def test_console_renders_the_servers_reason_rather_than_inventing_one():
+    """Source-level companion to the test above: cmdFailureText must keep
+    preferring the server's own message over a generic fallback."""
+    from pathlib import Path
+    html = Path("dashboard/console.html").read_text()
+    assert "if (msg.message) return msg.message;" in html
+    assert "showToast('Error: ' + cmdFailureText(msg), 'error')" in html
