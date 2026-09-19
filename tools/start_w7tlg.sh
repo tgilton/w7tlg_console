@@ -50,7 +50,15 @@ echo "Starting W7TLG Console..."
 cd "$CONSOLE_DIR"
 source venv/bin/activate
 
-python main.py &
+# Every run also lands in a timestamped file under logs/ — the terminal
+# output is unchanged, tee just copies it. Findings G/I/J were all diagnosed
+# from log captures the operator happened to have; this stops that being
+# a matter of remembering to redirect. logs/ is gitignored.
+mkdir -p "$CONSOLE_DIR/logs"
+LOG_FILE="$CONSOLE_DIR/logs/console-$(date +%Y%m%d-%H%M%S).log"
+echo "Logging to $LOG_FILE"
+
+python main.py 2>&1 | tee "$LOG_FILE" &
 CONSOLE_PID=$!
 
 echo "Waiting for console on :8000..."

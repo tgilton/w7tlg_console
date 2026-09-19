@@ -310,6 +310,41 @@ these are string/comment changes with no behavioral surface.
 
 ---
 
+### T7 — A timed-out `\set_cache` leaves a straggler on the new connection (backlog)
+
+**The observation.** `_set_daemon_cache_timeout` (`rig/rigctld_client.py:670-688`)
+writes `\set_cache 50` immediately after every connect and waits **2.0s** for
+`RPRT 0`. Finding J measured reply latency at ~4.0s during a contention
+episode — and a reconnect happens *because* of such an episode, so this write
+lands at the worst possible moment. The timeout logs
+`Could not set rigctld daemon cache timeout: ...`.
+
+**Two consequences, and the second is the one that matters.**
+
+1. The daemon cache stays at rigctld's 1000ms default for that session, so
+   knob tuning feels laggy again — the bug `\set_cache` was added to fix.
+2. **The late `RPRT 0` arrives as a straggler on a brand-new connection.** It
+   lands in the first `t` of the fresh poll loop, so the reply stream is
+   shifted by one from its very first cycle. `parse_ptt_reply` rejects it
+   (not `[0-3]`) and logs the rejection rather than faking a TX, so finding
+   I's guard holds — but the connection still starts out of step, and the
+   frequency sanity check is what has to catch it.
+
+So the warning is not cosmetic: it means the connection began desynced.
+
+**Candidate fixes, not yet chosen.** Raise the wait above the measured ~4.5s;
+or drain before the first poll cycle rather than trusting the timeout; or send
+`\set_cache` without reading its reply and let the existing drain handle it.
+All three interact with finding J, so this should not be picked up before J is
+settled — the same sequencing mistake the reverted 2026-09-19 attempt made.
+
+**Files/modules touched.** `rig/rigctld_client.py`.
+
+**Validation.** Count `Could not set rigctld daemon cache timeout` and
+`Rejected implausible PTT reply` per hour of run time, before and after.
+
+---
+
 ### T6 — `drive_limit_w` is a percent wearing a watts label (backlog)
 
 **Goal.** `MODE_DRIVE_LIMITS` / `station.drive_limit_w` / `AMP_ON_DRIVE_LIMIT`

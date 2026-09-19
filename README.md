@@ -139,6 +139,46 @@ The ACOM serial port is hardcoded in dashboard/server.py. Update ACOM_PORT to ma
 
 The Spot/Seek and Propagation tabs still work without any of these except the manual lookup (needs at least one of HamQTH/QRZ) and the AI Advisor (needs the Anthropic key).
 
+**Fast PTT monitor (`.env`, optional):** the console runs a small watchdog that
+asks the radio "are you transmitting?" every few milliseconds, so it can silence
+the SDR audio the instant you key up. Without it the speakers can feed the
+FT-991A's mic — the failure that added it (commit `c5f2ee2`) was an audio
+feedback loop that built for about two seconds into the transmitted signal.
+
+Two settings control it, and both are optional:
+
+    FAST_PTT_MONITOR=on      # "off" disables the watchdog entirely
+    FAST_PTT_POLL_MS=5       # how often it asks, in milliseconds
+
+Anything unparseable falls back to the default, and `FAST_PTT_POLL_MS` also
+falls back if it is outside 1-1000. The console logs which setting it ended up
+using at startup, so you can always see what took effect. **Changes need a
+console restart.**
+
+**Turning it off is safe, and does not weaken any interlock.** Everything that
+can move a relay or write to the amp — band select, antenna switching, the
+drive-power clamp — runs off `AcomBridge.is_transmitting()`, which reads the
+rig's PTT and the amplifier's own telemetry directly and never consults this
+watchdog. The frequency-poll freeze during transmit is likewise in the rig
+client, not here. What you lose is speed in one place only: TX audio muting
+falls back to the console's ordinary 100ms poll, which is how the console
+behaved before the watchdog existed. See `TX_GATING_AUDIT.md`.
+
+Turn it off when you want to know whether its request rate (one query every
+5ms, on its own connection) is what is upsetting the rig link — see findings G
+and J in `IMPLEMENTATION_PLAN_U2.md`. `FAST_PTT_POLL_MS` is the gentler version
+of the same experiment: raise it to 25 and the request rate drops five-fold
+without losing the watchdog.
+
+**Run logs:** `~/start_w7tlg.sh` and `~/start_console.sh` now also save every
+run to `logs/console-YYYYMMDD-HHMMSS.log` inside the project, with the terminal
+output unchanged. `logs/` is gitignored. To read the most recent one:
+
+    less "$(ls -t ~/w7tlg-console/logs/*.log | head -1)"
+
+    # or follow it live from another terminal
+    tail -f "$(ls -t ~/w7tlg-console/logs/*.log | head -1)"
+
 ### Starting
 
     ~/start_w7tlg.sh

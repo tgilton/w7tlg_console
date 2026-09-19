@@ -462,9 +462,71 @@ async def on_spectrum_frame_0(frame: dict):
     await spectrum_manager_0.broadcast_frame(frame)
 
 
-# How often the fast PTT watchdog polls rigctld (ms).  5ms gives ~2.5ms
-# average detection lag, comfortably ahead of the bridge's 100ms ACOM poll.
-_FAST_PTT_POLL_MS  = 5
+def _env_flag(name: str, default: bool) -> bool:
+    """Read a boolean env var, falling back to `default` for anything not
+    clearly one or the other. A typo must not silently disable a safety-
+    adjacent feature, so only explicit off-words turn something off."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    val = raw.strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return True
+    if val in ("0", "false", "no", "off"):
+        return False
+    logger.warning(
+        f"{name}={raw!r} is not a yes/no value — using default "
+        f"({'on' if default else 'off'})")
+    return default
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read an integer env var, falling back to `default` for anything
+    unparseable or outside [minimum, maximum]."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        val = int(raw.strip())
+    except (ValueError, AttributeError):
+        logger.warning(f"{name}={raw!r} is not a number — using default ({default})")
+        return default
+    if not (minimum <= val <= maximum):
+        logger.warning(
+            f"{name}={val} is outside {minimum}-{maximum} — using default ({default})")
+        return default
+    return val
+
+
+# Whether to run the fast PTT watchdog at all. ON by default — it is what
+# silences the SDR audio at TX start, and the reason it exists is a real
+# recorded failure (commit c5f2ee2: mic PTT gives no software notice, and
+# the 100ms bridge poll let the high-AGC-gain output blast through).
+#
+# It is a switch rather than a deletion because its cost is also real and
+# not yet measured: it writes `t` to rigctld every _FAST_PTT_POLL_MS on its
+# own connection, and IMPLEMENTATION_PLAN_U2.md findings G and J name that
+# request rate as a suspect in the reply-stream desync. Turning it off for
+# one session and comparing the log is how that gets settled.
+#
+# NOTHING SAFETY-RELATED DEPENDS ON THIS. See TX_GATING_AUDIT.md section 6:
+# every element here is audio hygiene. The amp/relay guards run off
+# AcomBridge.is_transmitting() and the rig poll loop, neither of which this
+# task feeds. With it off, TX audio muting falls back to the 100ms bridge
+# poll path (on_station_state), which is what the console did before
+# c5f2ee2 — later, not absent.
+FAST_PTT_MONITOR_ENABLED = _env_flag("FAST_PTT_MONITOR", True)
+
+# How often the fast PTT watchdog polls rigctld (ms). 5ms was chosen for
+# ~2.5ms average detection lag, comfortably ahead of the bridge's 100ms ACOM
+# poll — but see TX_GATING_AUDIT.md: rigctld's daemon-level response cache
+# (RIGCTLD_DAEMON_CACHE_MS = 50) lives on the shared RIG object inside
+# rigctld, not per-connection, so if it covers `t` then replies here can be
+# up to 50ms stale and the real lag is bounded by the cache, not by this
+# interval. Raising this costs little in that case and cuts the request rate
+# proportionally, which is the cheaper half of the finding-G experiment.
+_FAST_PTT_POLL_MS  = _env_int("FAST_PTT_POLL_MS", 5, minimum=1, maximum=1000)
+
 # How long to hold the TX gate after PTT drops — covers antenna relay
 # bounce and IQ pipeline drain on TX→RX return.
 _POST_TX_HOLD_S    = 0.15
@@ -502,6 +564,16 @@ async def _fast_ptt_monitor():
                 await asyncio.sleep(_FAST_PTT_POLL_MS / 1000)
                 continue
 
+            # NOTE (TX_GATING_AUDIT.md section 2.2), deliberately not fixed
+            # here: hamlib also returns 2 (RIG_PTT_ON_MIC) and 3
+            # (RIG_PTT_ON_DATA), and rig/rigctld_client.py's parse_ptt_reply
+            # accepts 0-3 for exactly that reason. This compares against '1'
+            # alone, so the two readers of the same signal use different
+            # grammars: if this rig ever reports 2 for mic PTT, the fast gate
+            # would silently never fire for voice TX — the case it was
+            # written for. It demonstrably does fire today, so hamlib returns
+            # 1 on at least the observed path; whether that holds for mic PTT
+            # versus CAT PTT is unverified and is a one-line hardware check.
             ptt = decoded == '1'
 
             if ptt and not last_ptt:
@@ -686,7 +758,15 @@ async def lifespan(app: FastAPI):
         logger.warning("SDR unavailable — panadapter features disabled.")
     else:
         seed_channel_b_audio_target(sdr)
-    asyncio.create_task(_fast_ptt_monitor())
+    if FAST_PTT_MONITOR_ENABLED:
+        asyncio.create_task(_fast_ptt_monitor())
+        logger.info(
+            f"Fast PTT monitor: ON, polling every {_FAST_PTT_POLL_MS}ms")
+    else:
+        logger.info(
+            "Fast PTT monitor: OFF (FAST_PTT_MONITOR) — TX audio muting falls "
+            "back to the 100ms bridge poll. Amp/relay safety guards are "
+            "unaffected; they do not use this task.")
     asyncio.create_task(_monitor_liveness_watcher())
 
     ab_test = AntennaAbTest(bridge=bridge, sdr=sdr)
