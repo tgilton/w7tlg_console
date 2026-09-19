@@ -119,6 +119,14 @@ MODE_DRIVE_LIMITS = {
 # rather than a silent indefinite wait.
 PENDING_DRIVE_LIMIT_WARN_S = 10.0
 
+# How long the amp's own telemetry stays trustworthy as TX evidence. The
+# stream runs at ~10Hz, so this is ~10 missed frames. Without a freshness
+# bound, a frozen serial link that stopped with flag_keyin set would latch
+# TX-true forever and block every band select, antenna move and drive clamp
+# for the rest of the session — the OR in tx_evidence() can only ever ADD
+# TX-true, so a stale source is not a harmless one.
+AMP_TELEMETRY_FRESH_S = 1.0
+
 AMP_ACTIVE_MODES = {OperatingMode.AMP_ON}
 
 # Bands wired direct to the FT-991A's own VHF/UHF antenna jack — the ACOM
@@ -373,6 +381,10 @@ class AcomBridge:
         self._pending_drive_limit: Optional[int] = None
         self._pending_drive_limit_since: Optional[float] = None
         self._pending_drive_limit_warned: bool = False
+        # Multi-source TX detection — see tx_evidence()/is_transmitting().
+        self._last_telemetry_at: Optional[float] = None
+        self._tx_evidence_active: bool = False
+        self._tx_sources_seen: set[str] = set()
         self._state_callbacks: list[StationStateCallback] = []
         self._trend_sample_callbacks: list[Callable[[TrendSample], None]] = []
 
@@ -508,6 +520,99 @@ class AcomBridge:
         await self.amp.send(cmd_atac())
         logger.info("Sent ATAC (ATU Tune / Antenna Change)")
         return True, "ATAC cycle initiated"
+
+    # ------------------------------------------------------------------
+    # Is the station transmitting?
+    # ------------------------------------------------------------------
+
+    def tx_evidence(self) -> tuple[str, ...]:
+        """Every source that currently says the station is transmitting.
+
+        The guards in this file all defend against a false *positive* PTT —
+        a phantom TX costs audio and display, and is visible. The dangerous
+        failure is the opposite one: PTT reading RX while RF is live, which
+        is what lets a band-select command reach the amp's relays mid-
+        transmission (TX_GATING_AUDIT.md section 5, row A1). A single
+        rigctld-derived reading cannot defend against that, because the
+        backup guard reads the same socket and fails with it.
+
+        So this is an OR over independent witnesses, and it is deliberately
+        one-directional: any source saying TX wins, none of them can veto.
+
+          rig-ptt         the rigctld `t` reading. Fast, but the one that
+                          desyncs (findings G/I/J).
+          amp-keyin       the ACOM's own KEY-IN flag, off its own serial
+                          link. Independent of rigctld entirely. Blind while
+                          the amp is in STANDBY, on the direct-to-rig VHF/UHF
+                          bands, and for the first ~75-100ms of a
+                          transmission (the SDS-4000S keys the amp via AUX
+                          ~30ms after PTT).
+          amp-fwd-power   forward power out of the amp. Measured against the
+                          2026-09-19 trend logs: nonzero on 14 of 14
+                          transmissions, and nonzero in 1 of 38,388 receive
+                          samples (a single TX-edge frame, which errs toward
+                          TX-true — the safe direction).
+          amp-drive-power drive power into the amp. Same logs: nonzero on
+                          only 4 of 14 transmissions, and those four are
+                          exactly the four that made 220W+. The meter has a
+                          floor around 5-6W, and this station runs <=10W of
+                          drive, so it sits at or under that floor most of
+                          the time. Kept because it costs nothing and is a
+                          true positive whenever it does fire.
+
+        The three amp-derived sources are only consulted while the telemetry
+        behind them is fresh — see _amp_telemetry_fresh.
+        """
+        sources: list[str] = []
+        if self.rig.state.ptt:
+            sources.append("rig-ptt")
+        if self._amp_telemetry_fresh():
+            if self.station.amp_ptt_active:
+                sources.append("amp-keyin")
+            if self.station.amp_fwd_w > 0:
+                sources.append("amp-fwd-power")
+            if self.station.amp_drive_w > 0:
+                sources.append("amp-drive-power")
+        return tuple(sources)
+
+    def is_transmitting(self) -> bool:
+        """True if ANY independent source says RF is live.
+
+        Use this for anything that drives hardware. It is deliberately NOT
+        wired to the audio gate or to _on_tx_start/_on_tx_end: those are
+        audio hygiene and trend accounting, and widening TX-true there would
+        change behaviour that has not been tested on this hardware.
+        """
+        return bool(self.tx_evidence())
+
+    def _amp_telemetry_fresh(self) -> bool:
+        if not self.station.amp_connected or self._last_telemetry_at is None:
+            return False
+        return (time.monotonic() - self._last_telemetry_at) <= AMP_TELEMETRY_FRESH_S
+
+    def _note_tx_evidence(self):
+        """Log TX-true on change only, naming what asserted it.
+
+        Called at telemetry cadence, so it must not log per frame. Only the
+        boolean edges are logged: which sources raised it, and on the way
+        down, every source that spoke at any point during that transmission.
+        That second list is the instrument — "rig-ptt" alone on a
+        transmission the amp never confirmed, or "amp-keyin, amp-fwd-power"
+        with no "rig-ptt" at all, are both findings worth having in the log.
+        """
+        sources = self.tx_evidence()
+        active = bool(sources)
+        if active:
+            self._tx_sources_seen.update(sources)
+        if active == self._tx_evidence_active:
+            return
+        self._tx_evidence_active = active
+        if active:
+            logger.info(f"TX true — asserted by: {', '.join(sources)}")
+        else:
+            seen = ", ".join(sorted(self._tx_sources_seen)) or "nothing"
+            logger.info(f"TX false — sources that spoke during it: {seen}")
+            self._tx_sources_seen.clear()
 
     # ------------------------------------------------------------------
     # Drive limit enforcement
@@ -650,6 +755,8 @@ class AcomBridge:
         if not rig.ptt:
             await self._service_pending_drive_limit()
 
+        self._note_tx_evidence()
+
         await self._publish()
 
     async def _handle_freq_change(self, freq_hz: int, band_name: str):
@@ -749,6 +856,7 @@ class AcomBridge:
         }
 
     async def _on_telemetry(self, t: AmpTelemetry):
+        self._last_telemetry_at = time.monotonic()
         if not self._amp_ready:
             self._amp_ready = True
             logger.info("Amp ready — syncing band to radio")
@@ -804,6 +912,11 @@ class AcomBridge:
         self.station.amp_current_ma = t.id1_ma
         self.station.amp_ptt_active = t.flag_keyin
         self.station.amp_atu_tuned  = t.flag_atu_tuned
+
+        # Evidence logging only — no hardware, no gating. Placed after the
+        # station fields this frame feeds so tx_evidence() reads this frame
+        # rather than the previous one.
+        self._note_tx_evidence()
 
         # HV rail cross-check: the mode-sync block above trusts the telemetry
         # mode byte's class bits alone. If the amp reports an OPR-class mode
