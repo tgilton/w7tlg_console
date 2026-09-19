@@ -415,3 +415,35 @@ detail and file/line evidence in `IMPLEMENTATION_PLAN_U2.md` §6b:
   call `getImageData` every frame on a context created with a bare
   `getContext('2d')`; Chrome warns once per tuner. One argument each.
   Spectrum and overlay contexts are write-only and must not get the flag.
+
+Added later the same day, from a log capture taken while testing the TX BW
+finding — these two are not UI defects and are a priority ahead of U3:
+
+- **The rig reply stream desyncs and force-reconnects every ~15 s.** A
+  `t` (PTT) read times out, the 1 s stale-reply drain is too short for
+  the ~4 s reply latency actually present, the late `t` reply is read as
+  the frequency (`"0"`), the sanity check fires and forces a reconnect —
+  16 times in an 11-minute capture, leaving the console unable to send
+  anything for ~12 % of the session. **This is the real cause of the TX
+  BW non-determinism**, and `<cmd> rejected by rig` is a false
+  attribution: the rig never rejected anything. Prime suspect for the
+  latency is the fast-PTT watchdog polling `t` every 5 ms on its own
+  connection into a serialized rigctld.
+- **A desynced reply read as PTT fakes a whole transmit state** —
+  audio gated, spectrum frozen, TX meters showing the radio's power
+  *setting* as 100 W output, a TX start pushed to the amp bridge, and
+  nothing in SYSTEM MSGS. Proven against the ACOM's own KEY-IN flag and
+  forward power, both flat at zero. Worse than the desync itself, because
+  `f` is only polled while PTT is false, so a phantom PTT switches off the
+  frequency sanity check — the only other guard there is.
+- **The 2.0 s read timeout is shorter than the ~4.0 s actual reply
+  latency**, so during a latency episode every command fails before it is
+  sent. Measured across 12 stragglers: median 4.01 s, 12/12 unanswerable.
+  The tight clustering (4.00-4.04) points at a fixed retry below us, not
+  congestion. This is the real next diagnostic target — everything else
+  here is downstream of it.
+- **Audio queue drops are bursty, not sustained**, and anti-correlate
+  with the rig desyncs — so the two are separate problems, and DSP load
+  starving the event loop is ruled out as a unifying cause. This is the
+  already-open 2026-09-13 tail-latency finding with better data; the
+  cumulative counter makes it look worse than the deltas show.

@@ -480,6 +480,11 @@ channels, not just RX1**:
 Surfaced by the operator's hardware checkpoints during U2 (2026-09-19).
 None are U2 regressions except B; all are out of U2's layout-only scope.
 
+**A-F** came from U2's own checkpoints. **G and H** were added later the
+same day, from a log capture taken while testing finding C — G turns out
+to be C's actual root cause and is a priority item well ahead of any U3
+UI work. Read C and G together.
+
 **A. No SDR audio on 2m/70cm, in any mode. OPEN — cause unknown.**
 Spectrum and waterfall are fine at 432 MHz, so the RSPduo capture is
 working; only the audio demod stage is silent. Initially misdiagnosed as
@@ -513,6 +518,18 @@ does not gate it — `set_ssb_tx_bpf` (`rig/rigctld_client.py:579-589`) just
 sends `EX110n;` and reports what the radio says; menu 110 is SSB-only at
 the radio. Same shape as B: gate the control on rig mode with a local
 explanation. Pre-existing; U2a only made it reachable by un-dimming.
+
+> **SUPERSEDED IN PART, 2026-09-19 — do not implement the mode gate yet.**
+> Follow-up testing in DATA-U found the behaviour is *non-deterministic*:
+> the same button in the same mode is sometimes accepted, sometimes
+> rejected, sometimes silently ignored, and a retry after a rejection
+> often succeeds. That is not a menu-validity pattern. **See finding G**
+> — the cause is a rig reply-stream desync that force-reconnects the
+> rigctld socket every ~15 s, plus the fact that `set_ssb_tx_bpf` is a
+> fire-and-forget write whose value is never polled back in digital
+> modes. A mode gate would not have fixed any of it. Whether menu 110
+> genuinely accepts PKT-U is still unanswered and can only be tested once
+> G is fixed.
 
 **D. Waterfall blanks in digital mode when zoomed out.** In digital modes
 the waterfall is fed *only* from `fine` frames (`:1701`) and the wide-frame
@@ -548,6 +565,298 @@ waterfall was written; harmless but it is free browser-side CPU on a
 station that already has a CPU ceiling problem elsewhere. Do not apply it
 to the spectrum or overlay contexts — those are write-only, and the flag
 would pessimize them.
+
+**G. The rig reply stream desyncs and force-reconnects every ~15 s. OPEN —
+mechanism confirmed from a log capture, upstream cause narrowed.
+THIS IS FINDING C'S ACTUAL ROOT CAUSE.** Surfaced 2026-09-19 while testing
+finding C; log captured by the operator over 07:35:12–07:46:06 (654 s).
+
+*The signature is exact and repeats 16 times in 11 minutes:*
+
+```
+GET 't' timed out (no reply within 2.0s)
+   ~1.9-2.0s later
+Poll error: Implausible frequency reading (0 Hz) — rig reply stream likely desynced
+Reconnecting to rigctld in 5.0s...
+   5.0s later
+Connected to rigctld at 127.0.0.1:4532
+```
+
+Measured gaps between the timeout and the implausible reading across all
+occurrences: 1.940, 2.025, 1.941, 2.013, 1.947, 1.897, 1.947, 2.025 s.
+That consistency is the tell — it is one further read-timeout's worth.
+
+*The chain, now traceable line by line:*
+
+1. `_send_get("t\n", 1)` hits its 2.0 s read timeout (`:945`) and calls
+   `_drain_stale_reply()`.
+2. `_drain_stale_reply()` (`:961`) waits **1.0 s** for a straggler and
+   breaks on the first timeout. The real replies are arriving ~4 s after
+   the request, so the drain gives up too early and mops up nothing.
+3. `_poll_state` continues to `_get_float("f\n", 1)` (`:699`).
+4. The late reply to **`t`** lands in **`f`**'s read. PTT's answer is the
+   string `"0"`.
+5. `freq = 0` fails `FREQ_SANITY_MIN_HZ` → `RuntimeError` (`:710`) →
+   `_poll_loop` sets `connected = False` → `finally: _disconnect()` sets
+   `self._writer = None` → `_run` sleeps `reconnect_interval = 5.0`.
+
+The 0 Hz is not a garbage value — **it is PTT's reply read one slot
+early.** The sanity check is working exactly as designed and is the only
+reason this is visible at all; without it every subsequent read would
+stay shifted silently. It is firing constantly.
+
+*Why `t` specifically.* 11 of the 13 named timeouts in the capture are
+`t`. `dashboard/server.py:492` — the fast-PTT watchdog — writes `b't\n'
+` every **5 ms** (`_FAST_PTT_POLL_MS = 5`) on its own connection, i.e.
+~200 requests/second of the same command. rigctld serializes all clients
+onto one serial port, so the main poll loop's `t` queues behind that
+flood. `RIGCTLD_DAEMON_CACHE_MS = 50` (lowered from the 1000 ms default
+to make knob tuning feel smooth) caps how much of it the daemon cache can
+absorb. Add WSJT-X in DATA-U and the two short-lived `get_dt_gain` /
+`get_ssb_tx_bpf` connections (`:502`, `:559`) and there are four-plus
+clients on one serial link. The watchdog also closes and reopens its
+socket on every one of its own 0.5 s timeouts (`:553-559`), adding
+connection churn under exactly the conditions that cause the timeouts.
+
+*Impact on finding C, which is the reason this was found.* Three
+observed outcomes, none of them a rig mode rejection:
+
+- **"rejected by rig"** — `set_ssb_tx_bpf` returns False only when
+  `self._writer` is None or closing (`_send_raw_ex_set`, `:1021`).
+  That is precisely the 5 s reconnect window. 16 cycles × 5.02 s = **80 s
+  of the 654 s capture, ~12%, with the console unable to send anything at
+  all** — plus ~2 s per cycle of connected-but-desynced time before it.
+  `console.html:3815` renders any `ok:false` as `<cmd> rejected by rig`,
+  a generic client-side fallback. **The rig never rejected anything and
+  cannot** — `_send_raw_ex_set` is fire-and-forget and never reads a
+  reply. The message is a false attribution.
+- **Silently ignored, no error** — the write succeeds, `ok:true` is
+  returned, and `state.ssb_tx_bpf = value` is set optimistically
+  (`:587`). In DATA-U nothing ever contradicts it: `_poll_ssb_bpf` is
+  gated on `not self.state.is_digital` (`:875`), and `PKTUSB` is digital
+  (`:280`). **In DATA-U the console's TX BW readout is unverified from
+  the moment it is clicked.** Applied and lost look identical from the
+  console side.
+- **Accepted** — the write landed between desync cycles.
+
+So gating TX BW on rig mode would have fixed none of the three. Finding C
+is correctly on hold.
+
+*Not yet established:* whether the ~4 s reply latency is contention alone
+or something slower in rigctld/the serial link. Finding H rules out our
+own event loop (see below). The decisive measurement is the one used on
+2026-08-30 for the cache question — time `t` and `f` replies from a
+separate raw socket against rigctld while the console runs, first with
+the fast-PTT watchdog at 5 ms and then with it disabled or slowed.
+
+---
+
+**H. Audio queue drops are bursty, not a sustained deficit — and are
+NOT the same problem as G.** Same capture. This is new data on the
+already-open dropout finding (2026-09-13), not a new defect.
+
+Two interleaved counters, one per `AudioDemodulator`
+(`sdr/audio_demod.py:639`). Channel A reached 1170 and channel B 552 over
+the capture, which reads alarming because **the counter is cumulative and
+monotonic — it cannot recover by construction.** The diagnostic quantity
+is the `+N in last 5s` delta, and the logger only emits a line when the
+count changed.
+
+Channel A deltas: +7, +125, +155, +82, +244, +102, +90, +20, +23, +65,
++5, +134, +46, +57, +15. Channel B: +7, +68, +38, +7, +103, +37, +26,
++15, +28, +97, +2, +100. And there are windows with **no line at all**,
+meaning zero drops: 07:39:53→07:41:18 (85 s) and 07:44:13→07:45:09
+(56 s).
+
+So the rate goes to zero for a minute at a time and then bursts. That is
+the **tail-latency-spike** signature already identified on 2026-09-13,
+not a throughput ceiling. A and B spike together, within ~100-200 ms,
+which points at a process- or system-wide stall rather than anything
+per-channel.
+
+*G and H are separate problems.* The timestamps anti-correlate as often
+as they correlate:
+
+- **07:39:03–07:39:53** — four drop bursts (+82, +244, +102, +37 on A)
+  with **zero rig events**; the rig link is quiet 07:38:53→07:40:33.
+- **07:41:33–07:42:08** — three complete reconnect cycles with **zero
+  drop lines** (nearest are 07:41:18 and 07:42:33).
+
+This also **rules out the most attractive unifying theory**: that DSP
+load starves the asyncio event loop and makes `wait_for` fire on replies
+that actually arrived on time. If that were happening, the rig timeouts
+would track the drop bursts. They do not. The ~4 s reply latency in G is
+coming from rigctld or the serial link, not from our own event loop.
+
+---
+
+**Do G or H connect to findings A or D?**
+
+- **D — no.** The waterfall blanking is `cropToView()` spreading a 3 kHz
+  fine frame across a 300 kHz view (`:1701`, `:1712`). Pure display
+  geometry, no timing component. Unrelated.
+- **A — probably not, but there is one cheap decisive test.** A is
+  *continuous silence* on VHF/UHF with a working spectrum; H is
+  *intermittent* loss on HF that goes to zero for a minute at a time.
+  Intermittent drops produce choppiness, not silence. But if the 300 kHz
+  VHF span costs enough per callback, A could be a *sustained* 100 %
+  drop, which is a different regime of the same counter. **Test:** tune
+  to 2m and watch whether `Audio queue drops` climbs at a high, steady
+  rate. Climbing steadily → A is a throughput problem and is related to
+  H. Flat while the audio is silent → A is downstream of the queue
+  entirely and is unrelated.
+
+
+---
+
+**I. PHANTOM TX — a desynced reply read as PTT puts the console into a
+fake transmit state with no error anywhere. OPEN, pre-existing, and more
+serious than G itself.** Proven 2026-09-19 from a second log capture plus
+the amp's own telemetry.
+
+*Symptoms the operator saw:* the console froze completely — no audio, no
+spectrum or waterfall — for ~7 s after a burst of TX BW clicks, then TX
+METERS showed **100 W with no transmission** for about a second. Nothing
+in SYSTEM MSGS either time.
+
+*Proof that no RF existed.* `data/trend_logs/trend_20260919_073442.csv`
+across 08:13:05-08:13:23 shows `fwd_w = 0.0` and `is_tx = 0` on every
+sample. `is_tx` is `t.flag_keyin` (`acom_bridge.py:733`) — the ACOM's own
+KEY-IN flag from its telemetry frame, entirely independent of rigctld.
+The amp was never keyed and never saw drive. Note also that
+`acom_bridge.py:520` derives "TX start detected" from `rig.ptt`, so that
+log line is **not** independent corroboration of a transmission — it is
+the same false PTT propagating.
+
+*The mechanism.* `_poll_state` parses PTT as `bool(int(val))` over
+`float(lines[0])`. **Any numeric straggler except exactly `0` becomes
+TX** — a passband (`2400`), a frequency (`14074000`), a signal strength
+(`-73`), an SWR of `1.0`. The func reads that end `_poll_controls`
+(`u NB` / `u NR` / `u ANF`, each returning exactly `"0"` or `"1"`) sit
+immediately before the next cycle's `t`, which makes them the highest-risk
+adjacency in the loop; in DATA-U the operator's preset leaves several of
+them on.
+
+*The captured sequence, with the ordering proof:*
+
+```
+08:13:09,713  GET 'f' timed out          <- ptt still False (f is only polled when !ptt)
+              ...f's late reply straggles; next cycle's `t` reads it
+08:13:13,873  GET 'l ALC' timed out      <- ALC is ONLY polled when ptt is True. PROOF.
+08:13:14,875  TX start detected          <- from rig.ptt, not the amp
+08:13:14,903  Audio WebSocket disconnected (x2)   <- audio dies
+08:13:19,940  Implausible frequency (0 Hz) -> reconnect
+08:13:24,952  Connected to rigctld
+08:13:24,956  TX end detected            <- 4 ms after the reconnect
+08:13:25,464  Audio WebSocket connected  <- outage 10.5 s
+```
+
+The 4 ms between the reconnect and "TX end" is the clincher: the
+"transmission" ended the instant the reply stream was reset, not from any
+change in RF.
+
+*Why each symptom follows.* `gate_tx()` flushes the IQ queue and
+`_publish` returns early on `tx_active` (no audio); the frontend freezes
+its display on `rig.ptt` (`console.html:1603`) and `sdr_client.py:1014`
+stops averaging (no spectrum/waterfall); the meter poll switches to the TX
+set (`:781`) where **`l RFPOWER` returns the radio's power *setting*,
+1.0 = 100%, not a measurement** (the 100 W). Nothing failed, so nothing
+reached SYSTEM MSGS.
+
+*Why this is worse than G.* The frequency sanity check is the only desync
+guard in the system, and `f` is only polled when `not ptt`. **A phantom
+PTT switches off the one detector that would have caught it**, which is
+why this episode ran ~10 s instead of being killed in ~2 s like every
+episode in the first capture. It also fakes a TX state to the amp bridge.
+
+*Also visible in the same capture:* `alc` latched to `0.05` from 08:13:19
+onward while `fwd_w = 0.0` and `is_tx = 0` — a misrouted `l ALC` straggler
+stuck in state. Same root cause, and the same shape as the known
+stale-telemetry display problem.
+
+*Fix ATTEMPTED then REVERTED, 2026-09-19.* A strict `^[0-3]$` PTT guard,
+a lock-held resync, a wider stale-reply drain and read-back-instead-of-
+optimistic-write for the raw-CAT setters were all implemented and passed
+98 tests, then **reverted in full** after a live run
+(`rig/rigctld_client.py` is back at HEAD). They were not wrong in
+principle, but two of them were actively harmful on real hardware:
+
+- The wider drain runs while holding `_lock`, which took a timeout cycle
+  from 3.0s to a measured 4.5s and pushed poll-loop lock occupancy from
+  ~70% to ~100% during a timeout storm. TX BW and DT GAIN went to ~4s,
+  and `session_switch` failed outright.
+- Dropping the optimistic state write meant that when the read-back also
+  failed, DT GAIN showed *nothing* — visibly dead rather than merely
+  unverified, with no feedback either way.
+
+The PTT guard itself was never shown to misbehave and is still the right
+idea. It should be retried **after** finding J, not before: while every
+command is failing by construction there is no way to tell a guard's
+effect from the noise, which is exactly how this attempt went wrong.
+
+*Original proposal, for the record.* Validate the PTT reply strictly: require*Original proposal, for the record.* Validate the PTT reply strictly: require
+the raw string to match `^[0-3]$` before touching PTT, treating anything
+else as a miss. That rejects `1.0`, `2400`, `14074000` and `-73` while
+still accepting hamlib's `RIG_PTT_ON_MIC`/`ON_DATA` (2/3). It is the PTT
+analogue of the frequency sanity check, and it closes the widest and most
+dangerous hole. Worth raising separately: the fast-PTT watchdog
+(`server.py:492`, own connection, every reply on it is a `t`, so it cannot
+meaningfully desync) is the real TX detector — it is arguable the main
+poll loop should not set PTT at all.
+
+**Important: this was captured on PRE-FIX code.** The server process
+started 07:34:34 and never restarted, so the G fixes were not loaded. The
+log confirms it independently: no `Drained N stale replies` line appears
+anywhere, and the 08:13:17,922 -> 08:13:19,940 gap is 2.018 s, shorter
+than the new drain's 2.5 s minimum when nothing arrives. The resemblance
+to `DRAIN_MAX_TOTAL_S`'s worst case was a coincidence — finding I is
+pre-existing and independent of that change.
+
+
+---
+
+**J. The read timeout is shorter than the reply latency, so during a
+latency episode EVERY command fails by construction. OPEN — this is the
+real root cause under G and I.** Measured 2026-09-19 from the 08:34-08:39
+capture, which is the first run with the drain instrumented well enough to
+time replies.
+
+Each `Drained N stale replies` line dates the straggler's arrival: drain
+elapsed, minus the closing quiet window, plus the 2.0s read timeout
+already spent. Across 12 stragglers:
+
+```
+2.98  3.44  3.56  3.93  3.94  4.00  4.01  4.02  4.02  4.03  4.03  4.04
+min 2.98s   median 4.01s   max 4.04s      read timeout = 2.0s
+```
+
+**12 of 12 could not have arrived in time.** Not "often slow" — every one
+was a guaranteed failure before it was sent. Draining, resyncing,
+reconnecting and the PTT/frequency guards are all downstream of this; they
+manage the wreckage of a request that was never going to be answered.
+
+*The clustering is the clue.* 4.00, 4.01, 4.02, 4.02, 4.03, 4.03, 4.04 is
+not congestion — congestion gives a spread. It is quantised, which means a
+fixed timeout-and-retry somewhere below us. Hamlib's serial backends carry
+their own `timeout` and `retry` settings, and 2 retries at a 2000ms serial
+timeout lands exactly here. If that is what it is, the serial read is
+*failing* and being retried, not merely queueing — which is a different
+problem from raw contention and would explain why the fast-PTT watchdog's
+5ms poll hurts so much more than its request count alone suggests.
+
+*Two ways out, and they are not equivalent:*
+
+- **Raise the read timeout above ~4.5s.** Cheap, and better on both axes:
+  at a 2.0s timeout a command costs 2.0s + drain and *fails*, leaving a
+  straggler; at 5.0s the same command costs ~4.0s and *succeeds*, leaving
+  nothing to clean up. Strictly better whenever the reply eventually
+  arrives, which was 12/12 here. Worse only when a reply never comes at
+  all. **Not yet tested.**
+- **Fix the ~4.0s itself.** Check hamlib's `timeout`/`retry` for this
+  backend and run the fast-PTT watchdog experiment. This is the actual
+  cure; the timeout change only stops the console from guaranteeing its
+  own failure while the latency exists.
+
 
 ---
 
