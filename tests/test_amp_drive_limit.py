@@ -182,3 +182,71 @@ async def test_set_operating_mode_also_defers_while_transmitting(fake_rig, fake_
     assert ok
     assert _power_calls(fake_rig) == []
     assert bridge._pending_drive_limit == 15
+
+
+# ----------------------------------------------------------------------
+# Virtual check: what the server actually publishes, and what the UI
+# binds to. Stands in for a live AMP ON test, which this station will not
+# run — the operator will not put the amp in OPERATE on a live band just
+# to confirm a number.
+# ----------------------------------------------------------------------
+
+from pathlib import Path
+
+from dashboard.server import build_state_payload
+
+
+async def test_published_drive_limit_amp_in_path_operate_is_15(fake_rig, fake_amp):
+    bridge = AcomBridge(rig=fake_rig, amp=fake_amp)
+    await bridge.start()
+    await fake_rig.push_state(freq_hz=14_074_000, band="20m", rf_power_pct=10)
+    await _drive_to_amp_on(fake_amp)
+
+    payload = build_state_payload(bridge.station)
+
+    assert payload["amp_in_path"] is True
+    assert payload["operating_mode"] == "AMP_ON"
+    assert payload["drive_limit_w"] == 15
+
+
+async def test_published_drive_limit_amp_in_path_standby_is_100(fake_rig, fake_amp):
+    bridge = AcomBridge(rig=fake_rig, amp=fake_amp)
+    await bridge.start()
+    await fake_rig.push_state(freq_hz=14_074_000, band="20m")
+
+    payload = build_state_payload(bridge.station)
+
+    assert payload["amp_in_path"] is True
+    assert payload["operating_mode"] == "AMP_OFF"
+    assert payload["drive_limit_w"] == 100
+
+
+async def test_published_drive_limit_amp_out_of_path_is_the_vhf_ceiling(
+        fake_rig, fake_amp):
+    """2m/70cm go straight to the FT-991A's own VHF/UHF jack, so the ACOM
+    never sees the RF and its OPERATE/STANDBY caps do not apply. The cap
+    there is the radio's own 50W ceiling (DIRECT_TO_RIG_MAX_W), NOT 100 —
+    the 100 case is amp-in-path-but-STANDBY, covered above."""
+    bridge = AcomBridge(rig=fake_rig, amp=fake_amp)
+    await bridge.start()
+    await fake_rig.push_state(freq_hz=144_200_000, band="2m")
+
+    payload = build_state_payload(bridge.station)
+
+    assert payload["amp_in_path"] is False
+    assert payload["drive_limit_w"] == ab.DIRECT_TO_RIG_MAX_W == 50
+
+
+def test_console_slider_max_is_bound_to_published_drive_limit():
+    """Source-level check, not a rendering check: it proves console.html
+    still reads the slider's ceiling from the published drive_limit_w
+    rather than a hardcoded number. Confirming the browser actually paints
+    it that way needs a browser; this catches the regression that matters
+    (someone replacing the binding with a literal)."""
+    html = Path("dashboard/console.html").read_text()
+
+    assert "const driveLimit = s.drive_limit_w ?? 100;" in html
+    assert "slider.max = driveLimit;" in html
+    # The static markup's max is only the pre-connect default; once state
+    # arrives the binding above owns it.
+    assert 'id="rf-power-slider"' in html
