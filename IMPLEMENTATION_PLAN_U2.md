@@ -1069,3 +1069,41 @@ finished U2a/U2b, with §5's null-guard hazard fixed *first* (add guards to
   demod question answered first.
 
 Awaiting approval before any code is written.
+
+---
+
+**N. NEXT ANTENNA clicks intermittently raise "AMP-ATU COMMUNICATION
+ERROR", which self-clears within seconds. OPEN — logged only, not
+investigated.** Reported by the operator 2026-09-19 while testing the
+finding I build.
+
+*Scope, per the operator:* this is the amp's **internal** AMP↔ATU link,
+a different subsystem from the rigctld findings (G, J) — it does not
+share the serial path, the poll loop, or the reply-stream desync
+mechanism those describe. Do not fold it into that investigation.
+
+*What is known, and nothing beyond it.* The string is the amp's own
+fault bit, decoded at `amplifier/acom_protocol.py:515` (byte 16, bit 2),
+severity `'W'` — a warning, not a hard fault, so it does not trip the
+TX inhibit path. Its siblings at `:512-516` cover the other three
+AMP/ASEL/ATU link directions. The trigger is the NEXT ANTENNA click
+path, `AcomBridge.switch_antenna` (`acom_bridge.py:~439`), which sends
+`cmd_next_antenna()` and then waits on a confirm deadline, hopping up to
+four times to reach the target port. Self-clearing within seconds means
+the amp re-establishes the link on its own.
+
+*Not yet established:* whether it correlates with a particular antenna
+port, with hop count or retry attempts, with the ATU's tuned/untuned
+state, or with the cold-start ATU wake sequence already documented
+separately. Whether the antenna actually lands on the intended port when
+it fires is also unconfirmed — the confirm loop reads `0x27` back, so
+the data to answer that is already in the trend logs.
+
+*Suggested first step when this is picked up:* correlate the warning's
+timestamps against `data/trend_logs/` rather than adding instrumentation
+— antenna number, ATU-tuned flag and fault bits are all already logged
+at telemetry cadence, so the question may be answerable from captures
+that already exist.
+
+*(There is no finding M in this document; the letter was skipped at the
+operator's numbering, not lost.)*
