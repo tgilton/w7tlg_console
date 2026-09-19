@@ -475,6 +475,69 @@ channels, not just RX1**:
 
 ---
 
+## 6b. Findings from live testing — handed to U3 / backlog
+
+Surfaced by the operator's hardware checkpoints during U2 (2026-09-19).
+None are U2 regressions except B; all are out of U2's layout-only scope.
+
+**A. No SDR audio on 2m/70cm, in any mode. OPEN — cause unknown.**
+Spectrum and waterfall are fine at 432 MHz, so the RSPduo capture is
+working; only the audio demod stage is silent. Initially misdiagnosed as
+"FM isn't implemented" — `sdr/audio_demod.py` really does implement SSB
+only (its one mode branch is `mode == "USB" else -center_hz`, `:471`, a
+sideband sign flip; there is no FM discriminator anywhere in `sdr/`), but
+the operator then confirmed **USB on 2m is also silent**, so missing FM
+support is not the cause. Note the RSPduo is an IQ receiver and does no
+demodulation itself — FM here means writing a demodulator, not enabling a
+device feature. Candidates not yet investigated: the much wider VHF
+capture span (300 kHz vs 15 kHz) and its different decimation, and
+`sdr/sdrplay_capi.py:70-79` recording that the RSPduo LNA/band tables are
+applied "uniformly for now… pending live confirmation across bands" —
+i.e. VHF/UHF was never verified after the RSPduo swap. Deserves its own
+bounded session with the DSP code open.
+
+**B. Antenna unavailability on 2m/70cm is announced 40 lines away.**
+`acom_bridge.py:416` genuinely refuses `next_antenna` when `amp_in_path`
+is false, so NEXT ANT is correctly rejected — but after U2a removed the
+blanket ancestry dimming, the only feedback is a SYSTEM MSGS line at the
+bottom of the window. The fix is a *local* inert state on `#box-antenna`
+and `#box-abtest` using the existing `.rx-inert` pattern (`:554`, already
+used for the FT-991A RX controls with an explanatory `title`), gated on
+`amp_in_path`. **Not** a return to ancestry dimming, which hides controls
+without saying why. This one is a gap U2 introduced.
+
+**C. TX BW is offered in modes the rig rejects.** Clicking WIDE/RAG-CHEW/DX
+outside SSB produces `Error: set_ssb_tx_bpf rejected by rig`. Confirmed by
+the operator: switching the rig to SSB on 2m stops the error. The console
+does not gate it — `set_ssb_tx_bpf` (`rig/rigctld_client.py:579-589`) just
+sends `EX110n;` and reports what the radio says; menu 110 is SSB-only at
+the radio. Same shape as B: gate the control on rig mode with a local
+explanation. Pre-existing; U2a only made it reachable by un-dimming.
+
+**D. Waterfall blanks in digital mode when zoomed out.** In digital modes
+the waterfall is fed *only* from `fine` frames (`:1701`) and the wide-frame
+path is skipped (`:1712`). Fine frames span `DIGITAL_VIEW_SPAN_HZ = 3000`,
+so at a whole-band 300 kHz view `cropToView()` spreads 3 kHz of data across
+the full canvas and ~99% of every row renders as background. Visible in the
+operator's own Step 0 baseline screenshot, before any U2 change. Arguably a
+real bug: zooming out past ~3 kHz should fall back to the wide frame rather
+than silently blanking. (Related, by design and not a bug: click-to-tune and
+Whole Band are both disabled in digital modes, `:2338` and `:1586`.)
+
+**E. Viewport-height console redesign.** `html, body { min-height: 100% }`
+with no viewport constraint means the page grows with content, so expanding
+a tall section makes a scrollbar appear and its width reflows every column
+narrower — a visible layout shift just from opening a disclosure. U2 takes
+the one-line mitigation (`html { scrollbar-gutter: stable }`, `:83`), which
+stops the shift but not the growth. The proper fix is `.console` at viewport
+height with `overflow-y: auto` on the side columns' `.panel-body`, so the
+columns scroll internally. **This also fixes a real problem: SYSTEM MSGS
+currently scrolls off-screen, and per finding B that bar is the only place
+errors surface at all.** Touches `.scope-group` sizing and therefore the
+canvas `getBoundingClientRect()` paths, so it needs its own package.
+
+---
+
 ## 7. U2c — the shared Mode control: recommend deferring, with reasons
 
 U2's goal paragraph asks for "one shared, non-duplicated Mode control that

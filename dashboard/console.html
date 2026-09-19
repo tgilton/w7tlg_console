@@ -72,6 +72,16 @@
   --mono: 'JetBrains Mono', monospace;
 }
 
+/* Reserve the scrollbar gutter unconditionally. Without this, expanding a
+   tall section (Antenna A/B Test) pushes the page past the viewport, the
+   scrollbar appears, and its ~15px steals width from the grid — every
+   column reflows narrower and the spectra re-render at a new size just
+   from opening a disclosure (Terry 2026-09-19). Stops the shift only; the
+   page still scrolls, and SYSTEM MSGS still scrolls out of view with it.
+   The real fix is a viewport-height console with per-column scrolling,
+   which keeps the status and message bars pinned — logged for U3. */
+html { scrollbar-gutter: stable; }
+
 html, body {
   min-height: 100%;
   background: var(--bg-0);
@@ -86,22 +96,40 @@ html, body {
   display: grid;
   /* --col-left/--col-right are set inline by the resize-drag JS and restored
      from localStorage on load — the px fallbacks here are only what a
-     first-ever visit sees before any dragging happens. Four zones, per
-     Terry 2026-09-11: modedsp = GLOBAL operating controls (Mode/Session/
-     Band/Digital Audio/Preamp-ATT — "there might be reasons to control
-     the radio"), center = RX1 fully self-contained (its own Filter/AGC/
-     NR/EQ live inside it now, not a separate narrow side column — "each
-     RX panel needs its own filter width... so I could conceivably hide
-     RX2 and operate without it"), center2 = RX2 fully self-contained
-     (identical structure to center), bandamp = TX ("the right side of
-     the entire console should be Transmit stuff" — amp, ALC/Radio PO/
-     SWR, and SSB Audio mic/comp/TX BW all live here now). There is no
-     longer a separate narrow "RX2 DSP" column — it was position-adjacent
-     confusion Terry flagged live ("hide RX2 and I still see the RX2
-     MODE box next to the RX1 spectrum") that a mid-session reorder only
-     partly fixed; folding it entirely into center2 removes the
-     adjacency question altogether. */
-  grid-template-columns: var(--col-left, 240px) 1fr 1fr var(--col-right, 268px);
+     first-ever visit sees before any dragging happens, and they must stay
+     in step with COLUMN_WIDTH_DEFAULT in the JS below (four sites total,
+     counting the two .collapsed-* rules).
+
+     Four zones. As of U2 (2026-09-19, backlog item 8):
+
+       modedsp = general OPERATING controls — Session, Band, Antenna,
+         Antenna A/B Test ("the left column should be general operational
+         functions — SESSION, BAND, ANTENNA, ANTENNA A/B TEST"), plus
+         Digital Audio and the CAT-only FT-991A RX controls ("there might
+         be reasons to control the radio") and RX1's Measure Noise.
+       center  = RX1, fully self-contained — its own Filter/AGC/NR/EQ live
+         inside it, not in a side column ("each RX panel needs its own
+         filter width... so I could conceivably hide RX2 and operate
+         without it", 2026-09-11).
+       center2 = RX2, identical structure to center.
+       bandamp = TX only — amp, ALC/Radio PO/SWR, SSB Audio mic/comp/TX BW,
+         Fault Status, Operating Mode, Exciter Drive ("the right side of
+         the entire console should be Transmit stuff"). Antenna and the A/B
+         test used to sit here mixed in with the amp; U2 moved them left,
+         which is what made this column actually TX-only.
+
+     Two things this arrangement deliberately does NOT do. There is no
+     separate narrow "RX2 DSP" column — that was position-adjacent
+     confusion Terry flagged live ("hide RX2 and I still see the RX2 MODE
+     box next to the RX1 spectrum"), folded into center2 for good. And
+     Mode is still per-receiver rather than one shared control: U2's brief
+     asked for a single shared Mode, but RX1's grid sends CAT to the rig
+     while RX2's switches the SDR demodulator's sideband — different
+     commands to different hardware behind one label — and applyRx1ToRx2()
+     already copies RX1's sideband to RX2 whenever Link is on. Deferred to
+     U3, which also owns giving RX2 the full mode set. See
+     IMPLEMENTATION_PLAN_U2.md §7. */
+  grid-template-columns: var(--col-left, 288px) 1fr 1fr var(--col-right, 274px);
   grid-template-areas:
     "status   status   status   status"
     "modedsp  center   center2  bandamp"
@@ -115,8 +143,8 @@ html, body {
    full DSP/TX controls back with one click otherwise. Overrides the
    resized width rather than replacing the variable, so the dragged width
    is still there underneath when the column re-expands. */
-.console.collapsed-left  { grid-template-columns: 22px 1fr 1fr var(--col-right, 268px); }
-.console.collapsed-right { grid-template-columns: var(--col-left, 240px) 1fr 1fr 22px; }
+.console.collapsed-left  { grid-template-columns: 22px 1fr 1fr var(--col-right, 274px); }
+.console.collapsed-right { grid-template-columns: var(--col-left, 288px) 1fr 1fr 22px; }
 .console.collapsed-left.collapsed-right { grid-template-columns: 22px 1fr 1fr 22px; }
 
 .panel { background: var(--bg-1); padding: 16px; min-width: 0; }
@@ -305,6 +333,35 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
 .dsp-val { color: var(--chrome-muted); min-width: 16px; text-align: right; }
 .dsp-slider-mini { width: 60px; }
 
+/* Antenna / A-B Test / Band live in THIS column as of U2 — these rules
+   sat under the "Band / amp column" banner below, which stopped being
+   true when those boxes moved left (.band-grid never belonged there at
+   all). Every selector here is a single class or id with no panel
+   ancestry, so the move changes neither what they match nor their
+   specificity — but note .ant-indicator overrides .btn's cursor at
+   equal specificity, so it must stay AFTER .btn in source order. */
+.band-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 16px; }
+/* minmax(0, 1fr), not 1fr: a 1fr track's automatic minimum is min-content,
+   so the tracks refused to shrink below the longest unbreakable word in
+   the aliases ("Unconnected", "Multiband") and the indicators punched
+   straight through the panel's right edge when the column was dragged
+   narrow (found 2026-09-19 once Antenna moved to the resizable left
+   column; .panel already sets min-width: 0, so the panel was never the
+   constraint). overflow-wrap on the alias lets those words break. */
+.ant-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin-bottom: 6px; }
+.ant-indicator { cursor: default; pointer-events: none; }
+.ant-alias { display: block; font-weight: 400; color: var(--chrome-muted); margin-top: 2px; overflow-wrap: anywhere; }
+.dummy-timer-wrap { display: none; align-items: center; gap: 6px; margin-top: 4px; }
+.dummy-timer-wrap.visible { display: flex; }
+.dummy-timer { font-weight: 700; color: var(--fg-0); font-size: 14px; }
+.dummy-timer.critical { color: var(--state-fault); animation: pulse-tx 0.4s infinite; }
+.abt-row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-bottom: 4px; }
+.abt-row input[type=number] { width: 44px; background: var(--bg-2); color: var(--fg-0); border: 1px solid var(--border); border-radius: 2px; }
+#abt-results table { width: 100%; border-collapse: collapse; }
+#abt-results th, #abt-results td { padding: 2px 0; border-bottom: 1px solid var(--border); }
+
+.scroll-table { max-height: 180px; overflow-y: auto; }
+
 /* ── Center column ──────────────────────────────────────── */
 .panel-center { grid-area: center; }
 .panel-center2 { grid-area: center2; }
@@ -485,7 +542,6 @@ select#palette-select {
   line-height: 1.4;
 }
 .panel-bandamp.amp-bypassed .amp-bypassed-note { display: block; }
-.band-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 16px; }
 .divider { height: 0.5px; background: var(--border); margin: 16px 0; }
 
 /* ── Visual zoning ──────────────────────────────────────────
@@ -566,9 +622,6 @@ select#palette-select {
 .amp-state-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 
 .opmode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
-.ant-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 6px; }
-.ant-indicator { cursor: default; pointer-events: none; }
-.ant-alias { display: block; font-weight: 400; color: var(--chrome-muted); margin-top: 2px; }
 
 .fault-severity {
   font-weight: 700; padding: 2px 6px;
@@ -584,20 +637,9 @@ select#palette-select {
 .fault-item.soft { color: var(--state-fault); }
 .fault-item.warn { color: var(--chrome-muted); }
 
-.dummy-timer-wrap { display: none; align-items: center; gap: 6px; margin-top: 4px; }
-.dummy-timer-wrap.visible { display: flex; }
-.dummy-timer { font-weight: 700; color: var(--fg-0); font-size: 14px; }
-.dummy-timer.critical { color: var(--state-fault); animation: pulse-tx 0.4s infinite; }
-
 .power-slider-wrap { display: flex; align-items: center; gap: 6px; }
 .power-value { color: var(--data-trace); min-width: 32px; text-align: right; }
 .power-value-green { color: var(--state-ok); }
-.abt-row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-bottom: 4px; }
-.abt-row input[type=number] { width: 44px; background: var(--bg-2); color: var(--fg-0); border: 1px solid var(--border); border-radius: 2px; }
-#abt-results table { width: 100%; border-collapse: collapse; }
-#abt-results th, #abt-results td { padding: 2px 0; border-bottom: 1px solid var(--border); }
-
-.scroll-table { max-height: 180px; overflow-y: auto; }
 
 /* ── System messages (bottom bar) ──────────────────────────── */
 .panel-sysmsgs {
@@ -4632,7 +4674,12 @@ function initColumnCollapse() {
 // the grid-template-columns rule above), independent of the collapsed
 // state so a dragged width survives a collapse/expand round-trip.
 const COLUMN_WIDTH_LIMITS = { modedsp: [200, 560], bandamp: [200, 560] };
-const COLUMN_WIDTH_DEFAULT = { modedsp: '240px', bandamp: '268px' };
+// Defaults track the operator's own dragged-in widths (measured 2026-09-19:
+// 286px/274px) rather than the original 240/268 guesses. NOTE: these four
+// numbers live in four places — here and the three grid-template-columns
+// rules above — and must move together, or double-click-to-reset snaps to
+// a width the CSS fallback disagrees with.
+const COLUMN_WIDTH_DEFAULT = { modedsp: '288px', bandamp: '274px' };
 function startColumnResize(which, downEvent) {
   const panel = document.getElementById('panel-' + which);
   if (!panel || panel.classList.contains('collapsed')) return;
