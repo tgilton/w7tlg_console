@@ -480,10 +480,12 @@ channels, not just RX1**:
 Surfaced by the operator's hardware checkpoints during U2 (2026-09-19).
 None are U2 regressions except B; all are out of U2's layout-only scope.
 
-**A-F** came from U2's own checkpoints. **G and H** were added later the
+**A-F** came from U2's own checkpoints. **G-J** were added later the
 same day, from a log capture taken while testing finding C — G turns out
 to be C's actual root cause and is a priority item well ahead of any U3
-UI work. Read C and G together.
+UI work. Read C and G together. **K and L** came from U3a's checkpoints,
+2026-09-19; neither is caused by U3a and L had been reported earlier the
+same day.
 
 **A. No SDR audio on 2m/70cm, in any mode. OPEN — cause unknown.**
 Spectrum and waterfall are fine at 432 MHz, so the RSPduo capture is
@@ -856,6 +858,106 @@ problem from raw contention and would explain why the fast-PTT watchdog's
   backend and run the fast-PTT watchdog experiment. This is the actual
   cure; the timeout change only stops the console from guaranteeing its
   own failure while the latency exists.
+
+**K. The SSB session sets USB on every band, including the LSB bands.
+OPEN — root cause confirmed, fix is a design decision.** Reported by the
+operator 2026-09-19: with the radio on 40m, selecting the SSB session put
+the rig in USB. Convention on this side of 10 MHz is LSB (160m, 80m, 40m,
+and 60m where it applies); USB above.
+
+The cause is not a bug in the switch path — it is that the path has no
+band input at all. `SessionProfile` carries a single `rig_mode: str`
+(`session/session_profiles.py:30`), the SSB profile hardcodes
+`rig_mode="USB"` (`:44`), and `SessionManager` applies it verbatim:
+`await self.bridge.rig.set_mode(target.rig_mode, target.passband_hz)`
+(`session/session_manager.py:202`). Nothing between the button and the
+radio knows what band it is on. This is correct and harmless for `ft8`
+and `js8`, which are `PKTUSB` on every band by convention — **`ssb` is
+the only profile in `PROFILES` whose correct mode depends on frequency**,
+which is why the data model never needed to express it before.
+
+Pre-existing since the session selector shipped (2026-07-17), not a U2 or
+U3a regression. It has stayed invisible because the console's own band
+buttons all seed the FT8 watering holes (`console.html:709-713`:
+1.840 / 3.573 / 7.074 / 10.136 MHz), so the natural way to reach 40m
+lands in the digital segment, where PKTUSB is right and SSB is not what
+you would select next.
+
+*The decision, and it is not purely mechanical.* A band→sideband rule is
+a convention, not a hardware constraint — operators do work 40m USB
+deliberately (some DX and net practice), and this station's standing rule
+is that the console does not second-guess the radio's mode
+(`project_no_auto_override_radio_state`). So the options are:
+
+- **Make `rig_mode` a function of frequency for `ssb` only.** Smallest
+  honest change: a `sideband_for_freq()` helper plus letting
+  `SessionProfile.rig_mode` be either a string or a callable.
+  `advisor/propagation.py:36` already has `BAND_MAP` and `freq_to_band()`
+  — the band edges exist, only the convention is missing.
+- **Leave the mode alone and say so at the control.** The SSB button
+  stops asserting a sideband and the operator picks it from RX1's mode
+  grid, which is one click and never wrong.
+
+Either way, note the second-order effect: the switch reads the rig's
+frequency at the moment of the click, so the rule has to re-evaluate on
+band change too, or selecting SSB on 20m and then moving to 40m leaves
+USB behind. That is the same "who owns this value" question as finding
+G's defect 3. **Needs Terry's call before implementing.**
+
+**L. After a restart the Session box shows nothing, while the radio is
+still in a session. OPEN — currently deliberate, and that is the thing to
+re-decide.** Reported by the operator 2026-09-19 with a screenshot, and
+again today at U3a's checkpoint 1. **Logged late: this was described as a
+symptom before U3a and had no finding entry, only a code comment.** It is
+not a U2 or U3a regression and never was.
+
+*Narrow it first, because the obvious reading is wrong.* A **browser**
+reload is not affected: `connectWs`'s `onopen` sends
+`send({ cmd: 'session_status' })` (`console.html:3834`), the server
+answers from `SessionManager.get_status()` (`server.py:1463-1466`), and
+the lit button comes back. `current_session_id` lives in the **server**
+process (`session_manager.py:71`), so what clears it is a **server**
+restart — the console and the rig then disagree until the next click.
+
+*Why it is that way, and the part that still holds.*
+`session_profiles.py:11-19` argues the state must not be persisted to
+disk: "a value on disk from a prior run could never be trusted without
+re-verifying it anyway, and a wrong 'remembered' session would show a lit
+button that lied about reality after a restart or an operator quitting an
+app outside the console." That reasoning is sound and should survive any
+fix — **do not solve this by writing `current_session_id` to disk.**
+
+*But "don't persist it" and "show nothing" are two different decisions,
+and only the first one was argued.* The console does not need a
+remembered value, because every input it would need to *derive* the
+session is already live and already probed at switch time:
+
+- the rig's actual CAT mode — `USB`/`LSB` vs `PKTUSB` separates `ssb`
+  from the digital profiles outright;
+- whether WSJT-X or JS8Call is actually running — exactly what
+  `liveness` (`_wait_for_wsjtx_liveness`, `_wait_for_js8call_liveness`)
+  and `wsjtx_listener.connected` already answer, live, with no memory.
+
+So a derived-on-startup session indicator is verified state, not
+remembered state, and it is immune to the failure the docstring warns
+about: if the operator quit WSJT-X outside the console, the probe simply
+reports that, which is the correct answer rather than a stale one.
+
+*The constraint that makes this non-trivial.* Deriving a value for
+**display** is fine. Deriving one must **not** run the switch
+choreography or push mode to the radio — that would be exactly the
+heuristic auto-override this station's standing rule forbids
+(`project_no_auto_override_radio_state`). So the fix has a seam in it:
+a third state, alongside "switching" and a confirmed
+`current_session_id`, meaning *"the radio appears to be in SSB; I did not
+put it there."* The Session box can show that honestly — and it is the
+same distinction finding G's defect 2 drew between "the rig refused" and
+"we never asked."
+
+**Cheapest honest version, if the derived state is more than we want:**
+leave the buttons unlit but say why in the Session box — "no session
+selected since restart; the radio keeps its own mode." One line, and it
+stops the box from implying the radio is in no mode at all.
 
 
 ---

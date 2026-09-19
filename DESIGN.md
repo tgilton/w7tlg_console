@@ -447,3 +447,24 @@ finding — these two are not UI defects and are a priority ahead of U3:
   starving the event loop is ruled out as a unifying cause. This is the
   already-open 2026-09-13 tail-latency finding with better data; the
   cumulative counter makes it look worse than the deltas show.
+
+Reported by the operator 2026-09-19 while checkpointing U3a. Neither is a
+U3a regression; both are pre-existing. Detail in
+`IMPLEMENTATION_PLAN_U2.md` §6b, findings K and L:
+
+- **The SSB session sets USB on every band.** On 40m it should be LSB
+  (as on 160m and 80m). Not a bug in the switch path — the path has no
+  band input: `SessionProfile.rig_mode` is one fixed string and
+  `SessionManager` applies it verbatim. `ssb` is the only profile whose
+  correct mode depends on frequency, which is why the data model never
+  had to express it. The fix is a decision, not a patch: derive the
+  sideband from frequency, or stop asserting one and leave it to RX1's
+  mode grid.
+- **After a server restart the Session box shows no session**, while the
+  radio is still in whatever mode it was left in. A browser reload is
+  fine — the client re-requests `session_status` on connect. Not
+  persisting the session to disk is deliberate and correct, but "don't
+  remember it" and "show nothing" are separate decisions and only the
+  first was argued: rig mode plus the existing WSJT-X/JS8Call liveness
+  probes can *derive* it live. Display only — deriving it must never
+  drive the radio (§ the no-auto-override rule).
