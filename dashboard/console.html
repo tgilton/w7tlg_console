@@ -459,9 +459,24 @@ select#palette-select {
 
 /* ── Band / amp column ──────────────────────────────────── */
 .panel-bandamp { grid-area: bandamp; position: relative; }
-/* Targets .panel-body specifically (not .panel-bandamp's direct children)
-   so the collapse tab added alongside it stays clickable while bypassed. */
-.panel-bandamp.amp-bypassed > .panel-body { opacity: 0.35; pointer-events: none; }
+/* Dims ONLY the two boxes the backend actually gates on amp_in_path —
+   acom_bridge.py refuses exactly set_operating_mode, next_antenna and
+   goto_antenna when the amp is out of the RF path, and Antenna moved to
+   the left column in U2, so what's left here is the Amp readout and
+   Operating Mode.
+
+   This used to dim the entire .panel-body, which greyed out four controls
+   the backend still honours on 2m/70cm (Terry 2026-09-19, hit live):
+   SSB Audio (MIC/COMP/TX BW, plain rig CAT, never gated); TX Meters
+   (rig.alc / rig.rf_power_out / rig.swr_radio — all radio readings, and
+   the only meters left once the amp's own go dead); Fault Status (carries
+   TX Inhibit/Allow, a safety control); and Exciter Drive, which is the
+   clearest case — _publish() sets drive_limit_w = DIRECT_TO_RIG_MAX_W
+   (50 W) *precisely when* the amp is bypassed, i.e. there is backend code
+   written to make that slider work on VHF/UHF, and the old rule greyed it
+   out. Don't widen this back to .panel-body. */
+.panel-bandamp.amp-bypassed #box-amp,
+.panel-bandamp.amp-bypassed #box-opmode { opacity: 0.35; pointer-events: none; }
 .amp-bypassed-note {
   display: none;
   margin-bottom: 16px; padding: 8px 10px;
@@ -653,6 +668,79 @@ select#palette-select {
     <div class="band-grid" style="grid-template-columns:repeat(2,1fr)">
       <button class="btn" data-band="2m"   data-freq="144200000" onclick="RigControl.setBand(this)">2m</button>
       <button class="btn" data-band="70cm" data-freq="432100000" onclick="RigControl.setBand(this)">70cm</button>
+    </div>
+    </div>
+
+    <!-- Antenna + Antenna A/B Test sit in the LEFT column as of U2
+         (2026-09-19, backlog item 8: "the left column should be general
+         operational functions — SESSION, BAND, ANTENNA, ANTENNA A/B TEST").
+         Deliberately OUTSIDE the amp-bypass dimmer: while these lived in
+         panel-bandamp they inherited
+         `.panel-bandamp.amp-bypassed > .panel-body { pointer-events: none }`,
+         so selecting 2m/70cm silently disabled NEXT ANT and the whole A/B
+         panel. That was an accident of DOM ancestry, never a decision.
+         They stay undimmed here because the dimmer's scope should be
+         decided per control, not inherited (Terry 2026-09-19, option 3a).
+
+         NOTE: antenna switching genuinely IS unavailable on 2m/70cm —
+         acom_bridge.py refuses next_antenna/goto_antenna when
+         amp_in_path is false. Today that surfaces only as a system-message
+         line at the bottom of the window, with nothing at the control
+         itself; giving these two boxes a local inert state (the .rx-inert
+         pattern) is open work, tracked for U3. Re-dimming them via
+         ancestry is NOT the fix — that hides the control without saying
+         why, which is what this change moved away from. -->
+    <div class="section-box" id="box-antenna">
+    <h2>Antenna</h2>
+    <div class="ant-grid">
+      <div class="btn ant-indicator" id="ant-1">A1F<br><span class="ant-alias" id="ant-alias-1"></span></div>
+      <div class="btn ant-indicator disabled" id="ant-2">A2F<br><span class="ant-alias" id="ant-alias-2"></span></div>
+      <div class="btn ant-indicator" id="ant-3">A3R<br><span class="ant-alias" id="ant-alias-3"></span></div>
+      <div class="btn ant-indicator" id="ant-4">A4R<br><span class="ant-alias" id="ant-alias-4"></span></div>
+    </div>
+    <button class="btn" style="width:100%" onclick="RigControl.nextAntenna()">&#8635; NEXT ANT</button>
+    <div class="dummy-timer-wrap" id="dummy-timer-wrap">
+      <span class="muted mono" style="color:var(--chrome-muted)">DUMMY LOAD:</span>
+      <span class="dummy-timer" id="dummy-timer">10.0s</span>
+    </div>
+    </div>
+
+    <!-- Moved left alongside Antenna in U2 and likewise exempt from the
+         amp-bypass dimmer — see the Antenna box's comment above. -->
+    <div class="section-box collapsible collapsed" id="box-abtest">
+    <h2 onclick="toggleSectionBox('box-abtest')">Antenna A/B Test</h2>
+    <div class="section-body">
+    <div class="abt-row">
+      <label><input type="checkbox" id="abt-manual" onchange="RigControl.toggleAbtManual()"> Manual switching</label>
+    </div>
+    <div class="abt-row" id="abt-auto-ants">
+      <label><input type="checkbox" id="abt-ant-1" checked> A1F</label>
+      <label><input type="checkbox" id="abt-ant-3" checked> A3R</label>
+      <label><input type="checkbox" id="abt-ant-4"> A4R</label>
+    </div>
+    <div class="abt-row" id="abt-manual-ants" style="display:none">
+      <input type="text" id="abt-manual-labels" placeholder="e.g. Vertical, EFHW, Loop"
+        style="width:100%" title="Comma-separated antenna names — you'll be prompted to switch to each one in turn">
+    </div>
+    <div class="abt-row">
+      <span>Rounds</span><input type="number" id="abt-rounds" value="10" min="1" max="100">
+      <span>Dwell s</span><input type="number" id="abt-dwell" value="12" min="5" max="120" step="1">
+    </div>
+    <div class="abt-row">
+      <span>MHz</span><input type="number" id="abt-scan-start" value="14.2000" step="0.0001" style="width:56px">
+      <span>to</span><input type="number" id="abt-scan-stop" value="14.3250" step="0.0001" style="width:56px">
+    </div>
+    <div class="btn-row" style="margin-top:4px">
+      <button class="btn active-green" style="flex:1" onclick="RigControl.startAbTest()">&#9654; Start</button>
+      <button class="btn danger" style="flex:1" onclick="RigControl.stopAbTest()">&#9632; Stop</button>
+    </div>
+    <div class="mono" style="margin-bottom:4px" id="abt-status">idle</div>
+    <div id="abt-confirm-wrap" class="abt-row" style="display:none;align-items:center">
+      <span class="mono" id="abt-confirm-label" style="color:var(--state-selected)"></span>
+      <button class="btn active-green" style="flex:1" id="abt-confirm-btn" onclick="RigControl.confirmAbtSwitch()">&#9166; Confirm switched</button>
+    </div>
+    <div id="abt-summary" class="mono" style="margin-bottom:4px"></div>
+    <div id="abt-results" class="scroll-table"></div>
     </div>
     </div>
 
@@ -1148,8 +1236,12 @@ select#palette-select {
     <button class="panel-collapse-tab" id="tab-bandamp" onclick="toggleColumn('bandamp')" title="Collapse Band/Amp panel"></button>
     <div class="panel-resize-handle" id="resize-bandamp" onmousedown="startColumnResize('bandamp', event)" ondblclick="resetColumnWidth('bandamp')" title="Drag to resize, double-click to reset"></div>
     <div class="panel-body">
-    <div class="section-box">
-      <div class="amp-bypassed-note">ACOM not in RF path &mdash; 2m/70cm run direct to rig</div>
+    <!-- Sits OUTSIDE #box-amp on purpose: the dimmed boxes use opacity,
+         and opacity creates a stacking context a child can't opt out of,
+         so a note explaining why things are dimmed must not live inside
+         one of them. -->
+    <div class="amp-bypassed-note">ACOM not in RF path &mdash; 2m/70cm run direct to rig</div>
+    <div class="section-box" id="box-amp">
       <h2>Amp (ACOM 1200S)</h2>
       <div class="amp-state-row">
         <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
@@ -1259,7 +1351,7 @@ select#palette-select {
       </div>
     </div>
 
-    <div class="section-box">
+    <div class="section-box" id="box-opmode">
       <h2>Operating Mode</h2>
       <div class="opmode-grid">
         <button class="btn active" id="mode-AMP_OFF" onclick="RigControl.setOpMode('AMP_OFF')">AMP OFF</button>
@@ -1278,58 +1370,6 @@ select#palette-select {
           ontouchend="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))">
         <span class="power-value power-value-green" id="rf-power-val">50W</span>
       </div>
-    </div>
-
-    <div class="section-box">
-    <h2>Antenna</h2>
-    <div class="ant-grid">
-      <div class="btn ant-indicator" id="ant-1">A1F<br><span class="ant-alias" id="ant-alias-1"></span></div>
-      <div class="btn ant-indicator disabled" id="ant-2">A2F<br><span class="ant-alias" id="ant-alias-2"></span></div>
-      <div class="btn ant-indicator" id="ant-3">A3R<br><span class="ant-alias" id="ant-alias-3"></span></div>
-      <div class="btn ant-indicator" id="ant-4">A4R<br><span class="ant-alias" id="ant-alias-4"></span></div>
-    </div>
-    <button class="btn" style="width:100%" onclick="RigControl.nextAntenna()">&#8635; NEXT ANT</button>
-    <div class="dummy-timer-wrap" id="dummy-timer-wrap">
-      <span class="muted mono" style="color:var(--chrome-muted)">DUMMY LOAD:</span>
-      <span class="dummy-timer" id="dummy-timer">10.0s</span>
-    </div>
-    </div>
-
-    <div class="section-box collapsible collapsed" id="box-abtest">
-    <h2 onclick="toggleSectionBox('box-abtest')">Antenna A/B Test</h2>
-    <div class="section-body">
-    <div class="abt-row">
-      <label><input type="checkbox" id="abt-manual" onchange="RigControl.toggleAbtManual()"> Manual switching</label>
-    </div>
-    <div class="abt-row" id="abt-auto-ants">
-      <label><input type="checkbox" id="abt-ant-1" checked> A1F</label>
-      <label><input type="checkbox" id="abt-ant-3" checked> A3R</label>
-      <label><input type="checkbox" id="abt-ant-4"> A4R</label>
-    </div>
-    <div class="abt-row" id="abt-manual-ants" style="display:none">
-      <input type="text" id="abt-manual-labels" placeholder="e.g. Vertical, EFHW, Loop"
-        style="width:100%" title="Comma-separated antenna names — you'll be prompted to switch to each one in turn">
-    </div>
-    <div class="abt-row">
-      <span>Rounds</span><input type="number" id="abt-rounds" value="10" min="1" max="100">
-      <span>Dwell s</span><input type="number" id="abt-dwell" value="12" min="5" max="120" step="1">
-    </div>
-    <div class="abt-row">
-      <span>MHz</span><input type="number" id="abt-scan-start" value="14.2000" step="0.0001" style="width:56px">
-      <span>to</span><input type="number" id="abt-scan-stop" value="14.3250" step="0.0001" style="width:56px">
-    </div>
-    <div class="btn-row" style="margin-top:4px">
-      <button class="btn active-green" style="flex:1" onclick="RigControl.startAbTest()">&#9654; Start</button>
-      <button class="btn danger" style="flex:1" onclick="RigControl.stopAbTest()">&#9632; Stop</button>
-    </div>
-    <div class="mono" style="margin-bottom:4px" id="abt-status">idle</div>
-    <div id="abt-confirm-wrap" class="abt-row" style="display:none;align-items:center">
-      <span class="mono" id="abt-confirm-label" style="color:var(--state-selected)"></span>
-      <button class="btn active-green" style="flex:1" id="abt-confirm-btn" onclick="RigControl.confirmAbtSwitch()">&#9166; Confirm switched</button>
-    </div>
-    <div id="abt-summary" class="mono" style="margin-bottom:4px"></div>
-    <div id="abt-results" class="scroll-table"></div>
-    </div>
     </div>
     </div>
   </div>
