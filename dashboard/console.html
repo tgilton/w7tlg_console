@@ -3812,7 +3812,7 @@ function connectWs() {
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'state') { state = msg.data; updateUI(state); }
-    else if (msg.type === 'cmd_response' && !msg.ok) showToast('Error: ' + (msg.message || (msg.cmd + ' rejected by rig')), 'error');
+    else if (msg.type === 'cmd_response' && !msg.ok) showToast('Error: ' + cmdFailureText(msg), 'error');
     else if (msg.type === 'ab_test_status') updateAbTestUI(msg.data);
     else if (msg.type === 'session_status') updateSessionUI(msg.data);
     // WSJT-X link status only — no TX/safety relevance, so it's fine to
@@ -3961,10 +3961,48 @@ function send(obj) {
   else wsQueue.push(msg);
 }
 
+// Last rig link state seen on the STATE channel. Tracked because a failed
+// command's toast has to say WHY, and "the rig link is down" is by far the
+// most common reason — see IMPLEMENTATION_PLAN_U2.md §6b finding G, where a
+// reply-stream desync was force-reconnecting the rigctld socket every ~15s
+// and the console was unable to send anything for ~12% of the session.
+// RigctldClient fires its state callbacks the moment it drops the link, so
+// this is accurate during exactly the window that matters.
+let lastRigConnected = true;
+
+// What to actually show when a cmd_response comes back !ok.
+//
+// Was: `msg.message || (msg.cmd + ' rejected by rig')`, which invented a
+// cause the console had no way to know. "rejected by rig" asserts the radio
+// refused the command, but for the fire-and-forget raw-CAT setters
+// (RigctldClient._send_raw_ex_set) the radio never replies at all, so a
+// rejection is not something we can observe — !ok there means the socket was
+// gone. All ten TX BW "rejected by rig" toasts on 2026-09-19 were that: every
+// one landed inside a rigctld reconnect window. See IMPLEMENTATION_PLAN_U2.md
+// §6b finding G.
+//
+// Check BOTH reason fields. Handlers are split on which they use —
+// set_panadapter_freq sends `error` (T1's "<n> Hz is outside the rig's
+// tunable range"), while session_switch, session_confirm_quit and
+// send_raw_cmd send `message`. Reading only one drops real reasons on the
+// floor: reading only `message` hid T1's range error behind "rejected by
+// rig", and reading only `error` reported "session_switch failed — no reason
+// reported" when the server had said "Failed to set rig mode to USB".
+//
+// Never invent a cause. The server's reason if it gave one, the link state
+// if that explains it, otherwise say plainly that we don't know.
+function cmdFailureText(msg) {
+  if (msg.error) return msg.error;
+  if (msg.message) return msg.message;
+  if (!lastRigConnected) return msg.cmd + ' not sent \u2014 rig link is down';
+  return msg.cmd + ' failed \u2014 no reason reported';
+}
+
 function updateUI(s) {
   const rig = s.rig || {};
 
-  StatusBar.setDot('rig', !!rig.connected);
+  lastRigConnected = !!rig.connected;
+  StatusBar.setDot('rig', lastRigConnected);
   StatusBar.setDot('amp', !!s.amp_connected);
 
   document.querySelector('.panel-bandamp')
