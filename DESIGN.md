@@ -411,3 +411,7 @@ detail and file/line evidence in `IMPLEMENTATION_PLAN_U2.md` §6b:
   errors surface at all. A viewport-height console with per-column
   scrolling fixes both; it touches `.scope-group` sizing and therefore the
   canvas `getBoundingClientRect()` paths, so it needs its own package.
+- **Waterfall canvases lack `willReadFrequently`.** Both scroll readbacks
+  call `getImageData` every frame on a context created with a bare
+  `getContext('2d')`; Chrome warns once per tuner. One argument each.
+  Spectrum and overlay contexts are write-only and must not get the flag.

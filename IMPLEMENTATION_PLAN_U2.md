@@ -536,6 +536,19 @@ currently scrolls off-screen, and per finding B that bar is the only place
 errors surface at all.** Touches `.scope-group` sizing and therefore the
 canvas `getBoundingClientRect()` paths, so it needs its own package.
 
+**F. Waterfall canvases read back every frame without
+`willReadFrequently`.** Chrome warns twice on every session (once per
+tuner): "Multiple readback operations using getImageData are faster with
+the willReadFrequently attribute set to true", pointing at
+`pushWaterfallRow`/`pushWaterfallRow2`'s scroll readback
+(`wfCtx.getImageData(0, 0, w, h - 1)`). Both contexts are created with a
+bare `getContext('2d')` (`:2348`, `:3536`). Fix is one argument each:
+`getContext('2d', { willReadFrequently: true })`. Pre-existing since the
+waterfall was written; harmless but it is free browser-side CPU on a
+station that already has a CPU ceiling problem elsewhere. Do not apply it
+to the spectrum or overlay contexts — those are write-only, and the flag
+would pessimize them.
+
 ---
 
 ## 7. U2c — the shared Mode control: recommend deferring, with reasons
