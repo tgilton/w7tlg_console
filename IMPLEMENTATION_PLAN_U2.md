@@ -712,7 +712,9 @@ coming from rigctld or the serial link, not from our own event loop.
 ---
 
 **I. PHANTOM TX — a desynced reply read as PTT puts the console into a
-fake transmit state with no error anywhere. OPEN, pre-existing, and more
+fake transmit state with no error anywhere. PARTLY CLOSED 2026-09-19
+(strict `[0-3]` validation shipped, branch `i-phantom-ptt`); the
+single-digit adjacency below is NOT closed. Pre-existing, and more
 serious than G itself.** Proven 2026-09-19 from a second log capture plus
 the amp's own telemetry.
 
@@ -814,6 +816,61 @@ than the new drain's 2.5 s minimum when nothing arrives. The resemblance
 to `DRAIN_MAX_TOTAL_S`'s worst case was a coincidence — finding I is
 pre-existing and independent of that change.
 
+
+*Second capture, 2026-09-19 09:23-09:30 (on the 5.0s timeout of finding
+J), four more phantom TX events.* This one carries proof the earlier
+capture could not: **not one of the four has a matching `Fast PTT: TX
+gate opened` line.** The fast-PTT watchdog reads the same `t` on its own
+connection where every reply is a `t` and so cannot meaningfully desync
+— it said RX throughout. Two independent readers of one signal
+disagreed, and the one that cannot desync was right. The phantom TX
+states ran 7 s, 9 s, 17 s and 37 s, each ended only by a reconnect, with
+the audio WebSocket closed for the whole episode.
+
+*Fix shipped: strict validation (`parse_ptt_reply`, `rigctld_client.py`).*
+The raw `t` reply must `fullmatch` `[0-3]` — Hamlib's whole `ptt_t` enum,
+so `RIG_PTT_ON_MIC` (2) and `RIG_PTT_ON_DATA` (3) still register as TX.
+Anything else returns None and **holds** the previous PTT state; it is
+deliberately not read as RX, because forcing RX on a bad read would drop
+the TX gate during real RF, which is the worse direction. Rejections log
+at WARNING with the offending value and a per-connection count, so how
+often the guard fires is now measurable. 28 tests in
+`tests/test_rig_ptt_validation.py` pin the real straggler values from
+both captures.
+
+*What it closes:* every multi-character straggler — `1.0` (`l SWR`,
+`l RFPOWER`), `-73` (`l STRENGTH`), `14074000` (`f`), `2400` (passband),
+`0.38` (`l COMP`). These were the whole of both captures' observed
+phantoms.
+
+*What it does NOT close, and this is the important caveat:* a straggler
+that is a **bare single digit 1-3** is indistinguishable from a real PTT
+reply by inspection alone. That is exactly the `u NB` / `u NR` / `u ANF`
+adjacency this finding already called the highest-risk one, plus `s`
+(split), which returns `"0"` or `"1"` and sits in every other RX cycle.
+The regex cannot fix this; only a second opinion can.
+
+*The closing move, now evidenced.* Cross-check the main poll loop's PTT
+against the fast-PTT watchdog, which holds its own connection and cannot
+desync. The second capture shows this would have rejected all four
+phantoms. It is also the cheap version of the argument already raised
+here — that the main poll loop arguably should not set PTT at all, and
+should consume the watchdog's reading instead. Needs a decision on where
+that state lives (it currently sits in `dashboard/server.py`, not
+`rig/`), so it is a separate package, not a patch.
+
+*Separately surfaced by the same capture — a desynced FREQUENCY can move
+real hardware.* `AcomBridge._handle_freq_change` sends
+`cmd_select_band()` to the amp on any frequency change while PTT is
+false, and the only guard is `FREQ_SANITY_MIN_HZ..MAX_HZ`
+(10 kHz-500 MHz). Both captures' bad frequencies were `0` and `1` Hz and
+were caught, but a straggler that lands anywhere inside that very wide
+window would pass the check, map to the wrong ACOM band, and drive the
+amp's band/LPF relays. Unlike phantom PTT — which the console can only
+*believe*, since `rig.set_ptt()` is never called anywhere in production
+code — this path does issue a real command to real hardware. Not fixed,
+not scoped here; raised because it is the one confirmed way a rig-link
+desync reaches a relay.
 
 ---
 

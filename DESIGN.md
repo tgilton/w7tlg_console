@@ -429,7 +429,13 @@ finding — these two are not UI defects and are a priority ahead of U3:
   attribution: the rig never rejected anything. Prime suspect for the
   latency is the fast-PTT watchdog polling `t` every 5 ms on its own
   connection into a serialized rigctld.
-- **A desynced reply read as PTT fakes a whole transmit state** —
+- **A desynced reply read as PTT fakes a whole transmit state**
+  (**partly closed 2026-09-19**: the `t` reply is now validated against
+  Hamlib's `[0-3]` PTT enum and an unparseable reply holds the previous
+  state instead of faking TX. A bare single-digit straggler from
+  `u NB`/`u NR`/`u ANF`/`s` is still indistinguishable from real PTT —
+  closing that needs the fast-PTT watchdog cross-check, see
+  IMPLEMENTATION_PLAN_U2.md §6b finding I) —
   audio gated, spectrum frozen, TX meters showing the radio's power
   *setting* as 100 W output, a TX start pushed to the amp bridge, and
   nothing in SYSTEM MSGS. Proven against the ACOM's own KEY-IN flag and

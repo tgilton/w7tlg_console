@@ -20,6 +20,7 @@ Verified working levels on FT-991A via Hamlib 4.7.1:
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Callable, Coroutine
@@ -306,6 +307,47 @@ CONTROL_EVERY = 10  # Every 10 cycles (~5s)
 FREQ_SANITY_MIN_HZ = 10_000
 FREQ_SANITY_MAX_HZ = 500_000_000
 
+# Strict PTT reply validation — SAFETY CRITICAL. See IMPLEMENTATION_PLAN_U2.md
+# §6b finding I (phantom PTT).
+#
+# Hamlib's `t` reply is a single character from rig.h's ptt_t enum:
+#   0 = RIG_PTT_OFF   1 = RIG_PTT_ON   2 = RIG_PTT_ON_MIC   3 = RIG_PTT_ON_DATA
+# Nothing else is a PTT reply. The old code ran the raw line through
+# float() and then bool(int(...)), which accepted plenty of things that
+# are not PTT at all — and when the reply stream is shifted (the whole
+# point of finding G/I), the value sitting in the `t` slot is some OTHER
+# command's reply. Every one of these was previously read as "TX ON":
+#
+#   "1.0"       l SWR / l RFPOWER reply    -> float 1.0  -> True   PHANTOM
+#   "-73"       l STRENGTH reply (dB)      -> float -73  -> True   PHANTOM
+#   "14074000"  f (frequency) reply        -> float      -> True   PHANTOM
+#
+# A phantom TX is not cosmetic. It gates the SDR audio, freezes the
+# panadapter, drives the TX meters, pushes a TX-start to the amp bridge,
+# and — because `f` is only polled while PTT is false — switches OFF the
+# frequency sanity check, which is the only other desync guard in the
+# poll loop. Observed live 2026-09-19 holding a fake TX for up to 37 s.
+#
+# fullmatch, not match: `$` in Python also matches just before a trailing
+# newline, so match(r'^[0-3]$', '1\n') would succeed.
+_PTT_REPLY_RE = re.compile(r'[0-3]')
+
+
+def parse_ptt_reply(raw: Optional[str]) -> Optional[bool]:
+    """Parse a raw rigctld `t` reply into a PTT boolean.
+
+    Returns True/False for a well-formed reply, and None for anything
+    else — None means "no reading", NOT "receive". Callers must hold the
+    previous PTT state on None rather than treating it as RX: forcing RX
+    on a bad read would drop the TX gate mid-transmission, exposing the
+    SDR front end during real RF, which is the opposite failure and a
+    worse one."""
+    if raw is None:
+        return None
+    if not _PTT_REPLY_RE.fullmatch(raw.strip()):
+        return None
+    return raw.strip() != '0'
+
 # rigctld's own daemon-level response cache (see _set_daemon_cache_timeout) —
 # default 1000ms made knob tuning feel like it updated once a second. Low
 # enough to track the knob smoothly, well above 0 so a burst of near-
@@ -335,6 +377,10 @@ class RigctldClient:
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._cycle = 0
+        # Count of PTT replies rejected as implausible since the last
+        # connect (finding I). Reset per connection so the number in the
+        # log describes the current link, not the whole session.
+        self._ptt_rejects = 0
         self._dt_gain_task: Optional[asyncio.Task] = None
         self._ssb_bpf_task: Optional[asyncio.Task] = None
 
@@ -612,6 +658,7 @@ class RigctldClient:
                 timeout=3.0)
             self.state.connected = True
             self._cycle = 0
+            self._ptt_rejects = 0
             logger.info(f"Connected to rigctld at {self.host}:{self.port}")
             await self._set_daemon_cache_timeout()
             await self._fire_callbacks()
@@ -682,12 +729,29 @@ class RigctldClient:
         # PTT — polled first every cycle so that the frequency and mode
         # freezes below can gate on the current state of PTT without waiting
         # for the next cycle.
-        val = await self._get_float("t\n", n_lines=1)
-        if val is not None:
-            ptt = bool(int(val))
-            if ptt != self.state.ptt:
-                self.state.ptt = ptt
-                changed = True
+        #
+        # Validated strictly (see parse_ptt_reply): a reply that is not a
+        # bare 0-3 is some other command's reply that landed here after a
+        # desync, and must NOT be allowed to fake a transmission. An
+        # unparseable reply holds the previous PTT state rather than
+        # forcing RX — see parse_ptt_reply's docstring for why that
+        # direction matters.
+        lines = await self._send_get("t\n", n_lines=1)
+        raw_ptt = lines[0] if lines else None
+        ptt = parse_ptt_reply(raw_ptt)
+        if ptt is None:
+            if raw_ptt is not None:
+                # WARNING, not debug: this is the phantom-PTT guard firing,
+                # and how often it fires is the measurement that tells us
+                # whether the underlying desync is getting better or worse.
+                self._ptt_rejects += 1
+                logger.warning(
+                    f"Rejected implausible PTT reply {raw_ptt!r} — holding "
+                    f"PTT={self.state.ptt} (reply stream likely desynced; "
+                    f"{self._ptt_rejects} rejected since connect)")
+        elif ptt != self.state.ptt:
+            self.state.ptt = ptt
+            changed = True
 
         # Frequency — frozen during TX.
         # In WSJT-X split mode, the TX VFO-B can be on a different frequency
