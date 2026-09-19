@@ -108,7 +108,13 @@ consequential control pair in the application — which, on a station with a
 
 ---
 
-## 4. Left column — rig and DSP
+## 4. Left column — general operating controls
+
+As of U2 (2026-09-19) this column is the "general operational functions"
+grouping the operator asked for: **Session, Band, Antenna, Antenna A/B
+Test**, followed by Digital Audio, the CAT-only FT-991A RX controls, and
+RX1's Measure Noise. Antenna and the A/B test moved here from the right
+column, where they had been mixed in with the amplifier — see §7.
 
 ### Mode
 
@@ -221,7 +227,19 @@ live session again.
 
 ---
 
-## 6. Right column — amplifier
+## 6. Right column — amplifier (and TX generally)
+
+**What the amp-bypass dimmer covers.** On 2m/70cm the ACOM is out of the RF
+path and `amp_in_path` goes false. Server-side that gates exactly three
+things: `set_operating_mode`, `next_antenna`, `goto_antenna`. The console
+dims only the Amp box and Operating Mode to match. It must **not** dim the
+rest of this column: SSB Audio is plain rig CAT, TX Meters read
+`rig.alc`/`rig.rf_power_out`/`rig.swr_radio` (radio readings, and the only
+meters left once the amp's own go dead), Fault Status carries TX
+Inhibit/Allow, and Exciter Drive is actively supported on VHF/UHF —
+`_publish()` sets `drive_limit_w = DIRECT_TO_RIG_MAX_W` (50 W) precisely
+when the amp is bypassed. A blanket dimmer defeated backend code written
+for that case (fixed in U2, 2026-09-19).
 
 **The amp telemetry stack is HOT during all operating.** The operator watches
 it continuously — not for a number, but for **drift**. Power should be where
@@ -255,7 +273,11 @@ plainly that it must be cleared on the amp itself.
 
 ---
 
-## 7. Right column — antenna
+## 7. Left column — antenna
+
+*(Moved from the right column in U2, 2026-09-19. It had sat with the amp
+because the ACOM is the thing doing the switching, but the operator reaches
+for it as an operating control, not an amplifier setting.)*
 
 Port names (`A1F`, `A2F`, `A3R`, `A4R`) are **hard-coded in the ACOM 1200S
 setup** and can only be changed at the amp's front panel. The console cannot
@@ -264,6 +286,16 @@ rename them and should not try.
 It *can*, however, annotate them locally — a config-side alias map that displays
 the operator's name alongside the amp's port name. This does not fight the amp;
 it just stops the column being opaque.
+
+**Antenna switching is unavailable on 2m/70cm.** `acom_bridge.py` refuses
+`next_antenna`/`goto_antenna` when `amp_in_path` is false, because the ACOM
+is out of the RF path on those bands — the operator confirmed the 06AT is
+genuinely unusable there. Until U2 the controls were greyed out by a blanket
+dimmer on the whole right column; that dimmer also disabled four controls
+that *do* still work on VHF/UHF (see §6), so U2 narrowed it. The cost is that
+NEXT ANT is now clickable on 2m/70cm and reports an accurate error to SYSTEM
+MSGS at the bottom of the window rather than showing its state at the control.
+A local inert state on the Antenna and A/B Test boxes is open work (finding B).
 
 | Port | Antenna | Notes |
 |---|---|---|

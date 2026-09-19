@@ -308,10 +308,30 @@ fixed as the only TX-capable chain — wiring, not software). The console
 runs both receivers side by side, always visible, not as a mode you
 switch into.
 
-**Four columns, not three**: `modedsp` (global, left) | `center` (RX1) |
-`center2` (RX2) | `bandamp` (TX, right). Only the two outer columns
-collapse/resize (`COLUMN_CLASS_NAME`/`COLUMN_VAR_NAME`, generalized from
-the original 2-column version's ternary logic).
+**Four columns, not three**: `modedsp` (general operating, left) |
+`center` (RX1) | `center2` (RX2) | `bandamp` (TX, right). Only the two
+outer columns collapse/resize (`COLUMN_CLASS_NAME`/`COLUMN_VAR_NAME`,
+generalized from the original 2-column version's ternary logic).
+
+Amended by U2 (2026-09-19): Antenna and Antenna A/B Test moved from
+`bandamp` to `modedsp`, which is what makes the right column genuinely
+TX-only and the left column "general operational functions" rather than
+"whatever wasn't a receiver". Two structural rules came out of that move
+and are worth keeping:
+
+- **Don't gate controls by ancestry.** The amp-bypass dimmer targeted
+  `.panel-bandamp > .panel-body`, so a box's availability depended on
+  which column it happened to sit in. Moving two boxes silently changed
+  the behaviour of four others. Gate on what a control actually depends
+  on, named explicitly (`#box-amp`, `#box-opmode`), not on where it lives.
+- **A control that is unavailable must say so at the control.** Dimming
+  without explanation and erroring into a log 40 lines away are both
+  failures of the same rule; see `.rx-inert` for the pattern that works.
+
+The side columns' default widths live in **four** places — three
+`grid-template-columns` rules and `COLUMN_WIDTH_DEFAULT` in JS. Nothing
+enforces agreement; change them together or double-click-to-reset snaps
+to a width the CSS disagrees with.
 
 **RX1 and RX2 are each fully self-contained** — own VFO, S-meter, AF/RF
 gain, Mode, a merged Spectrum+Waterfall+Tuning box, and a merged
@@ -370,3 +390,24 @@ wasn't reliable.
 - `ATT` has a value (`OFF`) but no control.
 - `S9 Cal` is crammed into a corner with no label treatment.
 - EQ bands are `B` / `M` / `T` — expand to Bass / Mid / Treble.
+
+Found during U2 live testing (2026-09-19), all deferred to U3 — full
+detail and file/line evidence in `IMPLEMENTATION_PLAN_U2.md` §6b:
+
+- **No SDR audio on 2m/70cm in any mode**, though the capture is fine
+  (spectrum and waterfall work). Cause unknown. Note `sdr/audio_demod.py`
+  implements SSB only — there is no FM demodulator — but USB on 2m is
+  silent too, so that is not the explanation.
+- **Antenna unavailability on 2m/70cm is only reported in SYSTEM MSGS**,
+  not at the control. Needs a local `.rx-inert` state gated on
+  `amp_in_path`.
+- **TX BW is offered in modes the rig rejects** — menu 110 is SSB-only, so
+  clicking it in FM/DATA errors. Gate on rig mode.
+- **The waterfall blanks in digital modes when zoomed out** past the
+  3 kHz fine frame, instead of falling back to the wide frame.
+- **The page grows instead of fitting the viewport.** `scrollbar-gutter:
+  stable` stops the resulting layout shift, but SYSTEM MSGS still scrolls
+  off-screen — and per finding B that bar is currently the only place
+  errors surface at all. A viewport-height console with per-column
+  scrolling fixes both; it touches `.scope-group` sizing and therefore the
+  canvas `getBoundingClientRect()` paths, so it needs its own package.

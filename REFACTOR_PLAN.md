@@ -31,7 +31,7 @@ smoke test before merge.
 | T4 | WS/REST error-contract consistency | 1 — safety | T0 | Optional (small) |
 | T5 | Cosmetic cleanup (model-version drift, enum alias) | 1 — safety | — | No — ride-along |
 | U1 | RX1/RX2 startup alignment fix | 2 — UI bugs | T3 | Yes |
-| U2 | Column reorg — operational / RX1 / RX2 / TX boxes | 2 — UI bugs | U1 | Yes |
+| U2 | Column reorg — operational / RX1 / RX2 / TX boxes | 2 — UI bugs | U1 | **SHIPPED 2026-09-19** (U2c deferred to U3) |
 | U3 | Mode-parity, gain-slider prominence, analog S-meter | 2 — UI bugs | U2 | Yes |
 | U4 | Knob-style frequency control (no text box) | 2 — UI bugs | U2 | Optional |
 | U5 | Prominent main-display TX power readout | 2 — UI bugs | U2 | Optional |
@@ -359,6 +359,37 @@ immediately.
 
 ### U2 — Column reorg: operational / RX1 / RX2 / TX boxes
 
+> **SHIPPED 2026-09-19** (`U2a` 6b7cb34, `U2b` b93fcf4), with a smaller
+> scope than this entry anticipated, and one deferral. See
+> `IMPLEMENTATION_PLAN_U2.md`.
+>
+> **This entry's description of the "current" layout was stale when
+> written.** It predates the 2026-09-11 RSPduo reorg, which had already
+> delivered two of the three things asked for below: RX1 and RX2 were
+> already fully self-contained (each with its own Mode/Filter/AGC/NR/EQ,
+> not a shared side column), and SSB Audio and the TX meters had already
+> moved right. The genuine remaining work was the **antenna move** —
+> Antenna and Antenna A/B Test out of `panel-bandamp` and into
+> `panel-modedsp` — which is what actually made the right column TX-only.
+>
+> **Also shipped, not anticipated here:** narrowing the amp-bypass dimmer,
+> which had been scoped by DOM ancestry and so silently disabled SSB
+> Audio, TX Meters, Fault Status and Exciter Drive on 2m/70cm — four
+> controls the backend still honours there. Plus a `.ant-grid` overflow
+> fix, the column-width defaults rebalanced to the operator's own dragged
+> widths, and `scrollbar-gutter: stable`.
+>
+> **Deferred: U2c, the single shared Mode control.** RX1's mode grid sends
+> CAT to the rig; RX2's switches the SDR demodulator's sideband. Different
+> commands to different hardware behind one label, so merging them is a
+> behaviour change this package's own non-goals exclude — and `Link` already
+> copies RX1's sideband to RX2. Goes to U3 with the RX2 mode-set work.
+> Reasoning in `IMPLEMENTATION_PLAN_U2.md` §7.
+>
+> **Five findings from live testing (A-E) are recorded in
+> `IMPLEMENTATION_PLAN_U2.md` §6b** and summarized in `DESIGN.md` §11.
+> Finding B is a gap U2 introduced and should be picked up first.
+
 **Goal.** Restructure `console.html`'s layout from its current
 `panel-modedsp` (left: Session, Band, VHF/UHF, Mode/Filter/DSP, Digital
 Audio) / `panel-center` (RX1) / `panel-center2` (RX2) / `panel-bandamp`
@@ -406,6 +437,40 @@ its own branch anyway given the size of the diff, for review clarity.
 ---
 
 ### U3 — Mode parity, gain-slider prominence, analog S-meter
+
+> **Inherited from U2 (2026-09-19)** — added to this package's scope, full
+> detail in `IMPLEMENTATION_PLAN_U2.md` §6b:
+>
+> - **U2c, the shared Mode control** — deferred here because it is a
+>   behaviour change, and it lands naturally alongside this package's
+>   existing "give RX2 the full mode set" item. Blocked on an operator
+>   answer that has been open since 2026-09-11 (`console.html`, the RX2
+>   mode-button comment): should CW/AM/FM get **real SDR demodulation** on
+>   RX2, or stay absent? Until that is answered, "one shared Mode control"
+>   has no defined behaviour for four of its six buttons.
+> - **Finding B — context gating (do this first; U2 introduced it).**
+>   Antenna and A/B Test must show their own unavailability on 2m/70cm via
+>   `.rx-inert` gated on `amp_in_path`, instead of erroring into SYSTEM
+>   MSGS. **Finding C is the same shape**: gate TX BW on the rig being in
+>   SSB, since menu 110 is SSB-only.
+> - **Finding E — viewport-height console.** Also fixes SYSTEM MSGS
+>   scrolling off-screen, which is what makes finding B's error path
+>   invisible in the first place. Touches `.scope-group` sizing and the
+>   canvas `getBoundingClientRect()` paths; may deserve its own package.
+> - **The orphan-regrouping question** the operator raised live: Exciter
+>   Drive (possibly renamed RADIO POWER), Antenna A/B and Measure Noise
+>   read as orphans, and SSB Audio arguably belongs with Digital Audio.
+>   Deliberately **not** done in U2. Before attempting a bottom strip, read
+>   `FUNCTIONS.md` §8 item 10: that was tried twice and reverted as worse
+>   than the cramped column, with the recorded guidance to revisit via a
+>   `FieldGrid` redesign (DESIGN.md §6.4) rather than a wider container.
+>   Note also that much of the "orphan" feeling came from those controls
+>   being *dimmed* on VHF/UHF, which U2 fixed — re-evaluate before moving
+>   anything.
+>
+> **Not for U3:** finding A (no SDR audio on 2m/70cm) and finding D
+> (digital-mode waterfall blanking) are receive-path bugs, not UI work.
+> They need their own packages.
 
 **Goal.** Three related visual-design items once U2's boxes exist: give
 RX2 the same full mode set RX1 has (today RX2 only offers USB/LSB) and
