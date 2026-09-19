@@ -385,6 +385,13 @@ class AcomBridge:
         self._last_telemetry_at: Optional[float] = None
         self._tx_evidence_active: bool = False
         self._tx_sources_seen: set[str] = set()
+        # A band re-check owed because TX was active when a frequency change
+        # was seen — see _service_pending_band_recheck. Deliberately a flag,
+        # not a stored frequency: a reading taken during TX can be the split
+        # TX VFO, so the re-check re-reads the rig when it actually runs.
+        self._band_recheck_pending: bool = False
+        # A band select whose SEND was deferred because TX was active.
+        self._pending_band_select: Optional[AcomBand] = None
         self._state_callbacks: list[StationStateCallback] = []
         self._trend_sample_callbacks: list[Callable[[TrendSample], None]] = []
 
@@ -453,6 +460,13 @@ class AcomBridge:
         """
         if not self.station.amp_in_path:
             return False, "Amp not in RF path for this band"
+        # goto_antenna's own loop has always checked this; this path — the
+        # console's NEXT ANT button — never did, so the operator-driven route
+        # to the same relay was the unguarded one (TX_GATING_AUDIT.md row A3
+        # attributed goto_antenna's guard to both; it covered only one).
+        if self.is_transmitting() or self._tx_was_active:
+            sources = ", ".join(self.tx_evidence()) or "recent TX"
+            return False, f"Cannot switch antenna while TX is active ({sources})"
         await self.amp.send(cmd_next_antenna())
         logger.info("Sent NEXT ANTENNA (front-panel ANT button equivalent)")
         return True, "Antenna cycle requested"
@@ -478,8 +492,9 @@ class AcomBridge:
             if self._selected_antenna == target:
                 return True, f"At antenna {ANTENNAS[target].port}"
 
-            if self.rig.state.ptt or self._tx_was_active:
-                return False, "Cannot switch antenna while TX is active"
+            if self.is_transmitting() or self._tx_was_active:
+                sources = ", ".join(self.tx_evidence()) or "recent TX"
+                return False, f"Cannot switch antenna while TX is active ({sources})"
             if not self.station.amp_connected:
                 return False, "Amp serial connection lost — antenna switch aborted"
             if self.station.fault_severity not in ("OK", ""):
@@ -615,6 +630,67 @@ class AcomBridge:
             self._tx_sources_seen.clear()
 
     # ------------------------------------------------------------------
+    # Band select — the only console->relay path
+    # ------------------------------------------------------------------
+
+    async def _send_band_select(self, band: AcomBand, reason: str) -> bool:
+        """Single choke point for every cmd_select_band.
+
+        This is row A1/A2 of TX_GATING_AUDIT.md section 5 — the only route
+        by which the console can move the amp's band relays, and therefore
+        the only one that can hot-switch them with RF on the line.
+
+        Defers rather than drops. A band select that is simply skipped
+        leaves the amp on the *previous* band while the radio has moved,
+        which is the failure this guard exists to prevent, not a safe
+        fallback.
+        """
+        if self.is_transmitting():
+            if self._pending_band_select != band:
+                self._pending_band_select = band
+                logger.info(
+                    f"Band select {band.name} ({reason}) deferred — "
+                    f"transmitting ({', '.join(self.tx_evidence())})")
+            return False
+        await self.amp.send(cmd_select_band(band))
+        self._pending_band_select = None
+        logger.info(f"Sent amp band select {band.name} ({reason})")
+        return True
+
+    async def _service_pending_band_recheck(self):
+        """Apply whatever band work TX postponed.
+
+        Two distinct things can be owed, and both have to be flushed:
+
+        - `_band_recheck_pending`: a frequency change was observed while TX
+          was active. That reading was not trusted (during TX it can be the
+          split TX VFO), so the rig is re-read here instead of replaying it.
+        - `_pending_band_select`: the band was already resolved, but the
+          send itself was held back by _send_band_select.
+
+        Called from _on_rig_state and from _on_telemetry. The second matters:
+        telemetry runs on the amp's own serial link at ~10Hz and keeps
+        ticking through a rigctld desync or reconnect, which is exactly when
+        the rig-side path goes quiet.
+        """
+        if self.is_transmitting():
+            return
+
+        if self._band_recheck_pending:
+            self._band_recheck_pending = False
+            freq_hz = self.rig.state.freq_hz
+            if freq_hz and freq_hz > 0 and freq_hz != self._last_freq_hz:
+                self._last_freq_hz = freq_hz
+                logger.info(
+                    f"Applying band re-check deferred during TX: "
+                    f"{freq_hz} Hz")
+                await self._handle_freq_change(freq_hz, self.rig.state.band)
+
+        if self._pending_band_select is not None:
+            await self._send_band_select(
+                self._pending_band_select, "deferred during TX")
+
+    # ------------------------------------------------------------------
     # Drive limit enforcement
     # ------------------------------------------------------------------
 
@@ -637,7 +713,7 @@ class AcomBridge:
             self._clear_pending_drive_limit()
             return
 
-        if self.rig.state.ptt:
+        if self.is_transmitting():
             if self._pending_drive_limit != limit:
                 self._pending_drive_limit = limit
                 self._pending_drive_limit_since = time.monotonic()
@@ -681,7 +757,7 @@ class AcomBridge:
             self._clear_pending_drive_limit()
             return
 
-        if not self.rig.state.ptt:
+        if not self.is_transmitting():
             if await self.rig.set_rf_power(limit):
                 logger.info(f"Deferred RF power clamp applied: {limit}")
                 self._clear_pending_drive_limit()
@@ -700,9 +776,9 @@ class AcomBridge:
                 logger.warning(
                     f"Rig still at {self.rig.state.rf_power_pct} in "
                     f"{OperatingMode.AMP_ON.value} {elapsed:.0f}s after the "
-                    f"{limit} drive clamp was deferred (PTT reads "
-                    f"{self.rig.state.ptt}) — check for a stuck PTT reading "
-                    f"or a failing CAT write")
+                    f"{limit} drive clamp was deferred (TX asserted by: "
+                    f"{', '.join(self.tx_evidence()) or 'nothing'}) — check "
+                    f"for a stuck TX reading or a failing CAT write")
 
     def _clear_pending_drive_limit(self):
         self._pending_drive_limit = None
@@ -736,12 +812,21 @@ class AcomBridge:
         self.station.rig = rig.to_dict()
 
         # Frequency is frozen in rigctld_client during TX, so this guard is
-        # belt-and-suspenders — but an explicit PTT check prevents an amp
+        # belt-and-suspenders — but an explicit TX check prevents an amp
         # band-select command from going out while RF is live under any
-        # circumstance (e.g. a rapid freq change right at TX start).
-        if not rig.ptt and rig.freq_hz != self._last_freq_hz and rig.freq_hz > 0:
-            self._last_freq_hz = rig.freq_hz
-            await self._handle_freq_change(rig.freq_hz, rig.band)
+        # circumstance (e.g. a rapid freq change right at TX start). It uses
+        # is_transmitting(), not rig.ptt: this is the A1 path, the only
+        # console->relay route, and a rig-only check fails exactly when the
+        # reply stream desyncs.
+        if rig.freq_hz != self._last_freq_hz and rig.freq_hz > 0:
+            if self.is_transmitting():
+                # Don't act on this reading — during TX it can be the split
+                # TX VFO — but don't lose it either, or the amp can be left
+                # on the wrong band. Owe a re-check instead.
+                self._band_recheck_pending = True
+            else:
+                self._last_freq_hz = rig.freq_hz
+                await self._handle_freq_change(rig.freq_hz, rig.band)
 
         if rig.ptt and not self._tx_was_active:
             await self._on_tx_start()
@@ -752,8 +837,9 @@ class AcomBridge:
         # Any state update that reads RX is an opportunity to land a deferred
         # clamp — not just the falling edge, so a missed TX-end still clears
         # it. No-ops when nothing is pending.
-        if not rig.ptt:
+        if not self.is_transmitting():
             await self._service_pending_drive_limit()
+            await self._service_pending_band_recheck()
 
         self._note_tx_evidence()
 
@@ -783,8 +869,7 @@ class AcomBridge:
         # STANDBY (no drive RF for the amp's own F-counter to detect band
         # from) — confirmed on real hardware, despite not being in the
         # documented v1.3 cycle-code list for this sub-command.
-        await self.amp.send(cmd_select_band(new_band))
-        logger.info(f"Band → {band_name}: sent amp band select {new_band.name}")
+        await self._send_band_select(new_band, f"band → {band_name}")
 
     async def _on_tx_start(self):
         logger.info("TX start detected")
@@ -857,13 +942,19 @@ class AcomBridge:
 
     async def _on_telemetry(self, t: AmpTelemetry):
         self._last_telemetry_at = time.monotonic()
+        # The three fields tx_evidence() reads are published up here, ahead
+        # of everything else in this handler, so the band-sync and drive-clamp
+        # paths below judge TX from THIS frame rather than the previous one.
+        # The rest of the station fields are set further down, where they were.
+        self.station.amp_ptt_active = t.flag_keyin
+        self.station.amp_fwd_w      = t.fwd_power_w
+        self.station.amp_drive_w    = t.input_power_w
         if not self._amp_ready:
             self._amp_ready = True
             logger.info("Amp ready — syncing band to radio")
-            if self._current_acom_band is not None and not self.rig.state.ptt:
-                await self.amp.send(cmd_select_band(self._current_acom_band))
-                logger.info(
-                    f"Deferred band sync: sent band select {self._current_acom_band.name}")
+            if self._current_acom_band is not None:
+                await self._send_band_select(
+                    self._current_acom_band, "amp-ready sync")
             # Request fault codes immediately so ATU status shows in the log.
             # SETTINGS (0x12) is requested unconditionally at the serial layer
             # (acom_serial._connect) so it fires even when telemetry doesn't flow.
@@ -901,17 +992,17 @@ class AcomBridge:
         # own serial link at ~10Hz, so it keeps ticking through a rigctld
         # desync or reconnect that would otherwise stall the rig-side path.
         await self._service_pending_drive_limit()
+        await self._service_pending_band_recheck()
 
         self.station.amp_mode       = t.mode_name
-        self.station.amp_fwd_w      = t.fwd_power_w
         self.station.amp_refl_w     = t.refl_power_w
         self.station.amp_swr        = t.swr
-        self.station.amp_drive_w    = t.input_power_w
         self.station.amp_temp_c     = t.pam1_temp_c
         self.station.amp_hv_v       = t.hv1_v
         self.station.amp_current_ma = t.id1_ma
-        self.station.amp_ptt_active = t.flag_keyin
         self.station.amp_atu_tuned  = t.flag_atu_tuned
+        # amp_ptt_active / amp_fwd_w / amp_drive_w are set at the top of this
+        # handler — see the note there.
 
         # Evidence logging only — no hardware, no gating. Placed after the
         # station fields this frame feeds so tx_evidence() reads this frame
