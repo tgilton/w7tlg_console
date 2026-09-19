@@ -89,13 +89,35 @@ TREND_FIELDS = ["ts", "fwd_w", "refl_w", "swr", "temp_c",
 
 class OperatingMode(Enum):
     AMP_OFF = "AMP_OFF"   # Amp in standby, radio 0-100W
-    AMP_ON  = "AMP_ON"    # Amp in OPR, radio 0-40W (requires confirmation)
+    AMP_ON  = "AMP_ON"    # Amp in OPR, radio capped at AMP_ON_DRIVE_LIMIT
+                          # (requires confirmation)
+
+# Radio drive ceiling while the amp is in OPERATE. Lowered 40 -> 15 on
+# 2026-09-19: 10W of drive already produces 500W+ out of the 1200S on some
+# bands, and this station never runs the FT-991A above 10W with the amp in
+# path, so the cap belongs just above normal operating drive rather than at
+# a third of the amp's rated input. 40 was never a setting this station
+# wanted; it only looked harmless because nothing ever drove that hard.
+#
+# This is not only the auto-clamp's target — station.drive_limit_w carries
+# it to the RF power slider's max (console.html), to the server's own cap
+# on operator set_rf_power commands (dashboard/server.py), and to the
+# calibration sweep's step filter (tx_power_calibration.py). Changing it
+# changes all four together, which is the intent.
+AMP_ON_DRIVE_LIMIT = 15
 
 # Radio drive limits per mode
 MODE_DRIVE_LIMITS = {
-    OperatingMode.AMP_OFF: 100,
-    OperatingMode.AMP_ON:  40,
+    OperatingMode.AMP_OFF: 100,   # barefoot: the rig's own full range, unchanged
+    OperatingMode.AMP_ON:  AMP_ON_DRIVE_LIMIT,
 }
+
+# How long a drive clamp may sit deferred (waiting for TX to end) before the
+# wait itself is treated as the symptom. A transmission that outlasts this
+# with the console still unable to clamp means PTT is reading stuck-true, or
+# the CAT write is failing — both are worth a WARNING in the session log
+# rather than a silent indefinite wait.
+PENDING_DRIVE_LIMIT_WARN_S = 10.0
 
 AMP_ACTIVE_MODES = {OperatingMode.AMP_ON}
 
@@ -344,6 +366,13 @@ class AcomBridge:
         self._amp_opr_frames: int = 0
         self._amp_stdby_frames: int = 0
         self._hv_collapse_frames: int = 0
+        # Drive clamp deferred because the rig was transmitting when it came
+        # due — see _enforce_drive_limit. Holds the limit to apply, when it
+        # was deferred, and whether the "still not applied" WARNING has been
+        # emitted (once per deferral, not once per telemetry frame).
+        self._pending_drive_limit: Optional[int] = None
+        self._pending_drive_limit_since: Optional[float] = None
+        self._pending_drive_limit_warned: bool = False
         self._state_callbacks: list[StationStateCallback] = []
         self._trend_sample_callbacks: list[Callable[[TrendSample], None]] = []
 
@@ -393,13 +422,10 @@ class AcomBridge:
             logger.info("Amp → STANDBY")
 
         # Enforce the new drive limit immediately: if the radio is currently
-        # set above the new cap (e.g. was at 80W with amp off, now switching
-        # to AMP_ON's 40W cap), bring it down rather than letting an
-        # out-of-range setting persist into the new mode.
-        new_limit = MODE_DRIVE_LIMITS[mode]
-        if self.rig.state.rf_power_pct > new_limit:
-            await self.rig.set_rf_power(new_limit)
-            logger.info(f"RF power clamped to {new_limit}W for {mode.value}")
+        # set above the new cap (e.g. was at 80 with amp off, now switching to
+        # AMP_ON's cap), bring it down rather than letting an out-of-range
+        # setting persist into the new mode.
+        await self._enforce_drive_limit(mode)
 
         logger.info(f"Operating mode → {mode.value}")
         await self._publish()
@@ -483,6 +509,101 @@ class AcomBridge:
         logger.info("Sent ATAC (ATU Tune / Antenna Change)")
         return True, "ATAC cycle initiated"
 
+    # ------------------------------------------------------------------
+    # Drive limit enforcement
+    # ------------------------------------------------------------------
+
+    async def _enforce_drive_limit(self, mode: OperatingMode):
+        """Bring the rig's RF power setting down to `mode`'s ceiling.
+
+        Never writes while the rig is transmitting. A CAT `L RFPOWER` write
+        landing inside a live transmission changes output power mid-QSO, and
+        the caller that needs this most — the telemetry mode-sync at ~10Hz —
+        has no operator behind it and no idea whether RF is on the line.
+
+        Deferring rather than skipping is deliberate. The mode-sync call site
+        only fires while `_mode != AMP_ON` and sets `_mode` itself, so its
+        condition is false forever afterwards: a plain skip would silently
+        drop the clamp and leave the rig high for the *next* transmission
+        too. The deferred write is retried from _service_pending_drive_limit.
+        """
+        limit = MODE_DRIVE_LIMITS[mode]
+        if self.rig.state.rf_power_pct <= limit:
+            self._clear_pending_drive_limit()
+            return
+
+        if self.rig.state.ptt:
+            if self._pending_drive_limit != limit:
+                self._pending_drive_limit = limit
+                self._pending_drive_limit_since = time.monotonic()
+                self._pending_drive_limit_warned = False
+                logger.info(
+                    f"RF power clamp to {limit} for {mode.value} deferred — "
+                    f"rig is transmitting (currently {self.rig.state.rf_power_pct})")
+            return
+
+        if await self.rig.set_rf_power(limit):
+            logger.info(f"RF power clamped to {limit} for {mode.value}")
+            self._clear_pending_drive_limit()
+        else:
+            # The write was refused or the link was down. Hold it as pending
+            # so the retry path picks it up rather than losing it here.
+            if self._pending_drive_limit != limit:
+                self._pending_drive_limit = limit
+                self._pending_drive_limit_since = time.monotonic()
+                self._pending_drive_limit_warned = False
+            logger.warning(
+                f"RF power clamp to {limit} for {mode.value} was not accepted "
+                f"by the rig — will retry")
+
+    async def _service_pending_drive_limit(self):
+        """Retry a deferred drive clamp, and complain if it never lands.
+
+        Called from two places on purpose: _on_rig_state (every rig state
+        change, so the falling edge of PTT applies it as soon as the radio
+        says RX) and _on_telemetry (~10Hz off the amp's own serial link,
+        which is independent of rigctld). The second is what stops a missed
+        TX-end or a stuck-true PTT reading from parking the clamp forever —
+        the amp keeps ticking even when the rig link is desynced.
+        """
+        if self._pending_drive_limit is None:
+            return
+        limit = self._pending_drive_limit
+
+        # Already at or below the ceiling — the operator, or an earlier
+        # retry, got there first.
+        if self.rig.state.rf_power_pct <= limit:
+            self._clear_pending_drive_limit()
+            return
+
+        if not self.rig.state.ptt:
+            if await self.rig.set_rf_power(limit):
+                logger.info(f"Deferred RF power clamp applied: {limit}")
+                self._clear_pending_drive_limit()
+                return
+            logger.warning("Deferred RF power clamp was not accepted by the rig — will retry")
+
+        # Still above the limit. If that has been true for long enough, the
+        # wait itself is the finding: either PTT is reading stuck-true or the
+        # CAT write keeps failing. Warn once per deferral, not once a frame.
+        if (not self._pending_drive_limit_warned
+                and self._mode == OperatingMode.AMP_ON
+                and self._pending_drive_limit_since is not None):
+            elapsed = time.monotonic() - self._pending_drive_limit_since
+            if elapsed >= PENDING_DRIVE_LIMIT_WARN_S:
+                self._pending_drive_limit_warned = True
+                logger.warning(
+                    f"Rig still at {self.rig.state.rf_power_pct} in "
+                    f"{OperatingMode.AMP_ON.value} {elapsed:.0f}s after the "
+                    f"{limit} drive clamp was deferred (PTT reads "
+                    f"{self.rig.state.ptt}) — check for a stuck PTT reading "
+                    f"or a failing CAT write")
+
+    def _clear_pending_drive_limit(self):
+        self._pending_drive_limit = None
+        self._pending_drive_limit_since = None
+        self._pending_drive_limit_warned = False
+
     async def inhibit_tx(self, reason: str):
         if not self._tx_inhibited:
             self._tx_inhibited = True
@@ -522,6 +643,12 @@ class AcomBridge:
         elif not rig.ptt and self._tx_was_active:
             await self._on_tx_end()
         self._tx_was_active = rig.ptt
+
+        # Any state update that reads RX is an opportunity to land a deferred
+        # clamp — not just the falling edge, so a missed TX-end still clears
+        # it. No-ops when nothing is pending.
+        if not rig.ptt:
+            await self._service_pending_drive_limit()
 
         await self._publish()
 
@@ -649,9 +776,7 @@ class AcomBridge:
                     f"Amp mode sync → AMP_ON (detected 0x{t.mode:02X} from telemetry)")
                 self._mode = OperatingMode.AMP_ON
                 self._high_power_confirmed = True
-                new_limit = MODE_DRIVE_LIMITS[OperatingMode.AMP_ON]
-                if self.rig.state.rf_power_pct > new_limit:
-                    await self.rig.set_rf_power(new_limit)
+                await self._enforce_drive_limit(OperatingMode.AMP_ON)
         elif amp_mode_class == 0x50:           # Standby
             self._amp_stdby_frames = min(self._amp_stdby_frames + 1, 10)
             self._amp_opr_frames   = 0
@@ -663,6 +788,11 @@ class AcomBridge:
             # Other modes (ATAC, Init, Menu…) — neither OPR nor STB, reset both
             self._amp_opr_frames   = 0
             self._amp_stdby_frames = 0
+
+        # Retried here as well as in _on_rig_state: this runs off the amp's
+        # own serial link at ~10Hz, so it keeps ticking through a rigctld
+        # desync or reconnect that would otherwise stall the rig-side path.
+        await self._service_pending_drive_limit()
 
         self.station.amp_mode       = t.mode_name
         self.station.amp_fwd_w      = t.fwd_power_w

@@ -310,6 +310,34 @@ these are string/comment changes with no behavioral surface.
 
 ---
 
+### T6 — `drive_limit_w` is a percent wearing a watts label (backlog)
+
+**Goal.** `MODE_DRIVE_LIMITS` / `station.drive_limit_w` / `AMP_ON_DRIVE_LIMIT`
+hold the rig's **RF power setting as a percent** (0-100, derived from hamlib
+`RFPOWER` 0.0-1.0 — `rig/rigctld_client.py:215`), not watts. They are
+compared against `rig.state.rf_power_pct` and passed to
+`set_rf_power(pct)`, which is correct; only the `_w` suffix and the
+`"clamped to 15W"` log wording are wrong. On the FT-991A's HF ranges
+percent and watts track closely enough that this has never produced a wrong
+number, which is why it survived this long.
+
+**Deferred deliberately** (Terry, 2026-09-19, during the Item 1 drive-clamp
+change): renaming touches `dashboard/server.py`, both `console.html` and
+`index.html`, and `amplifier/tx_power_calibration.py`, and would have
+buried a safety fix in a rename diff.
+
+**Files/modules touched.** `amplifier/acom_bridge.py`,
+`amplifier/tx_power_calibration.py`, `dashboard/server.py`,
+`dashboard/console.html`, `dashboard/index.html`.
+
+**Non-goals.** Don't change any *value* while renaming — this is a pure
+rename plus log-string fix, and it should be reviewable as such.
+
+**Validation.** Full test suite, then confirm the RF power slider's max and
+the calibration step filter still read the same numbers they did before.
+
+---
+
 ## Tier 2 — UI reorganization (backlog: "little things" + the column reorg)
 
 Everything in this tier is frontend (`dashboard/console.html`) plus, where
