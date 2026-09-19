@@ -441,13 +441,32 @@ its own branch anyway given the size of the diff, for review clarity.
 > **Inherited from U2 (2026-09-19)** — added to this package's scope, full
 > detail in `IMPLEMENTATION_PLAN_U2.md` §6b:
 >
-> - **U2c, the shared Mode control** — deferred here because it is a
->   behaviour change, and it lands naturally alongside this package's
->   existing "give RX2 the full mode set" item. Blocked on an operator
->   answer that has been open since 2026-09-11 (`console.html`, the RX2
->   mode-button comment): should CW/AM/FM get **real SDR demodulation** on
->   RX2, or stay absent? Until that is answered, "one shared Mode control"
->   has no defined behaviour for four of its six buttons.
+> - **U2c, the shared Mode control — now SUPERSEDED, not just deferred**
+>   (operator direction, 2026-09-19). The open question ("should CW/AM/FM
+>   get real SDR demodulation on RX2?") is answered: **yes**. But the same
+>   answer removes the rationale for a *shared* control. RX2 is intended as
+>   a genuinely independent second receiver on the FTDX 101D model — for
+>   comparing signals and improving voice copy — which is precisely the
+>   "two RXs in different modes" case the original backlog said not to
+>   preclude. Forcing one Mode control across both would contradict that.
+>   The existing design (per-RX mode controls + Link/Copy to match them on
+>   demand) already serves both. **The real gap is mode *parity*, not mode
+>   *unification*.**
+>
+> - **Mode parity is bigger than "RX2 is missing buttons."** The console
+>   has **no AM or FM demodulator at all, for either receiver**.
+>   `sdr/audio_demod.py` implements SSB only — its single mode branch is
+>   `shift_hz = center_hz if mode == "USB" else -center_hz` (`:471`), a
+>   sideband sign flip; there is no envelope detector and no quadrature
+>   discriminator anywhere in `sdr/`. RX1's mode buttons send CAT to the
+>   *radio*, but the console's own audio derives its demod from
+>   `sidebandForRigMode()` (`console.html:2262`), which returns LSB if the
+>   mode string contains an 'L' and USB otherwise. So pressing AM or FM on
+>   RX1 changes the radio while the console keeps demodulating SSB. CW
+>   survives by accident (it is normally copied as an offset tone inside an
+>   SSB passband); AM and FM do not. **Scope this as DSP work in
+>   `audio_demod.py`, not as adding buttons** — and note RX1's existing
+>   AM/FM buttons are currently misleading, since they look functional.
 > - **Finding B — context gating (do this first; U2 introduced it).**
 >   Antenna and A/B Test must show their own unavailability on 2m/70cm via
 >   `.rx-inert` gated on `amp_in_path`, instead of erroring into SYSTEM
@@ -470,7 +489,16 @@ its own branch anyway given the size of the diff, for review clarity.
 >
 > **Not for U3:** finding A (no SDR audio on 2m/70cm) and finding D
 > (digital-mode waterfall blanking) are receive-path bugs, not UI work.
-> They need their own packages.
+> They need their own packages. **Finding A is additionally
+> de-prioritized** (operator, 2026-09-19): VHF/UHF console audio is
+> explicitly deferred, with spectrum/waterfall visibility plus the
+> FT-991A's own front-panel audio accepted as the stopgap.
+>
+> **Out of scope permanently:** stereo panning and mixing. RX1-left /
+> RX2-right is handled by an external mixer fed from the M2's output. The
+> console's existing hard-pan (`pan.value = -1` / `= 1`) is what separates
+> the two receivers into L/R for it and **must not be "fixed" to centre** —
+> that was done once as a diagnostic (a8668c9 reverted it).
 
 **Goal.** Three related visual-design items once U2's boxes exist: give
 RX2 the same full mode set RX1 has (today RX2 only offers USB/LSB) and
