@@ -348,6 +348,48 @@ def parse_ptt_reply(raw: Optional[str]) -> Optional[bool]:
         return None
     return raw.strip() != '0'
 
+# Diagnostic only — no behaviour depends on this.
+#
+# Open question (TX_GATING_AUDIT.md 2.2): what does rigctld's `t` actually
+# return for THIS rig on foot-switch/mic PTT? Hamlib's ptt_t is 0=OFF,
+# 1=ON, 2=ON_MIC, 3=ON_DATA, and the Yaesu newcat backend maps the FT-991A's
+# own TX0/TX1/TX2 onto it — but this machine has hamlib as binaries only
+# (no newcat.c to read), so the mapping cannot be settled from source here.
+#
+# It matters because the two readers of this signal disagree:
+# parse_ptt_reply accepts 0-3, while dashboard/server.py's fast PTT monitor
+# compares against '1' alone. If mic PTT ever reports 2, the fast gate would
+# silently never fire for voice TX — the case it was written for.
+#
+# So: log the first sighting of each distinct non-zero value and let one
+# real voice transmission answer it. Once per value per process, never per
+# poll — this sits in a 5ms loop.
+_PTT_VALUES_SEEN: set[str] = set()
+_PTT_VALUES_LOG_CAP = 12
+
+
+def note_ptt_reply_value(raw: Optional[str], reader: str):
+    """Log the first time each distinct non-zero `t` reply is seen."""
+    if raw is None:
+        return
+    val = raw.strip()
+    if not val or val == '0':
+        return
+    if val in _PTT_VALUES_SEEN or len(_PTT_VALUES_SEEN) >= _PTT_VALUES_LOG_CAP:
+        return
+    _PTT_VALUES_SEEN.add(val)
+    meaning = {
+        '1': "RIG_PTT_ON",
+        '2': "RIG_PTT_ON_MIC — mic/foot-switch PTT",
+        '3': "RIG_PTT_ON_DATA",
+    }.get(val, "not a valid ptt_t — a desynced straggler, not a PTT reading")
+    logger.info(
+        f"PTT reply value {val!r} seen for the first time this run "
+        f"({reader}): {meaning}. Hamlib ptt_t is 0=OFF 1=ON 2=ON_MIC "
+        f"3=ON_DATA; the fast PTT monitor matches '1' only "
+        f"(TX_GATING_AUDIT.md 2.2)")
+
+
 # rigctld's own daemon-level response cache (see _set_daemon_cache_timeout) —
 # default 1000ms made knob tuning feel like it updated once a second. Low
 # enough to track the knob smoothly, well above 0 so a burst of near-
@@ -738,6 +780,7 @@ class RigctldClient:
         # direction matters.
         lines = await self._send_get("t\n", n_lines=1)
         raw_ptt = lines[0] if lines else None
+        note_ptt_reply_value(raw_ptt, "main poll")
         ptt = parse_ptt_reply(raw_ptt)
         if ptt is None:
             if raw_ptt is not None:

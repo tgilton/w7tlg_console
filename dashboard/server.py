@@ -32,7 +32,9 @@ from amplifier.antenna_ab_test import AntennaAbTest
 from amplifier.tx_power_calibration import TxPowerCalibration
 from amplifier.trend_csv_logger import TrendCsvLogger
 from config.station_profile import station_profile
-from rig.rigctld_client import RigctldClient, is_valid_hw_frequency, is_valid_hw_mode
+from rig.rigctld_client import (
+    RigctldClient, is_valid_hw_frequency, is_valid_hw_mode,
+    note_ptt_reply_value)
 from sdr.sdr_client import SdrClient
 from session.session_manager import SessionManager
 from session.session_profiles import PROFILES
@@ -574,6 +576,7 @@ async def _fast_ptt_monitor():
             # written for. It demonstrably does fire today, so hamlib returns
             # 1 on at least the observed path; whether that holds for mic PTT
             # versus CAT PTT is unverified and is a one-line hardware check.
+            note_ptt_reply_value(decoded, "fast PTT monitor")
             ptt = decoded == '1'
 
             if ptt and not last_ptt:
