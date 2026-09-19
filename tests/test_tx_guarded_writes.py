@@ -22,6 +22,14 @@ def _keyed() -> AmpTelemetry:
     return _frame(mode=0x70, mode_name="OPR/TX", flag_keyin=True, fwd_power_w=230.0)
 
 
+def _expire_tx_hang(bridge):
+    """Wind past the predicate's release-only hang time (TX_HANG_TIME_S).
+    Real code waits out the second; tests move the clock."""
+    import amplifier.acom_bridge as ab
+    if bridge._tx_last_asserted_at is not None:
+        bridge._tx_last_asserted_at -= ab.TX_HANG_TIME_S + 0.1
+
+
 async def _ready_bridge(fake_rig, fake_amp, band="20m", freq=14_074_000):
     """Bridge with the amp connected and past its _amp_ready gate, parked on
     a known band so a later frequency move is a real band change."""
@@ -69,6 +77,8 @@ async def test_withheld_band_select_is_not_lost(fake_rig, fake_amp):
 
     # TX ends, seen only on the amp's link — no rig state change at all.
     await fake_amp.emit_telemetry(_frame())
+    _expire_tx_hang(bridge)
+    await fake_amp.emit_telemetry(_frame())
 
     assert cmd_select_band(Band.B40M) in fake_amp.sent_frames
     assert bridge._band_recheck_pending is False
@@ -82,6 +92,7 @@ async def test_withheld_band_select_lands_on_a_rig_state_update_too(
     assert cmd_select_band(Band.B40M) not in fake_amp.sent_frames
 
     await fake_amp.emit_telemetry(_frame())        # amp goes quiet
+    _expire_tx_hang(bridge)
     fake_amp.sent_frames.clear()
     bridge._band_recheck_pending = True            # as if still owed
     await fake_rig.push_state(mode="USB")          # any rig update
@@ -102,6 +113,8 @@ async def test_recheck_rereads_the_rig_rather_than_replaying_a_tx_reading(
     fake_rig.state.freq_hz = 14_074_000
     fake_rig.state.band = "20m"
 
+    await fake_amp.emit_telemetry(_frame())
+    _expire_tx_hang(bridge)
     await fake_amp.emit_telemetry(_frame())
 
     assert cmd_select_band(Band.B40M) not in fake_amp.sent_frames
@@ -128,6 +141,8 @@ async def test_amp_ready_band_sync_is_deferred_and_then_sent(fake_rig, fake_amp)
     assert bridge._pending_band_select == Band.B20M
 
     await fake_rig.push_state(ptt=False)
+    _expire_tx_hang(bridge)
+    await fake_amp.emit_telemetry(_frame())
     assert cmd_select_band(Band.B20M) in fake_amp.sent_frames
     assert bridge._pending_band_select is None
 
@@ -181,6 +196,8 @@ async def test_drive_clamp_deferred_when_only_the_amp_says_tx(
     assert bridge._pending_drive_limit == 15
 
     await fake_amp.emit_telemetry(_frame())
+    _expire_tx_hang(bridge)
+    await fake_amp.emit_telemetry(_frame())
 
     assert [c for c in fake_rig.calls if c[0] == "set_rf_power"] == [
         ("set_rf_power", (15,), {})]
@@ -197,6 +214,7 @@ async def test_stale_telemetry_does_not_block_writes_forever(fake_rig, fake_amp)
     # Telemetry stops arriving; the last frame still says keyed.
     import amplifier.acom_bridge as ab
     bridge._last_telemetry_at -= ab.AMP_TELEMETRY_FRESH_S + 0.5
+    _expire_tx_hang(bridge)
     await fake_rig.push_state(mode="USB")
 
     assert cmd_select_band(Band.B40M) in fake_amp.sent_frames
@@ -250,3 +268,61 @@ def test_console_renders_the_servers_reason_rather_than_inventing_one():
     html = Path("dashboard/console.html").read_text()
     assert "if (msg.message) return msg.message;" in html
     assert "showToast('Error: ' + cmdFailureText(msg), 'error')" in html
+
+
+# ----------------------------------------------------------------------
+# The holds must not release during the hang time
+# ----------------------------------------------------------------------
+
+async def test_band_select_hold_is_not_released_during_the_hang(
+        fake_rig, fake_amp):
+    """Between words in SSB every envelope-following source reads zero. If
+    the hold released there, the band select would go out to the amp's
+    relays in the middle of a live transmission — the exact failure this
+    whole item exists to prevent."""
+    bridge = await _ready_bridge(fake_rig, fake_amp)
+    await fake_amp.emit_telemetry(_keyed())
+    await fake_rig.push_state(freq_hz=7_074_000, band="40m")
+    assert bridge._band_recheck_pending is True
+
+    # Envelope gap: nothing asserts, but we are still transmitting.
+    for _ in range(5):
+        await fake_amp.emit_telemetry(_frame())
+        assert bridge.is_transmitting() is True
+        assert cmd_select_band(Band.B40M) not in fake_amp.sent_frames
+        assert bridge._band_recheck_pending is True
+
+    # Only once the hang expires does it land.
+    _expire_tx_hang(bridge)
+    await fake_amp.emit_telemetry(_frame())
+    assert cmd_select_band(Band.B40M) in fake_amp.sent_frames
+
+
+async def test_drive_clamp_hold_is_not_released_during_the_hang(
+        fake_rig, fake_amp):
+    bridge = await _ready_bridge(fake_rig, fake_amp)
+    await fake_rig.push_state(rf_power_pct=50)
+    for _ in range(3):
+        await fake_amp.emit_telemetry(_keyed())
+    assert bridge._pending_drive_limit == 15
+
+    for _ in range(5):
+        await fake_amp.emit_telemetry(_frame())
+        assert bridge.is_transmitting() is True
+        assert [c for c in fake_rig.calls if c[0] == "set_rf_power"] == []
+
+    _expire_tx_hang(bridge)
+    await fake_amp.emit_telemetry(_frame())
+    assert [c for c in fake_rig.calls if c[0] == "set_rf_power"] == [
+        ("set_rf_power", (15,), {})]
+
+
+async def test_antenna_switch_still_refused_during_the_hang(fake_rig, fake_amp):
+    bridge = await _ready_bridge(fake_rig, fake_amp)
+    await fake_amp.emit_telemetry(_keyed())
+    await fake_amp.emit_telemetry(_frame())      # envelope gap
+
+    ok, reason = await bridge.next_antenna()
+
+    assert ok is False
+    assert "tx-hang" in reason

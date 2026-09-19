@@ -30,6 +30,17 @@ def _power_calls(fake_rig):
     return [c for c in fake_rig.calls if c[0] == "set_rf_power"]
 
 
+def _expire_tx_hang(bridge):
+    """Wind past the predicate's release-only hang time.
+
+    tx_evidence() holds TX true for TX_HANG_TIME_S after the last source
+    stops asserting, because forward/drive power gap mid-transmission (SSB
+    between words; the ramps even in DATA). Real code just waits; tests
+    move the clock."""
+    if bridge._tx_last_asserted_at is not None:
+        bridge._tx_last_asserted_at -= ab.TX_HANG_TIME_S + 0.1
+
+
 # ----------------------------------------------------------------------
 # The limits themselves
 # ----------------------------------------------------------------------
@@ -103,6 +114,10 @@ async def test_deferred_clamp_lands_on_tx_end(fake_rig, fake_amp):
     assert _power_calls(fake_rig) == []
 
     await fake_rig.push_state(ptt=False)
+    # Held through the hang time, then applied on the next tick.
+    assert _power_calls(fake_rig) == []
+    _expire_tx_hang(bridge)
+    await fake_amp.emit_telemetry(_opr_rx_frame())
 
     assert _power_calls(fake_rig) == [("set_rf_power", (15,), {})]
     assert fake_rig.state.rf_power_pct == 15
@@ -123,6 +138,7 @@ async def test_deferred_clamp_lands_from_amp_telemetry_if_tx_end_is_missed(
     # PTT drops with NO rig state callback — exactly what a desync looks
     # like from the bridge's side.
     fake_rig.state.ptt = False
+    _expire_tx_hang(bridge)
     await fake_amp.emit_telemetry(_opr_rx_frame())
 
     assert _power_calls(fake_rig) == [("set_rf_power", (15,), {})]

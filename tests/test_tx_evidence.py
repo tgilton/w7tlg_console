@@ -24,6 +24,13 @@ def _frame(**kw) -> AmpTelemetry:
     return AmpTelemetry(**base)
 
 
+def _expire_tx_hang(bridge):
+    """Wind past the predicate's release-only hang time — see
+    TX_HANG_TIME_S. Real code waits; tests move the clock."""
+    if bridge._tx_last_asserted_at is not None:
+        bridge._tx_last_asserted_at -= ab.TX_HANG_TIME_S + 0.1
+
+
 async def _bridge(fake_rig, fake_amp) -> AcomBridge:
     """Bridge with a connected amp and one fresh telemetry frame, so the
     amp-derived sources are eligible to be consulted at all."""
@@ -100,6 +107,8 @@ async def test_stale_telemetry_does_not_latch_tx_forever(fake_rig, fake_amp):
 
     # Nothing new arrives for longer than the freshness window.
     bridge._last_telemetry_at -= ab.AMP_TELEMETRY_FRESH_S + 0.5
+    assert bridge.tx_evidence() == ("tx-hang",)   # hang, not latch
+    _expire_tx_hang(bridge)
 
     assert bridge.tx_evidence() == ()
     assert bridge.is_transmitting() is False
@@ -111,6 +120,7 @@ async def test_disconnected_amp_is_not_consulted(fake_rig, fake_amp):
     assert bridge.is_transmitting() is True
 
     await fake_amp.simulate_connect(False)
+    _expire_tx_hang(bridge)
 
     assert bridge.tx_evidence() == ()
     assert bridge.is_transmitting() is False
@@ -166,6 +176,8 @@ async def test_tx_false_names_every_source_that_spoke(fake_rig, fake_amp, caplog
                                              input_power_w=6.1))
         await fake_rig.push_state(ptt=False)
         await fake_amp.emit_telemetry(_frame())
+        _expire_tx_hang(bridge)
+        await fake_amp.emit_telemetry(_frame())
 
     falling = [r for r in caplog.records if "TX false" in r.message]
     assert len(falling) == 1
@@ -192,12 +204,93 @@ async def test_sources_seen_do_not_leak_into_the_next_transmission(
     bridge = await _bridge(fake_rig, fake_amp)
     await fake_amp.emit_telemetry(_frame(flag_keyin=True, fwd_power_w=230.0))
     await fake_amp.emit_telemetry(_frame())
+    _expire_tx_hang(bridge)
+    await fake_amp.emit_telemetry(_frame())
 
     with caplog.at_level("INFO"):
         await fake_rig.push_state(ptt=True)
         await fake_rig.push_state(ptt=False)
+        _expire_tx_hang(bridge)
+        await fake_amp.emit_telemetry(_frame())
 
     falling = [r for r in caplog.records if "TX false" in r.message]
     assert len(falling) == 1
     assert "rig-ptt" in falling[0].message
     assert "amp-fwd-power" not in falling[0].message
+
+
+# ----------------------------------------------------------------------
+# Hang time — the envelope problem
+# ----------------------------------------------------------------------
+
+async def test_envelope_flicker_does_not_drop_tx_mid_burst(fake_rig, fake_amp):
+    """The SSB voice case, and not only that case.
+
+    fwd_w and drive_w follow the RF envelope: they fall toward zero between
+    words in SSB while flag_keyin stays on for the whole PTT. Measured on
+    the 2026-09-19 DATA-mode logs, forward power already reads zero for up
+    to 5 consecutive frames (~500ms) inside one transmission, on the ramps.
+
+    Here forward power is the ONLY source — rig PTT reads RX (desync) and
+    flag_keyin is false — and it flickers on/off every ~100ms. TX must stay
+    true through the whole burst.
+    """
+    bridge = await _bridge(fake_rig, fake_amp)
+    assert fake_rig.state.ptt is False
+
+    for i in range(20):                      # ~2s of 100ms frames
+        on = (i % 2 == 0)
+        await fake_amp.emit_telemetry(
+            _frame(flag_keyin=False, fwd_power_w=230.0 if on else 0.0))
+        assert bridge.is_transmitting() is True, f"dropped TX at frame {i}"
+        if not on:
+            # During a gap the hang is what is holding it, by name.
+            assert bridge.tx_evidence() == ("tx-hang",)
+        else:
+            assert bridge.tx_evidence() == ("amp-fwd-power",)
+
+
+async def test_tx_releases_about_a_second_after_the_last_nonzero_reading(
+        fake_rig, fake_amp):
+    bridge = await _bridge(fake_rig, fake_amp)
+    await fake_amp.emit_telemetry(_frame(fwd_power_w=230.0))
+    assert bridge.is_transmitting() is True
+
+    # Quiet frames keep arriving, but nothing asserts any more.
+    await fake_amp.emit_telemetry(_frame())
+    assert bridge.is_transmitting() is True          # still inside the hang
+
+    # Just short of the window: still held.
+    bridge._tx_last_asserted_at -= ab.TX_HANG_TIME_S - 0.1
+    assert bridge.is_transmitting() is True
+
+    # Just past it: released.
+    bridge._tx_last_asserted_at -= 0.2
+    assert bridge.is_transmitting() is False
+    assert bridge.tx_evidence() == ()
+
+
+async def test_hang_time_extends_tx_but_never_starts_it(fake_rig, fake_amp):
+    """Release-only. A station that has never transmitted must not read TX,
+    and the hang must not resurrect one that already released."""
+    bridge = await _bridge(fake_rig, fake_amp)
+    assert bridge._tx_last_asserted_at is None
+    assert bridge.is_transmitting() is False
+
+    await fake_amp.emit_telemetry(_frame(fwd_power_w=230.0))
+    _expire_tx_hang(bridge)
+    await fake_amp.emit_telemetry(_frame())
+    assert bridge.is_transmitting() is False
+
+
+async def test_hang_is_bounded_not_a_latch(fake_rig, fake_amp):
+    """A source that stops for good releases after one second — the hang
+    must not become the same failure as stale telemetry latching TX."""
+    bridge = await _bridge(fake_rig, fake_amp)
+    await fake_rig.push_state(ptt=True)
+    await fake_rig.push_state(ptt=False)
+    assert bridge.is_transmitting() is True
+
+    _expire_tx_hang(bridge)
+
+    assert bridge.is_transmitting() is False

@@ -127,6 +127,22 @@ PENDING_DRIVE_LIMIT_WARN_S = 10.0
 # TX-true, so a stale source is not a harmless one.
 AMP_TELEMETRY_FRESH_S = 1.0
 
+# How long TX stays asserted after the last source stops saying so.
+#
+# Every source in tx_evidence() except flag_keyin follows the RF envelope,
+# so each one gaps DURING a transmission rather than only at the end. In SSB
+# voice, forward and drive power drop toward zero between words. This is not
+# a voice-only concern: measured on the 2026-09-19 DATA-mode trend logs,
+# forward power already reads zero for up to 5 consecutive frames (~500ms)
+# inside a single transmission, on the ramps. 1.0s clears that worst case
+# with margin.
+#
+# Release-only — it never delays TX going true, and it is bounded, so a
+# source that stops for good releases after one second rather than latching.
+# Applies to the predicate alone: the audio gate and _on_tx_start/_on_tx_end
+# keep their own timing and are deliberately untouched.
+TX_HANG_TIME_S = 1.0
+
 AMP_ACTIVE_MODES = {OperatingMode.AMP_ON}
 
 # Bands wired direct to the FT-991A's own VHF/UHF antenna jack — the ACOM
@@ -385,6 +401,7 @@ class AcomBridge:
         self._last_telemetry_at: Optional[float] = None
         self._tx_evidence_active: bool = False
         self._tx_sources_seen: set[str] = set()
+        self._tx_last_asserted_at: Optional[float] = None
         # A band re-check owed because TX was active when a frequency change
         # was seen — see _service_pending_band_recheck. Deliberately a flag,
         # not a stored frequency: a reading taken during TX can be the split
@@ -578,6 +595,25 @@ class AcomBridge:
         The three amp-derived sources are only consulted while the telemetry
         behind them is fresh — see _amp_telemetry_fresh.
         """
+        sources = self._tx_sources_now()
+        now = time.monotonic()
+        if sources:
+            self._tx_last_asserted_at = now
+            return sources
+        # Nothing is asserting right now. Every source except amp-keyin
+        # follows the RF envelope and gaps mid-transmission — between words
+        # in SSB, and on the ramps even in DATA — so a bare instantaneous
+        # read would drop TX inside a live transmission. Hold for
+        # TX_HANG_TIME_S past the last assertion. Reported as its own source
+        # name so the log says why TX is still true.
+        if (self._tx_last_asserted_at is not None
+                and now - self._tx_last_asserted_at < TX_HANG_TIME_S):
+            return ("tx-hang",)
+        return ()
+
+    def _tx_sources_now(self) -> tuple[str, ...]:
+        """The instantaneous reading, with no hang time and no side effects.
+        tx_evidence() is the one callers should use."""
         sources: list[str] = []
         if self.rig.state.ptt:
             sources.append("rig-ptt")
@@ -615,18 +651,22 @@ class AcomBridge:
         transmission the amp never confirmed, or "amp-keyin, amp-fwd-power"
         with no "rig-ptt" at all, are both findings worth having in the log.
         """
-        sources = self.tx_evidence()
-        active = bool(sources)
-        if active:
-            self._tx_sources_seen.update(sources)
+        raw = self._tx_sources_now()
+        if raw:
+            self._tx_sources_seen.update(raw)
+        active = self.is_transmitting()   # includes the hang time
         if active == self._tx_evidence_active:
             return
         self._tx_evidence_active = active
         if active:
-            logger.info(f"TX true — asserted by: {', '.join(sources)}")
+            # A rising edge can only come from a real source: the hang time
+            # extends TX, it never starts it.
+            logger.info(f"TX true — asserted by: {', '.join(raw)}")
         else:
             seen = ", ".join(sorted(self._tx_sources_seen)) or "nothing"
-            logger.info(f"TX false — sources that spoke during it: {seen}")
+            logger.info(
+                f"TX false after {TX_HANG_TIME_S:.0f}s hang — sources that "
+                f"spoke during it: {seen}")
             self._tx_sources_seen.clear()
 
     # ------------------------------------------------------------------
