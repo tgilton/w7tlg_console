@@ -672,6 +672,430 @@ select#palette-select {
    than moving to --data-trace (that role is reserved for actual readings). */
 .sysmsg-item.info { color: var(--chrome-label); }
 .sysmsg-empty { color: var(--chrome-muted); }
+
+/* V2:BEGIN ═════════════════════════════════════════════════════════════
+   UI v2 design tokens and shared component classes.
+
+   Stage 1 of the redesign (ui-redesign/UI_REDESIGN_HANDOFF.md +
+   SPEC_AMENDMENTS.md, the amendments winning where the two disagree).
+
+   NOTHING in this block is used by the console yet. Every selector is
+   `--v2-`/`.v2-` prefixed and shares no name with an existing rule, so the
+   page renders byte-identically to before this block existed. Later stages
+   switch one block at a time over to these classes.
+
+   Sizes come from the mockup, with one floor: Amendment A says no text may
+   end up smaller than today's, so every font token is >= its present-day
+   counterpart. Each is commented "mockup / today" so the trade is visible
+   at the point of change. Everything scales from --v2-scale; 1rem is 12px
+   here (html carries the 12px, not just body), so rem also works.
+   ══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Scale ──────────────────────────────────────────────────────────
+     One dial for the whole v2 size system. Type and box metrics are
+     calc()'d off it; radii, borders and hairlines are not, because a
+     1.5px border scaled to 1.8px just blurs. */
+  --v2-scale: 1;
+
+  /* ── Type ───────────────────────────────────────────────────────────
+     Today the console has essentially one size (12px) for titles, labels
+     and values alike — DESIGN.md §3 asks for "real separation, timid
+     scales read as mush" and then specifies 12/12. The mockup actually
+     delivers the separation. See the stage 1 report: this supersedes §3's
+     three-size table and DESIGN.md needs updating in stage 7. */
+  --v2-font-hero:   calc(76px * var(--v2-scale));  /* mockup 76 / today 56 (.freq-readout) */
+  --v2-font-title:  calc(14px * var(--v2-scale));  /* mockup 14 / today 12 (.panel h2)     */
+  --v2-font-value:  calc(16px * var(--v2-scale));  /* mockup 15-17 / today 12              */
+  --v2-font-btn:    calc(13px * var(--v2-scale));  /* mockup n/a  / today 12 (.btn)        */
+  --v2-font-pill:   calc(13px * var(--v2-scale));  /* mockup 13   / today 12 (.badge)      */
+  --v2-font-label:  calc(12px * var(--v2-scale));  /* mockup 12   / today 12 (.ctl-label)  */
+  --v2-font-body:   calc(12px * var(--v2-scale));  /* mockup 12   / today 12 (body)        */
+  --v2-font-chip:   calc(18px * var(--v2-scale));  /* mockup 18   / today n/a (RX chip)    */
+
+  --v2-ls-title: 0.2em;    /* mockup 0.2em  / today 0.1em */
+  --v2-ls-label: 0.16em;   /* mockup 0.16em / today 0.1em */
+  --v2-ls-btn:   0.04em;   /* mockup n/a    / today 0.03em */
+  --v2-ls-chip:  0.08em;   /* mockup 0.08em / today n/a   */
+
+  --v2-weight-title: 500;  /* mockup 500 / today 400 */
+  --v2-weight-label: 500;  /* mockup 500 / today 400 */
+  --v2-weight-btn:   600;  /* mockup n/a / today 600 */
+  --v2-weight-pill:  700;  /* mockup 700 / today 600 */
+
+  /* ── Box metrics ────────────────────────────────────────────────────
+     --v2-btn-h is the one number with a real cost: 48px against today's
+     ~29px computed height is +66% of vertical space per button row, and
+     the left column carries 11 band buttons plus session, source, preamp
+     and ATT rows. Flagged in the stage 1 report as a decision, not a
+     settled value. --v2-card-pad 20px is off DESIGN.md §4's 4/8/16/24/32
+     spacing scale — also flagged there. */
+  --v2-btn-h:        calc(48px * var(--v2-scale));  /* mockup 48 / today ~29 computed  */
+  --v2-btn-h-dense:  calc(44px * var(--v2-scale));  /* mockup 44 / today ~27 (.dsp-toggle) */
+  --v2-touch-row:    calc(32px * var(--v2-scale));  /* mockup 32 / today ~22          */
+  --v2-input-h:      calc(32px * var(--v2-scale));  /* mockup n/a / today ~22         */
+
+  --v2-card-pad:       20px;  /* mockup 20 / today 12 16 16 (.section-box)  */
+  --v2-card-pad-tight: 16px;  /* mockup 16 / today 8 8 4 (.scope-group)     */
+  --v2-radius-card:    14px;  /* mockup 14 / today 7  (.section-box)        */
+  --v2-radius-btn:      8px;  /* mockup 8  / today 3  (.btn)                */
+  --v2-radius-pill:     6px;  /* mockup 6  / today 3  (.badge)              */
+  --v2-radius-inset:    6px;  /* mockup 6-8 / today 2-3 (inputs)            */
+  --v2-border-w:      1.5px;  /* mockup 1.5 / today 1 (.btn)                */
+
+  --v2-track-h: 8px;    /* mockup 8  / today native (~4) */
+  --v2-thumb:  22px;    /* mockup 22 / today native (~14) */
+
+  /* ── Color (spec §3 table) ──────────────────────────────────────────
+     Deliberately alongside, never replacing, the DESIGN.md tokens above.
+     Where a v2 color plays a role DESIGN.md already names, the role is
+     noted — the roles are what must stay stable, not the hexes. */
+  --v2-bg-page:   #0b1017;  /* role: --bg-0  #0A0E14 */
+  --v2-bg-chrome: #0d131c;  /* role: --bg-1  #0F141C — top bar, rails, system bar */
+  --v2-bg-card:   #121a25;  /* role: --bg-2-ish; today .section-box has no fill   */
+  --v2-bg-inset:  #0b1017;  /* text inputs, selects                               */
+
+  --v2-border:        #1f2b3b;  /* role: --border #232B38 — card edge, divider */
+  --v2-border-inset:  #2a394d;
+  --v2-border-strong: #FFFFFF;  /* today's .section-box locator border — see report */
+
+  --v2-fg:            #e8edf5;  /* role: --fg-0        #E6EAF0 */
+  --v2-label:         #8794a7;  /* role: --chrome-muted #5C6675 (muted label) */
+  --v2-label-light:   #c3ccda;  /* role: --chrome-label #97A1B0 */
+  --v2-title-fg:      #9aa1e0;  /* role: --chrome-accent #8A93D9 — furniture only,
+                                   DESIGN.md §2.1: never on an interactive control */
+  --v2-readout:       #8cc8ee;  /* role: --data-trace  #67D0F0 — measured values only */
+  --v2-readout-idle:  #6f7b90;
+
+  /* State. DESIGN.md §2.2: amber means SELECTED, everywhere, no
+     exceptions. The spec reuses amber for the SPLIT warning pill, which
+     is a second role for one color — allowed here only because the pill
+     also carries a triangle icon, which is what actually distinguishes
+     it (today's .badge-split does the same thing with a pulse). */
+  --v2-selected:     #f0b04a;  /* role: --state-selected #E8A33D */
+  --v2-selected-bg:  #3a2a10;  /* role: --state-selected-bg #2A2113 */
+  --v2-ok:           #7fd68f;  /* role: --state-ok #4ADE80 */
+  --v2-ok-bg:        #16301f;  /* role: --state-ok-bg #113322 */
+  --v2-ok-border:    #3fae5a;
+  --v2-go-bg:        #10261a;  /* Start button, spec §2.7 */
+  --v2-fault:        #ff7a63;  /* role: --state-fault #F0564A */
+  --v2-fault-bg:     #2a1210;  /* role: --state-fault-bg #3A1210 */
+  --v2-fault-border: #c8442f;
+
+  --v2-btn-bg:        #182131;  /* role: --bg-2 #161C26 */
+  --v2-btn-border:    #26344a;  /* role: --border #232B38 */
+  --v2-btn-fg:        #b3bfcf;  /* role: --chrome-label #97A1B0 */
+  --v2-btn-off-bg:    #111823;  /* disabled */
+  --v2-btn-off-border:#1c2738;
+  --v2-btn-off-fg:    #56627a;
+
+  --v2-track:      #243044;
+  --v2-thumb-bg:   #eef4fa;
+  --v2-notch-fg:   #5d6c82;
+
+  /* DESIGN.md §2.5 — the VFO readout is the primary TX indicator and
+     turns red on transmit. Named here so stage 4 reaches for the right
+     one. The PTT-TX and amp opr-tx badges stay AMBER: a deferred operator
+     decision recorded at the top of this file, and Amendment E4 says
+     DESIGN.md's semantic decisions beat mockup colors. Do not "fix" them
+     during a restyle. */
+  --v2-tx-vfo:   var(--v2-fault);
+  --v2-tx-badge: var(--v2-selected);
+
+  --v2-focus: #f0b04a;
+}
+
+/* ── Focus ────────────────────────────────────────────────────────────
+   The console defines no :focus or outline rule anywhere today — keyboard
+   focus is whatever the browser draws. Spec §3 wants a real one. Scoped
+   to v2 classes so it cannot appear on existing controls this stage. */
+.v2-btn:focus-visible,
+.v2-toggle:focus-visible,
+.v2-input:focus-visible,
+.v2-select:focus-visible,
+.v2-range:focus-visible,
+.v2-check:focus-within,
+.v2-focusable:focus-visible {
+  outline: 2px solid var(--v2-focus);
+  outline-offset: 2px;
+}
+
+/* ── Card ─────────────────────────────────────────────────────────────
+   NOTE the border. Today's .section-box is `2px solid #FFFFFF` — not a
+   leftover, an explicit operator decision (DESIGN.md §2.4, amended
+   2026-08-30: this console sits beside RUNlogNG, two terminals and
+   WSJT-X across two monitors, and a region "needs to be locatable by eye
+   without reading labels"). The mockup's near-black hairline drops that
+   entirely. Shipping the mockup value, since the design was approved, but
+   `--v2-card-border-w: 2px; --v2-card-border-c: var(--v2-border-strong);`
+   restores the old look in one place. Raised in the stage 1 report. */
+.v2-card {
+  --v2-card-border-w: 1px;
+  --v2-card-border-c: var(--v2-border);
+  background: var(--v2-bg-card);
+  border: var(--v2-card-border-w) solid var(--v2-card-border-c);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+}
+.v2-card--tight { padding: var(--v2-card-pad-tight); }
+
+/* ── Text ─────────────────────────────────────────────────────────────── */
+.v2-title {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  text-transform: uppercase;
+  text-align: center;
+  margin-bottom: 16px;
+}
+.v2-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  text-transform: uppercase;
+}
+.v2-label--light { color: var(--v2-label-light); }
+.v2-value {
+  font-size: var(--v2-font-value);
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.v2-value--green   { color: var(--v2-ok); }
+.v2-value--fg      { color: var(--v2-fg); }
+.v2-value--inactive{ color: var(--v2-readout-idle); }
+.v2-value .v2-unit { font-size: var(--v2-font-label); color: var(--v2-label); margin-left: 3px; }
+
+.v2-divider { height: 1px; background: var(--v2-border); margin: 16px 0; border: 0; }
+
+/* ── Button ───────────────────────────────────────────────────────────
+   One element, four states. Selected is amber because amber means
+   selected (DESIGN.md §2.2) — not because this happens to be a mode
+   button. Disabled is a real dim palette rather than today's opacity
+   0.35, so a disabled control keeps its own contrast instead of fading
+   toward the card. */
+.v2-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  line-height: 1.25;
+  text-align: center;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.1s, border-color 0.1s, color 0.1s;
+}
+.v2-btn:hover:not(:disabled):not(.v2-is-disabled) { border-color: var(--v2-label-light); color: var(--v2-fg); }
+.v2-btn.v2-is-selected {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+.v2-btn:disabled, .v2-btn.v2-is-disabled {
+  background: var(--v2-btn-off-bg);
+  border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg);
+  cursor: not-allowed;
+}
+.v2-btn--dense { min-height: var(--v2-btn-h-dense); }
+.v2-btn--go {
+  background: var(--v2-go-bg); border-color: var(--v2-ok-border); color: var(--v2-ok);
+}
+.v2-btn--stop {
+  background: var(--v2-fault-bg); border-color: var(--v2-fault-border); color: var(--v2-fault);
+}
+.v2-btn--go:hover:not(:disabled), .v2-btn--stop:hover:not(:disabled) { color: var(--v2-fg); }
+
+/* ── Toggle chip (NB, DNF, DNR, RF NOTCH…) ───────────────────────────── */
+.v2-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  user-select: none;
+}
+.v2-toggle.v2-is-on {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+.v2-toggle:disabled, .v2-toggle.v2-is-disabled {
+  background: var(--v2-btn-off-bg); border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg); cursor: not-allowed;
+}
+
+/* ── Pill ─────────────────────────────────────────────────────────────── */
+.v2-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 10px;
+  font-size: var(--v2-font-pill);
+  font-weight: var(--v2-weight-pill);
+  border-radius: var(--v2-radius-pill);
+  white-space: nowrap;
+}
+.v2-pill--amber { background: var(--v2-selected-bg); color: var(--v2-selected); }
+.v2-pill--green { background: var(--v2-ok-bg); color: var(--v2-ok); }
+.v2-pill--green-outline {
+  background: var(--v2-go-bg); color: var(--v2-ok);
+  border: 1px solid var(--v2-ok-border); padding: 5px 9px;
+}
+/* Amber again, but the triangle is what carries "warning" — see the
+   --v2-selected comment. Icon is content, not decoration, so it survives
+   a stylesheet failing to load. */
+.v2-pill--warn { background: var(--v2-selected-bg); color: var(--v2-selected); }
+.v2-pill--warn::before { content: '\25B3'; font-size: 1.05em; line-height: 1; }
+
+/* ── Receiver chip (RX1 / RX2) ────────────────────────────────────────
+   Identical styling for both; the label is the only difference, so a
+   screenshot of one side is identifiable (spec §2.2). */
+.v2-rx-chip {
+  display: inline-block;
+  padding: 4px 12px;
+  font-size: var(--v2-font-chip);
+  font-weight: 700;
+  letter-spacing: var(--v2-ls-chip);
+  color: var(--v2-bg-page);
+  background: var(--v2-readout);
+  border-radius: var(--v2-radius-btn);
+}
+
+/* ── Inputs ───────────────────────────────────────────────────────────── */
+.v2-input, .v2-select {
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  min-height: var(--v2-input-h);
+  padding: 0 8px;
+  color: var(--v2-fg);
+  background: var(--v2-bg-inset);
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+}
+.v2-input { font-variant-numeric: tabular-nums; }
+.v2-select { background: var(--v2-btn-bg); cursor: pointer; }
+.v2-input:disabled, .v2-select:disabled {
+  color: var(--v2-btn-off-fg); border-color: var(--v2-btn-off-border); cursor: not-allowed;
+}
+
+/* ── Checkbox chip ────────────────────────────────────────────────────
+   Checked goes amber for the same reason every other selected thing does.
+   :has() is already relied on elsewhere in this file. */
+.v2-check {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  user-select: none;
+}
+.v2-check input[type=checkbox] { accent-color: var(--v2-selected); width: 15px; height: 15px; margin: 0; cursor: pointer; }
+.v2-check:has(input:checked) { border-color: var(--v2-selected); color: var(--v2-selected); }
+
+/* ── Slider ───────────────────────────────────────────────────────────
+   Built to sit on the EXISTING native range inputs without touching their
+   ids, handlers, or how min/max/value are written (syncFilterRange
+   rewrites min/max from code; state pushes assign .value from code). The
+   fill fraction therefore cannot come from an input event — it is
+   computed from the live value/min/max by the one shared helper at the
+   bottom of this file, which writes --v2-fill. See that helper's comment
+   for the hooks considered and rejected.
+
+   Fill ends under the thumb CENTRE, not at the track end: hence the
+   thumb/2 + (100% - thumb) * fraction geometry (spec §2.2). */
+.v2-slider-row { position: relative; }
+.v2-slider-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; margin-bottom: 6px;
+}
+.v2-range {
+  -webkit-appearance: none; appearance: none;
+  width: 100%;
+  height: var(--v2-thumb);
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  /* --v2-fill is a 0-1 number written by the helper. The 0 here is the
+     fallback for "helper not running yet", so the track renders empty
+     rather than blanking on an invalid calc(). */
+  --v2-fill: 0;
+  --v2-fill-w: calc(var(--v2-thumb) / 2 + (100% - var(--v2-thumb)) * var(--v2-fill));
+}
+.v2-range::-webkit-slider-runnable-track {
+  height: var(--v2-track-h);
+  border-radius: 999px;
+  background:
+    linear-gradient(var(--v2-readout), var(--v2-readout)) 0 0 / var(--v2-fill-w) 100% no-repeat,
+    var(--v2-track);
+}
+.v2-range::-moz-range-track {
+  height: var(--v2-track-h);
+  border-radius: 999px;
+  background:
+    linear-gradient(var(--v2-readout), var(--v2-readout)) 0 0 / var(--v2-fill-w) 100% no-repeat,
+    var(--v2-track);
+}
+.v2-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: var(--v2-thumb); height: var(--v2-thumb);
+  border-radius: 50%;
+  background: var(--v2-thumb-bg);
+  border: 3px solid var(--v2-readout);
+  margin-top: calc((var(--v2-track-h) - var(--v2-thumb)) / 2);
+}
+.v2-range::-moz-range-thumb {
+  width: var(--v2-thumb); height: var(--v2-thumb);
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--v2-thumb-bg);
+  border: 3px solid var(--v2-readout);
+}
+.v2-range:disabled { cursor: not-allowed; }
+.v2-range:disabled::-webkit-slider-thumb { background: var(--v2-btn-off-fg); border-color: var(--v2-btn-off-border); }
+.v2-range:disabled::-moz-range-thumb    { background: var(--v2-btn-off-fg); border-color: var(--v2-btn-off-border); }
+/* Dim the whole row, label and value included — today's
+   `.field-group:has(input:disabled)` established that a gated control has
+   to read as off as a unit, after an operator reported disabled sliders
+   as broken ones. */
+.v2-slider-row:has(.v2-range:disabled) { opacity: 0.4; }
+
+/* Default-value notch. The fraction is authored as data-v2-notch on the
+   input (0-1); the helper copies it to the ROW, because a percentage in
+   background-position resolves against (box - image) and would land in
+   the wrong place, while a percentage in `left` on a child of the row
+   resolves against the row and lands exactly on the same geometry as the
+   fill. input elements cannot carry ::after themselves. */
+.v2-slider-row.v2-has-notch::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--v2-thumb) / 2 + (100% - var(--v2-thumb)) * var(--v2-notch, 0) - 1px);
+  bottom: calc((var(--v2-thumb) - var(--v2-track-h)) / 2 - 3px);
+  width: 2px;
+  height: calc(var(--v2-track-h) + 6px);
+  background: var(--v2-notch-fg);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* V2:END */
 </style>
 </head>
 <body>
@@ -4819,6 +5243,98 @@ RigControl.init();
 initSectionBoxes();
 initColumnCollapse();
 initColumnWidths();
+</script>
+
+<script>
+'use strict';
+/* V2:BEGIN — shared v2 slider fill helper.
+
+   Stage 1. Nothing on the page carries .v2-range yet, so this loop finds
+   zero elements and does nothing until a later stage opts a slider in.
+
+   WHY A POLL AND NOT AN EVENT. The v2 slider draws its own fill, so it
+   needs the live fraction (value - min) / (max - min). Every other way of
+   learning that fraction was rejected:
+
+     - an `input`/`change` listener only fires on HUMAN interaction. Half
+       the value changes here come from code — updateUI() writes .value
+       from every state push (AF Gain, RF Gain, DT Gain, exciter drive),
+       and syncFilterRange rewrites .min/.max on every mode change. A
+       listener would leave the fill stale exactly when the radio, not the
+       operator, moved the control.
+     - a MutationObserver on the value/min/max ATTRIBUTES misses the same
+       cases: `el.value = x` sets the IDL property and never touches the
+       attribute, so the observer would not fire at all.
+     - redefining the `value` property on HTMLInputElement.prototype would
+       catch everything, but it is a global monkey-patch of a DOM
+       prototype shared with every other module on this page. This file's
+       whole architecture is "no shared mutable state across modules"; a
+       patched prototype is the worst possible version of that.
+
+   Which leaves reading the DOM. The brief's own suggestion, and the only
+   option that needs no cooperation from the existing setters — the hard
+   requirement, since those setters are load-bearing (two test files
+   assert on their source text verbatim) and are not to be edited.
+
+   Cost is a querySelectorAll over one class plus a string compare per
+   slider per frame, and an early-out when nothing moved, so a frame where
+   no slider changed writes no style and triggers no layout. The page
+   already runs two rAF loops (drawSpectrum, drawSpectrum2); rAF also
+   parks itself when the tab is hidden, which a setInterval would not. */
+(function V2Sliders() {
+
+  // Last-written signature per element, so an unchanged slider costs one
+  // string compare and no style write. WeakMap, not a dataset field:
+  // nothing here should be visible in the DOM or keep a detached node
+  // alive after a later stage re-renders a block.
+  const lastSig = new WeakMap();
+
+  function fractionOf(el) {
+    const min = parseFloat(el.min);
+    const max = parseFloat(el.max);
+    const val = parseFloat(el.value);
+    // syncFilterRange can leave min === max transiently (FM has no filter
+    // range at all), and a bare <input type=range> with no min/max parses
+    // as NaN. Both mean "no meaningful position" — 0, not NaN, which
+    // would poison the calc() and blank the track.
+    if (!isFinite(min) || !isFinite(max) || !isFinite(val) || max <= min) return 0;
+    return Math.min(1, Math.max(0, (val - min) / (max - min)));
+  }
+
+  function tick() {
+    const els = document.querySelectorAll('.v2-range');
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      const frac = fractionOf(el);
+      const notch = el.dataset.v2Notch;
+      // 4 decimals is ~1/3 of a pixel on a 900px track — finer than the
+      // fill can render, coarse enough that float noise doesn't churn.
+      const sig = frac.toFixed(4) + '|' + (notch === undefined ? '' : notch);
+      if (lastSig.get(el) === sig) continue;
+      lastSig.set(el, sig);
+
+      el.style.setProperty('--v2-fill', String(frac));
+
+      // The notch renders on the ROW, not the input — see the CSS comment
+      // on .v2-slider-row.v2-has-notch::after for why it cannot live on
+      // the input itself.
+      const row = el.closest('.v2-slider-row');
+      if (!row) continue;
+      const n = parseFloat(notch);
+      if (isFinite(n)) {
+        row.style.setProperty('--v2-notch', String(Math.min(1, Math.max(0, n))));
+        row.classList.add('v2-has-notch');
+      } else {
+        row.style.removeProperty('--v2-notch');
+        row.classList.remove('v2-has-notch');
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  requestAnimationFrame(tick);
+})();
+/* V2:END */
 </script>
 
 </body>
