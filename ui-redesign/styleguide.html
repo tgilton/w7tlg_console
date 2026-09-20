@@ -566,9 +566,24 @@
 #box-amp .meter-row.v2-amp-hero {
   flex-direction: column;
   align-items: stretch;
-  gap: 2px;
+  gap: 0;
   padding: 0;
-  margin-top: 4px;
+  margin: 6px 0 4px;
+}
+/* The "FWD P" label is redundant next to a 43px number that is obviously
+   the forward power, but it is NOT display:none — that would drop it from
+   the accessibility tree too, leaving the hero as a bare number with no
+   name. Standard visually-hidden instead: still read aloud, still found by
+   in-page search, occupies no space. */
+#box-amp .meter-row.v2-amp-hero > span:first-child {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 /* Container queries, because the thing this must track is the COLUMN's
    width, not the viewport's — the column is drag-resizable between 200 and
@@ -593,7 +608,15 @@
   white-space: nowrap;
   letter-spacing: 0.01em;
 }
-#box-amp .meter-bar-wrap.v2-amp-hero-bar { height: 14px; margin-bottom: 18px; }
+#box-amp .meter-bar-wrap.v2-amp-hero-bar { height: 14px; margin: 0 0 18px; }
+
+/* Badge row centred under the title. Natural width, not stretched: the
+   flex default of align-items:stretch would pull a one-line pill to the
+   row's full height. The row's own class is never rewritten, but the
+   badges' are (updateAmp assigns badge.className wholesale), so anything
+   targeting a badge is keyed on its id. */
+#box-amp .amp-state-row { justify-content: center; align-items: center; margin-bottom: 4px; }
+#amp-state-badge, #amp-atu-badge { flex: 0 0 auto; }
 
 /* At the narrow end of the drag the v2 value size genuinely does not fit:
    "DRIVE P" + "12.4 W" needs 132px of the 106px a 200px column leaves.
@@ -666,11 +689,23 @@
 /* OPERATING MODE. .active (AMP OFF) and .active-amber (AMP ON) are both
    written by updateUI; both mean "this is the selected member of the
    group", so both get the one amber treatment (DESIGN.md §2.2). */
+/* "AMP OFF" wrapped to two lines at the default column width after stage 2
+   — the v2 button's 13px text and 12px side padding needed ~178px of the
+   180px a 274px column leaves, so the grid had nothing to give. nowrap
+   plus 6px side padding brings a pair down to ~154px. Below that the two
+   simply cannot share a row at any padding, so the container query stacks
+   them instead of letting one touch the card edge. Measured widths are in
+   the stage 2 polish report. */
+#box-opmode { container-type: inline-size; }
 #box-opmode .opmode-grid { gap: 8px; margin-bottom: 0; }
+#box-opmode .opmode-grid .btn { white-space: nowrap; }
+@container (max-width: 170px) {
+  #box-opmode .opmode-grid { grid-template-columns: 1fr; }
+}
 #box-opmode .opmode-grid .btn {
   display: inline-flex; align-items: center; justify-content: center;
   min-height: var(--v2-btn-h);
-  padding: 0 12px;
+  padding: 0 6px;
   font-size: var(--v2-font-btn);
   font-weight: var(--v2-weight-btn);
   letter-spacing: var(--v2-ls-btn);
@@ -692,6 +727,17 @@
 /* FAULT STATUS. The caret is .section-box.collapsible > h2::before and the
    collapse state is persisted — both untouched. Only the chip is restyled,
    through the classes updateAmp writes. */
+/* Centred under its title. #fault-severity, not .fault-severity: updateAmp
+   rewrites the whole class attribute on this element every state push, so
+   the id is the only stable handle. width:fit-content + auto margins
+   rather than text-align on the parent, because the parent also holds the
+   collapsing body. */
+#fault-severity {
+  display: block;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
 #box-fault-status .fault-severity {
   font-size: var(--v2-font-pill);
   font-weight: var(--v2-weight-pill);
