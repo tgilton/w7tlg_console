@@ -1938,6 +1938,130 @@
   .panel-center .eq-bmt-group, .panel-center2 .eq-bmt-group { grid-template-columns: 1fr; gap: 12px; }
 }
 
+/* ── Stage 6: the page shell ──────────────────────────────────────────
+   Top bar, system messages bar, collapse tabs and resize handles. CSS
+   only — no markup, no JS, no ids. The status dots are driven by
+   StatusBar.setDot with classList.toggle('on', ...), which preserves
+   other classes, so .dot/.dot.on/.status-item.on are exactly the hooks to
+   style through. */
+
+/* The grid gaps show through as the page's own rules; body and gaps both
+   move to the v2 page colour so the shell matches the cards. */
+html, body { background: var(--v2-bg-page); }
+.console { background: var(--v2-border); }
+
+/* ── Top bar ──────────────────────────────────────────────────────── */
+.panel-status {
+  min-height: 56px;
+  background: var(--v2-bg-chrome);
+  border-bottom: 1px solid var(--v2-border);
+  padding: 0 20px;
+  gap: 18px;
+}
+.panel-status .app-name {
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: 0.22em;
+  color: var(--v2-title-fg);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* Colour is never the only signal: the label is always present, and the
+   text changes colour with the dot (DESIGN.md §1). */
+.panel-status .status-item {
+  font-size: var(--v2-font-label);
+  letter-spacing: 0.08em;
+  color: var(--v2-label);
+  gap: 7px;
+  white-space: nowrap;
+}
+.panel-status .status-item.on { color: var(--v2-ok); }
+.panel-status .dot {
+  width: 9px; height: 9px;
+  margin-right: 0;
+  background: var(--v2-fault);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v2-fault) 18%, transparent);
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+.panel-status .dot.on {
+  background: var(--v2-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v2-ok) 22%, transparent);
+}
+/* Tool links as bordered buttons. The span is the button; the <a> inside
+   keeps its href, target and rel untouched and fills it. */
+.panel-status .nav-link {
+  display: inline-flex; align-items: center;
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: 0.04em;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.panel-status .nav-link:hover { border-color: var(--v2-label-light); color: var(--v2-fg); }
+.panel-status .nav-link a { display: inline-flex; align-items: center; gap: 6px; }
+.panel-status .nav-link:focus-within { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* ── System messages bar ──────────────────────────────────────────── */
+.panel-sysmsgs {
+  min-height: 44px;
+  background: var(--v2-bg-chrome);
+  border-top: 1px solid var(--v2-border);
+  padding: 0 20px;
+  align-items: center;
+}
+.panel-sysmsgs .app-name {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-title-fg);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.panel-sysmsgs .sysmsg-log { font-size: var(--v2-font-label); }
+.panel-sysmsgs .sysmsg-empty, .panel-sysmsgs .sysmsg-item { color: var(--v2-label); }
+/* .sysmsg-item.error / .info keep their own colours — untouched. */
+.panel-sysmsgs .sysmsg-item .ts { color: var(--v2-readout-idle); }
+
+/* ── Rails: collapse tab and resize handle ────────────────────────────
+   Element, ids, drag-resize, double-click reset, persistence and collapse
+   behaviour are all untouched; this is paint plus a wider grab target.
+   The handle goes 6px -> 8px so it can actually be caught with a mouse,
+   which costs the SIDE columns 2px of content and the centre column
+   nothing (its track is 1fr, sized by the grid, not by what sits inside
+   the side panels). */
+.panel-collapse-tab {
+  background: var(--v2-bg-chrome);
+  color: var(--v2-label);
+  font-size: 13px;
+}
+.panel-collapse-tab:hover { background: var(--v2-btn-bg); color: var(--v2-fg); }
+.panel-collapse-tab:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: -2px; }
+.panel-modedsp .panel-collapse-tab { border-left: 1px solid var(--v2-border); }
+.panel-bandamp .panel-collapse-tab { border-right: 1px solid var(--v2-border); }
+.panel-resize-handle {
+  flex: 0 0 8px;
+  background: var(--v2-bg-chrome);
+  position: relative;
+}
+/* A visible grip line, inset so the full 8px stays grabbable. */
+.panel-resize-handle::after {
+  content: '';
+  position: absolute; top: 50%; left: 50%;
+  width: 2px; height: 34px;
+  transform: translate(-50%, -50%);
+  background: var(--v2-border);
+  border-radius: 1px;
+}
+.panel-resize-handle:hover::after, .panel-resize-handle.dragging::after {
+  background: var(--v2-selected);
+}
+.panel-resize-handle:hover, .panel-resize-handle.dragging { background: var(--v2-btn-bg); }
+
 /* V2:END */
 
 /* ── Style-guide page chrome (NOT part of the v2 system) ───────────── */
