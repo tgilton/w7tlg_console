@@ -20,6 +20,7 @@ Verified working levels on FT-991A via Hamlib 4.7.1:
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Callable, Coroutine
@@ -43,6 +44,7 @@ class Band(Enum):
     B10M    = "10m"
     B6M     = "6m"
     B2M     = "2m"
+    B70CM   = "70cm"
     UNKNOWN = "??"
 
 BAND_EDGES = [
@@ -58,20 +60,28 @@ BAND_EDGES = [
     (28_000_000,  29_700_000,  Band.B10M),
     (50_000_000,  54_000_000,  Band.B6M),
     (144_000_000, 148_000_000, Band.B2M),
+    (432_000_000, 450_000_000, Band.B70CM),
 ]
 
-DIGITAL_FREQS = {
-    Band.B160M: 1_840_000,
-    Band.B80M:  3_573_000,
-    Band.B60M:  5_357_000,
-    Band.B40M:  7_074_000,
-    Band.B30M:  10_136_000,
-    Band.B20M:  14_074_000,
-    Band.B17M:  18_100_000,
-    Band.B15M:  21_074_000,
-    Band.B12M:  24_915_000,
-    Band.B10M:  28_074_000,
-    Band.B6M:   50_313_000,
+# Each band lists every standard-calling-frequency digital mode this
+# station operates there — FT8 always, plus JS8Call's published dial
+# frequencies (js8call.com) on the HF bands where JS8 has one. Tuple
+# rather than a single value so the "near digital freq" badge lights up
+# for either mode's calling channel, not just FT8's.
+DIGITAL_FREQS: dict[Band, tuple[int, ...]] = {
+    Band.B160M: (1_840_000, 1_842_000),
+    Band.B80M:  (3_573_000, 3_578_000),
+    Band.B60M:  (5_357_000,),
+    Band.B40M:  (7_074_000, 7_078_000),
+    Band.B30M:  (10_136_000, 10_130_000),
+    Band.B20M:  (14_074_000, 14_078_000),
+    Band.B17M:  (18_100_000, 18_104_000),
+    Band.B15M:  (21_074_000, 21_078_000),
+    Band.B12M:  (24_915_000, 24_922_000),
+    Band.B10M:  (28_074_000, 28_078_000),
+    Band.B6M:   (50_313_000, 50_318_000),
+    Band.B2M:   (144_174_000,),
+    Band.B70CM: (432_174_000,),
 }
 
 BAND_DEFAULT_FREQ = {
@@ -87,13 +97,72 @@ BAND_DEFAULT_FREQ = {
     Band.B10M:  28_074_000,
     Band.B6M:   50_313_000,
     Band.B2M:   144_200_000,
+    Band.B70CM: 432_100_000,
 }
+
+# Bands where this rig's Hamlib backend doesn't implement ATT-level or
+# NR/ANF-function queries at all — confirmed live 2026-07-22 via direct
+# rigctld query: RPRT -9 (ENAVAIL) in BOTH FM and USB while on 2m, so this
+# is a band capability gap (likely a separate VHF/UHF front-end module
+# without an attenuator), not a mode-specific one.
+NO_ATT_NR_ANF_BANDS = {Band.B2M.value, Band.B70CM.value}
 
 def freq_to_band(freq_hz: int) -> Band:
     for lo, hi, band in BAND_EDGES:
         if lo <= freq_hz <= hi:
             return band
     return Band.UNKNOWN
+
+# ---------------------------------------------------------------------------
+# Tier A: hardware-range capability check (T1) — NOT a band-plan restriction.
+#
+# This bounds what the FT-991A can physically tune to at all, per Yaesu's
+# service-manual RX coverage spec — three separate, non-contiguous bands,
+# NOT one contiguous span from lowest to highest:
+#   30 kHz  -  56 MHz
+#   118 MHz - 164 MHz
+#   420 MHz - 470 MHz
+# (76-108 MHz WFM broadcast coverage is intentionally excluded — this
+# console never sets WFM.) A single min/max envelope previously used here
+# silently accepted the two dead zones between these bands (56-118 MHz,
+# 164-420 MHz) that the rig cannot actually receive on — Tier A is a
+# hardware-*capability* check, so it must reject those too, not just
+# obvious garbage. The point is still to reject a value the rig cannot
+# honor, not to restrict where the operator can listen or transmit within
+# what it CAN honor — WWV/WWVH/CHU and other reference/beacon work all
+# fall inside the first (HF/6m) band here. Deliberately a separate table
+# from FREQ_SANITY_MIN_HZ/MAX_HZ above: that pair exists to catch a
+# desynced *reply* stream on the polling/read side and is a single padded
+# span on purpose; this table exists to reject a *write* the rig cannot
+# honor. Deliberately NOT merged with BAND_EDGES/freq_to_band either —
+# that table is the amateur band-plan used for display and, separately,
+# for the advisor-only Tier B guard below.
+HW_RX_COVERAGE_BANDS = (
+    (30_000, 56_000_000),
+    (118_000_000, 164_000_000),
+    (420_000_000, 470_000_000),
+)
+
+def is_valid_hw_frequency(freq_hz: int) -> bool:
+    """Tier A frequency check — pure hardware-capability bound, applies to
+    every write path (manual UI and the advisor alike)."""
+    return any(lo <= freq_hz <= hi for lo, hi in HW_RX_COVERAGE_BANDS)
+
+# Every mode string this codebase actually sends to rig.set_mode today
+# (dashboard/console.html's mode buttons, RigState.update_derived's
+# digital_modes) plus CWR, which the advisor's own tool schema already
+# offers as an option. Deliberately excludes "DATA-U"/"DATA-L" from that
+# same schema (advisor/claude_advisor.py's QSY_TOOL enum) — those are this
+# console's own UI button labels, not real rigctld mode strings, and were
+# never valid input to rig.set_mode in the first place.
+HW_VALID_MODES = frozenset({
+    "USB", "LSB", "CW", "CWR", "AM", "FM", "PKTUSB", "PKTLSB",
+})
+
+def is_valid_hw_mode(mode: str) -> bool:
+    """Tier A mode check — pure hardware-capability bound, applies to every
+    write path (manual UI and the advisor alike)."""
+    return mode in HW_VALID_MODES
 
 def freq_display(freq_hz: int) -> str:
     mhz = freq_hz // 1_000_000
@@ -211,10 +280,10 @@ class RigState:
         digital_modes = {"PKTUSB", "PKTLSB"}
         self.is_digital = self.mode in digital_modes
 
-        std_freq = DIGITAL_FREQS.get(band_enum)
+        std_freqs = DIGITAL_FREQS.get(band_enum, ())
         self.near_digital_freq = bool(
-            std_freq and self.freq_hz > 0
-            and abs(self.freq_hz - std_freq) < 2000)
+            self.freq_hz > 0
+            and any(abs(self.freq_hz - f) < 2000 for f in std_freqs))
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +307,96 @@ CONTROL_EVERY = 10  # Every 10 cycles (~5s)
 FREQ_SANITY_MIN_HZ = 10_000
 FREQ_SANITY_MAX_HZ = 500_000_000
 
+# Strict PTT reply validation — SAFETY CRITICAL. See IMPLEMENTATION_PLAN_U2.md
+# §6b finding I (phantom PTT).
+#
+# Hamlib's `t` reply is a single character from rig.h's ptt_t enum:
+#   0 = RIG_PTT_OFF   1 = RIG_PTT_ON   2 = RIG_PTT_ON_MIC   3 = RIG_PTT_ON_DATA
+# Nothing else is a PTT reply. The old code ran the raw line through
+# float() and then bool(int(...)), which accepted plenty of things that
+# are not PTT at all — and when the reply stream is shifted (the whole
+# point of finding G/I), the value sitting in the `t` slot is some OTHER
+# command's reply. Every one of these was previously read as "TX ON":
+#
+#   "1.0"       l SWR / l RFPOWER reply    -> float 1.0  -> True   PHANTOM
+#   "-73"       l STRENGTH reply (dB)      -> float -73  -> True   PHANTOM
+#   "14074000"  f (frequency) reply        -> float      -> True   PHANTOM
+#
+# A phantom TX is not cosmetic. It gates the SDR audio, freezes the
+# panadapter, drives the TX meters, pushes a TX-start to the amp bridge,
+# and — because `f` is only polled while PTT is false — switches OFF the
+# frequency sanity check, which is the only other desync guard in the
+# poll loop. Observed live 2026-09-19 holding a fake TX for up to 37 s.
+#
+# fullmatch, not match: `$` in Python also matches just before a trailing
+# newline, so match(r'^[0-3]$', '1\n') would succeed.
+_PTT_REPLY_RE = re.compile(r'[0-3]')
+
+
+def parse_ptt_reply(raw: Optional[str]) -> Optional[bool]:
+    """Parse a raw rigctld `t` reply into a PTT boolean.
+
+    Returns True/False for a well-formed reply, and None for anything
+    else — None means "no reading", NOT "receive". Callers must hold the
+    previous PTT state on None rather than treating it as RX: forcing RX
+    on a bad read would drop the TX gate mid-transmission, exposing the
+    SDR front end during real RF, which is the opposite failure and a
+    worse one."""
+    if raw is None:
+        return None
+    if not _PTT_REPLY_RE.fullmatch(raw.strip()):
+        return None
+    return raw.strip() != '0'
+
+# Diagnostic only — no behaviour depends on this.
+#
+# Open question (TX_GATING_AUDIT.md 2.2): what does rigctld's `t` actually
+# return for THIS rig on foot-switch/mic PTT? Hamlib's ptt_t is 0=OFF,
+# 1=ON, 2=ON_MIC, 3=ON_DATA, and the Yaesu newcat backend maps the FT-991A's
+# own TX0/TX1/TX2 onto it — but this machine has hamlib as binaries only
+# (no newcat.c to read), so the mapping cannot be settled from source here.
+#
+# It matters because the two readers of this signal disagree:
+# parse_ptt_reply accepts 0-3, while dashboard/server.py's fast PTT monitor
+# compares against '1' alone. If mic PTT ever reports 2, the fast gate would
+# silently never fire for voice TX — the case it was written for.
+#
+# So: log the first sighting of each distinct non-zero value and let one
+# real voice transmission answer it. Once per value per process, never per
+# poll — this sits in a 5ms loop.
+_PTT_VALUES_SEEN: set[str] = set()
+_PTT_VALUES_LOG_CAP = 12
+
+
+def note_ptt_reply_value(raw: Optional[str], reader: str):
+    """Log the first time each distinct non-zero `t` reply is seen."""
+    if raw is None:
+        return
+    val = raw.strip()
+    if not val or val == '0':
+        return
+    if val in _PTT_VALUES_SEEN or len(_PTT_VALUES_SEEN) >= _PTT_VALUES_LOG_CAP:
+        return
+    _PTT_VALUES_SEEN.add(val)
+    meaning = {
+        '1': "RIG_PTT_ON",
+        '2': "RIG_PTT_ON_MIC — mic/foot-switch PTT",
+        '3': "RIG_PTT_ON_DATA",
+    }.get(val, "not a valid ptt_t — a desynced straggler, not a PTT reading")
+    logger.info(
+        f"PTT reply value {val!r} seen for the first time this run "
+        f"({reader}): {meaning}. Hamlib ptt_t is 0=OFF 1=ON 2=ON_MIC "
+        f"3=ON_DATA; the fast PTT monitor matches '1' only "
+        f"(TX_GATING_AUDIT.md 2.2)")
+
+
+# rigctld's own daemon-level response cache (see _set_daemon_cache_timeout) —
+# default 1000ms made knob tuning feel like it updated once a second. Low
+# enough to track the knob smoothly, well above 0 so a burst of near-
+# simultaneous queries within one poll cycle can still share one real serial
+# read rather than each forcing its own.
+RIGCTLD_DAEMON_CACHE_MS = 50
+
 
 class RigctldClient:
 
@@ -260,6 +419,10 @@ class RigctldClient:
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._cycle = 0
+        # Count of PTT replies rejected as implausible since the last
+        # connect (finding I). Reset per connection so the number in the
+        # log describes the current link, not the whole session.
+        self._ptt_rejects = 0
         self._dt_gain_task: Optional[asyncio.Task] = None
         self._ssb_bpf_task: Optional[asyncio.Task] = None
 
@@ -310,7 +473,9 @@ class RigctldClient:
         return ok
 
     async def set_att(self, db: int) -> bool:
-        """Set attenuator: 0=off, 6=6dB, 12=12dB, 18=18dB."""
+        """Set attenuator. FT-991A/hamlib only accepts 0 (off) or 12 (12dB)
+        — confirmed by live testing 2026-07-14; 6 and 18 are RPRT-rejected
+        by rigctld despite being generic attenuator values on other rigs."""
         ok = await self._send_set(f"L ATT {db}\n")
         if ok:
             self.state.att_db = db
@@ -535,12 +700,34 @@ class RigctldClient:
                 timeout=3.0)
             self.state.connected = True
             self._cycle = 0
+            self._ptt_rejects = 0
             logger.info(f"Connected to rigctld at {self.host}:{self.port}")
+            await self._set_daemon_cache_timeout()
             await self._fire_callbacks()
             return True
         except (ConnectionRefusedError, asyncio.TimeoutError, OSError) as e:
             logger.warning(f"Cannot connect to rigctld: {e}")
             return False
+
+    async def _set_daemon_cache_timeout(self):
+        """Hamlib's rigctld daemon caches get_freq/get_mode/etc. replies for
+        --get_cache/--set_cache msecs (distinct from, and layered on top of,
+        the per-rig-backend 'cache_timeout' conf param) — default 1000ms on
+        this rigctld build. That cache is what made the knob feel like it
+        was updating once a second while a console-initiated SET (which
+        writes straight through the cache) felt instant — confirmed live
+        2026-08-30 by measuring get_freq cadence directly against rigctld,
+        bypassing this app's own poll loop entirely. There's no startup CLI
+        flag for it, so it has to be set over the wire on every connection —
+        it resets to the daemon default whenever rigctld itself restarts."""
+        try:
+            self._writer.write(f"\\set_cache {RIGCTLD_DAEMON_CACHE_MS}\n".encode())
+            await self._writer.drain()
+            reply = await asyncio.wait_for(self._reader.readline(), timeout=2.0)
+            if reply.decode(errors='replace').strip() != "RPRT 0":
+                logger.warning(f"rigctld set_cache reply unexpected: {reply!r}")
+        except (asyncio.TimeoutError, ConnectionResetError, OSError) as e:
+            logger.warning(f"Could not set rigctld daemon cache timeout: {e}")
 
     async def _disconnect(self):
         if self._writer:
@@ -584,12 +771,30 @@ class RigctldClient:
         # PTT — polled first every cycle so that the frequency and mode
         # freezes below can gate on the current state of PTT without waiting
         # for the next cycle.
-        val = await self._get_float("t\n", n_lines=1)
-        if val is not None:
-            ptt = bool(int(val))
-            if ptt != self.state.ptt:
-                self.state.ptt = ptt
-                changed = True
+        #
+        # Validated strictly (see parse_ptt_reply): a reply that is not a
+        # bare 0-3 is some other command's reply that landed here after a
+        # desync, and must NOT be allowed to fake a transmission. An
+        # unparseable reply holds the previous PTT state rather than
+        # forcing RX — see parse_ptt_reply's docstring for why that
+        # direction matters.
+        lines = await self._send_get("t\n", n_lines=1)
+        raw_ptt = lines[0] if lines else None
+        note_ptt_reply_value(raw_ptt, "main poll")
+        ptt = parse_ptt_reply(raw_ptt)
+        if ptt is None:
+            if raw_ptt is not None:
+                # WARNING, not debug: this is the phantom-PTT guard firing,
+                # and how often it fires is the measurement that tells us
+                # whether the underlying desync is getting better or worse.
+                self._ptt_rejects += 1
+                logger.warning(
+                    f"Rejected implausible PTT reply {raw_ptt!r} — holding "
+                    f"PTT={self.state.ptt} (reply stream likely desynced; "
+                    f"{self._ptt_rejects} rejected since connect)")
+        elif ptt != self.state.ptt:
+            self.state.ptt = ptt
+            changed = True
 
         # Frequency — frozen during TX.
         # In WSJT-X split mode, the TX VFO-B can be on a different frequency
@@ -699,8 +904,12 @@ class RigctldClient:
                 self.state.preamp = preamp
                 changed = True
 
-        # ATT
-        val = await self._get_level("ATT")
+        # ATT — see NO_ATT_NR_ANF_BANDS: this rig's Hamlib backend returns
+        # RPRT -9 (ENAVAIL) for this on 2m/70cm regardless of mode, same
+        # "unsupported here" class as the MICGAIN/COMP-in-digital-mode skip
+        # above; skip it rather than eat a client-side timeout waiting on
+        # an answer that will always be "not available" on these bands.
+        val = None if self.state.band in NO_ATT_NR_ANF_BANDS else await self._get_level("ATT")
         if val is not None:
             att = int(val)
             if att != self.state.att_db:
@@ -741,8 +950,13 @@ class RigctldClient:
                 self.state.agc = agc
                 changed = True
 
-        # NB and ANF funcs
+        # NB and ANF funcs — NR/ANF confirmed live (2026-07-22) RPRT -9
+        # (ENAVAIL) on 2m/70cm on this rig, same skip rationale as ATT
+        # above. NB's func query works fine on these bands, so it isn't
+        # skipped — see NO_ATT_NR_ANF_BANDS.
         for attr, func_name in [('nb_on', 'NB'), ('nr_on', 'NR'), ('dnf_on', 'ANF')]:
+            if func_name in ('NR', 'ANF') and self.state.band in NO_ATT_NR_ANF_BANDS:
+                continue
             val = await self._get_func(func_name)
             if val is not None:
                 on = val > 0

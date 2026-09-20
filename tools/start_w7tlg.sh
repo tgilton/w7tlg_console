@@ -7,14 +7,28 @@
 
 CONSOLE_DIR="$HOME/w7tlg-console"
 
-if pgrep -x rigctld > /dev/null; then
-    echo "rigctld already running."
+RIGCTLD=/Applications/WRLDesktop.app/Contents/Resources/assets/hamlib-binaries/darwin/rigctld
+RIG_DEVICE=/dev/cu.usbserial-01A3286E0
+
+# Don't just check for any process named "rigctld" — other apps (e.g. Winlink
+# helpers) bundle their own hamlib and may already be squatting on :4532
+# bound to the wrong serial device. Verify it's actually *our* rigctld
+# talking to the FT-991A before trusting it. (This copy had drifted out of
+# sync with the deployed ~/start_w7tlg.sh, which already had this fix —
+# resynced 2026-08-30 along with the CAT baud bump below.)
+if pgrep -f "$RIGCTLD.*-r $RIG_DEVICE" > /dev/null; then
+    echo "rigctld already running for FT-991A."
 else
+    stale=$(lsof -ti :4532)
+    if [ -n "$stale" ]; then
+        echo "Port 4532 is held by a different rigctld (PID $stale) — killing it."
+        kill -9 $stale 2>/dev/null
+        sleep 1
+    fi
     echo "Starting rigctld..."
-    RIGCTLD=/Applications/WRLDesktop.app/Contents/Resources/assets/hamlib-binaries/darwin/rigctld
-    $RIGCTLD -m 1035 -r /dev/cu.usbserial-01A3286E0 -s 9600 -t 4532 &
+    $RIGCTLD -m 1035 -r "$RIG_DEVICE" -s 38400 -t 4532 &
     sleep 1
-    if pgrep -x rigctld > /dev/null; then
+    if pgrep -f "$RIGCTLD.*-r $RIG_DEVICE" > /dev/null; then
         echo "rigctld started successfully on port 4532"
     else
         echo "WARNING: rigctld failed to start — continuing anyway"
@@ -36,7 +50,15 @@ echo "Starting W7TLG Console..."
 cd "$CONSOLE_DIR"
 source venv/bin/activate
 
-python main.py &
+# Every run also lands in a timestamped file under logs/ — the terminal
+# output is unchanged, tee just copies it. Findings G/I/J were all diagnosed
+# from log captures the operator happened to have; this stops that being
+# a matter of remembering to redirect. logs/ is gitignored.
+mkdir -p "$CONSOLE_DIR/logs"
+LOG_FILE="$CONSOLE_DIR/logs/console-$(date +%Y%m%d-%H%M%S).log"
+echo "Logging to $LOG_FILE"
+
+python main.py 2>&1 | tee "$LOG_FILE" &
 CONSOLE_PID=$!
 
 echo "Waiting for console on :8000..."

@@ -7,7 +7,9 @@ Responsibilities:
   - Surfaces a passive SWR warning (>2.5) from ACOM telemetry — never inhibits
   - Mirrors the amp's own hard/soft fault bits (message 0x21) into TX inhibit —
     real safety enforcement lives in the amp's firmware, not console heuristics
-  - Enforces A4R (dummy load) 10-second TX hard cutoff
+  - Enforces A4R (dummy load) power/duration limits from its own spec-plate
+    curve — no separate absolute ceiling; the amp's own internal protection
+    is the backstop for anything beyond what the curve models
   - Publishes unified station state for WebSocket broadcast
 
 Operating Modes:
@@ -16,15 +18,16 @@ Operating Modes:
             explicit operator confirmation before engaging
 
 Antenna Configuration (w7tlg station):
-  A1F — SS-25 / future DXF   1500W  all bands   unlimited
+  A1F — SS-25 / future DXF   1200W  all bands   unlimited
   A2F — unconnected           0W    disabled
   A3R — 40m EFHW multiband  300W   all HF
-  A4R — dummy load          1500W   any         10s hard TX cutoff
+  A4R — dummy load          1200W   any         power/duration curve (spec-plate derived)
 """
 
 import asyncio
 from collections import deque
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -58,6 +61,8 @@ class TrendSample:
     drive_w: float
     current_a: float    # amps (not mA)
     is_tx: bool
+    alc: float = 0.0            # rig.state.alc, 0.0-1.0 (1.0 = pegged)
+    rf_power_pct: int = 0       # rig.state.rf_power_pct, the FT-991A ceiling
 
     def to_list(self) -> list:
         """Compact list format for WebSocket transfer."""
@@ -70,10 +75,12 @@ class TrendSample:
             round(self.drive_w, 1),
             round(self.current_a, 2),
             1 if self.is_tx else 0,
+            round(self.alc, 3),
+            self.rf_power_pct,
         ]
 
 TREND_FIELDS = ["ts", "fwd_w", "refl_w", "swr", "temp_c",
-                "drive_w", "current_a", "is_tx"]
+                "drive_w", "current_a", "is_tx", "alc", "rf_power_pct"]
 
 
 # ---------------------------------------------------------------------------
@@ -82,15 +89,67 @@ TREND_FIELDS = ["ts", "fwd_w", "refl_w", "swr", "temp_c",
 
 class OperatingMode(Enum):
     AMP_OFF = "AMP_OFF"   # Amp in standby, radio 0-100W
-    AMP_ON  = "AMP_ON"    # Amp in OPR, radio 0-40W (requires confirmation)
+    AMP_ON  = "AMP_ON"    # Amp in OPR, radio capped at AMP_ON_DRIVE_LIMIT
+                          # (requires confirmation)
+
+# Radio drive ceiling while the amp is in OPERATE. Lowered 40 -> 15 on
+# 2026-09-19: 10W of drive already produces 500W+ out of the 1200S on some
+# bands, and this station never runs the FT-991A above 10W with the amp in
+# path, so the cap belongs just above normal operating drive rather than at
+# a third of the amp's rated input. 40 was never a setting this station
+# wanted; it only looked harmless because nothing ever drove that hard.
+#
+# This is not only the auto-clamp's target — station.drive_limit_w carries
+# it to the RF power slider's max (console.html), to the server's own cap
+# on operator set_rf_power commands (dashboard/server.py), and to the
+# calibration sweep's step filter (tx_power_calibration.py). Changing it
+# changes all four together, which is the intent.
+AMP_ON_DRIVE_LIMIT = 15
 
 # Radio drive limits per mode
 MODE_DRIVE_LIMITS = {
-    OperatingMode.AMP_OFF: 100,
-    OperatingMode.AMP_ON:  40,
+    OperatingMode.AMP_OFF: 100,   # barefoot: the rig's own full range, unchanged
+    OperatingMode.AMP_ON:  AMP_ON_DRIVE_LIMIT,
 }
 
+# How long a drive clamp may sit deferred (waiting for TX to end) before the
+# wait itself is treated as the symptom. A transmission that outlasts this
+# with the console still unable to clamp means PTT is reading stuck-true, or
+# the CAT write is failing — both are worth a WARNING in the session log
+# rather than a silent indefinite wait.
+PENDING_DRIVE_LIMIT_WARN_S = 10.0
+
+# How long the amp's own telemetry stays trustworthy as TX evidence. The
+# stream runs at ~10Hz, so this is ~10 missed frames. Without a freshness
+# bound, a frozen serial link that stopped with flag_keyin set would latch
+# TX-true forever and block every band select, antenna move and drive clamp
+# for the rest of the session — the OR in tx_evidence() can only ever ADD
+# TX-true, so a stale source is not a harmless one.
+AMP_TELEMETRY_FRESH_S = 1.0
+
+# How long TX stays asserted after the last source stops saying so.
+#
+# Every source in tx_evidence() except flag_keyin follows the RF envelope,
+# so each one gaps DURING a transmission rather than only at the end. In SSB
+# voice, forward and drive power drop toward zero between words. This is not
+# a voice-only concern: measured on the 2026-09-19 DATA-mode trend logs,
+# forward power already reads zero for up to 5 consecutive frames (~500ms)
+# inside a single transmission, on the ramps. 1.0s clears that worst case
+# with margin.
+#
+# Release-only — it never delays TX going true, and it is bounded, so a
+# source that stops for good releases after one second rather than latching.
+# Applies to the predicate alone: the audio gate and _on_tx_start/_on_tx_end
+# keep their own timing and are deliberately untouched.
+TX_HANG_TIME_S = 1.0
+
 AMP_ACTIVE_MODES = {OperatingMode.AMP_ON}
+
+# Bands wired direct to the FT-991A's own VHF/UHF antenna jack — the ACOM
+# never sees this RF, so its OPERATE/STANDBY drive caps don't apply. 50W is
+# the FT-991A's actual VHF/UHF ceiling (well below its 100W HF/6m max).
+DIRECT_TO_RIG_BANDS = {"2m", "70cm"}
+DIRECT_TO_RIG_MAX_W = 50
 
 # ---------------------------------------------------------------------------
 # Antenna definitions
@@ -118,7 +177,7 @@ ANTENNAS: dict[int, AntennaConfig] = {
     1: AntennaConfig(
         port="A1F", number=1,
         name="SS-25 / DXF Vertical",
-        max_power_w=1500, bands=[], enabled=True,
+        max_power_w=1200, bands=[], enabled=True,   # amp's real top end (ACOM 1200S)
         dummy_load=False,
     ),
     2: AntennaConfig(
@@ -136,14 +195,75 @@ ANTENNAS: dict[int, AntennaConfig] = {
     4: AntennaConfig(
         port="A4R", number=4,
         name="Dummy Load",
-        max_power_w=1500, bands=[], enabled=True,
+        max_power_w=1200, bands=[], enabled=True,   # amp's real top end — see DUMMY_LOAD_CURVE
+                                                     # for the load's own, much lower, rating
         dummy_load=True,
     ),
 }
 
-DUMMY_LOAD_MAX_TX_S = 10.0
+# Dummy load pulse-power rating — (seconds, watts) anchor points hand-read
+# off the load's own "POWER CAPABILITY" spec plate (max sustained forward
+# watts for a continuous transmission of a given duration). Not exact
+# manufacturer data (read from a photo, not a datasheet table), so
+# DUMMY_LOAD_CURVE_MARGIN derates it before comparing against live power.
+DUMMY_LOAD_CURVE: list[tuple[float, float]] = [
+    (10, 1500),
+    (30, 750),
+    (40, 500),
+    (50, 350),
+    (60, 250),
+    (120, 150),
+    (300, 110),
+    (600, 100),
+]
+DUMMY_LOAD_CURVE_MARGIN = 0.85
+
 SWR_WARNING_THRESHOLD = 2.5
 SWR_WARNING_CLEAR_THRESHOLD = 2.3
+
+# HV rail collapse cross-check: mode-sync (above) trusts the telemetry mode
+# byte's class bits alone, so an OPR-class byte with a collapsed HV rail
+# during TX would otherwise show AMP_ON with the amp contributing nothing
+# and no indication why (AUDIT.md Finding 3). "Near zero" is a conservative
+# bound, not a value read off real telemetry — the amp's actual OPR-class HV
+# rail has not been characterized against this constant on live hardware;
+# confirm/tune it during the real-hardware smoke test before relying on it.
+HV_COLLAPSE_THRESHOLD_V = 5.0
+# Frames of confirmed collapse required before inhibiting, mirroring the
+# 3-frame filter used above for OPR/STB mode-class transients (~300ms @
+# 10Hz) so a momentary relay-switching dip at TX start doesn't false-trip.
+HV_COLLAPSE_FRAMES = 3
+
+
+def _dummy_load_curve_watts(elapsed_s: float) -> float:
+    """Manufacturer-rated max sustained forward watts at this elapsed
+    duration, log-log interpolated between the digitized spec-plate
+    points. Unmargined — callers apply DUMMY_LOAD_CURVE_MARGIN themselves."""
+    pts = DUMMY_LOAD_CURVE
+    if elapsed_s <= pts[0][0]:
+        return pts[0][1]
+    if elapsed_s >= pts[-1][0]:
+        return pts[-1][1]
+    for (t0, p0), (t1, p1) in zip(pts, pts[1:]):
+        if t0 <= elapsed_s <= t1:
+            frac = (math.log(elapsed_s) - math.log(t0)) / (math.log(t1) - math.log(t0))
+            return math.exp(math.log(p0) + frac * (math.log(p1) - math.log(p0)))
+    return pts[-1][1]   # unreachable given the bounds checks above
+
+
+def _dummy_load_curve_duration_s(watts: float) -> float:
+    """Inverse of _dummy_load_curve_watts: how long the curve allows
+    sustaining this many watts. Unmargined."""
+    pts = DUMMY_LOAD_CURVE
+    if watts >= pts[0][1]:
+        return pts[0][0]
+    if watts <= pts[-1][1]:
+        return pts[-1][0]
+    for (t0, p0), (t1, p1) in zip(pts, pts[1:]):
+        if p1 <= watts <= p0:
+            frac = (math.log(watts) - math.log(p0)) / (math.log(p1) - math.log(p0))
+            return math.exp(math.log(t0) + frac * (math.log(t1) - math.log(t0)))
+    return pts[-1][0]   # unreachable given the bounds checks above
 
 # ---------------------------------------------------------------------------
 # Unified station state
@@ -168,6 +288,7 @@ class StationState:
     fault_soft: list = field(default_factory=list)
     fault_warnings: list = field(default_factory=list)
     operating_mode: str = OperatingMode.AMP_OFF.value
+    amp_in_path: bool = True
     selected_antenna: int = 4
     drive_limit_w: int = 100
     tx_inhibited: bool = False
@@ -178,6 +299,12 @@ class StationState:
     dummy_load_remaining_s: float = 0.0
     swr_warning_active: bool = False
     swr_warning_peak: float = 0.0
+    txp_enabled: bool = False
+    txp_target_w: float = 0.0
+    txp_tolerance_pct: float = 10.0
+    txp_mode: str = "off"   # off | armed | correcting | holding | halted
+    txp_ceiling_w: float = 0.0
+    txp_halt_reason: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -198,6 +325,7 @@ class StationState:
             "fault_soft":             self.fault_soft,
             "fault_warnings":         self.fault_warnings,
             "operating_mode":         self.operating_mode,
+            "amp_in_path":            self.amp_in_path,
             "selected_antenna":       self.selected_antenna,
             "drive_limit_w":          self.drive_limit_w,
             "tx_inhibited":           self.tx_inhibited,
@@ -208,6 +336,12 @@ class StationState:
             "dummy_load_remaining_s": self.dummy_load_remaining_s,
             "swr_warning_active":     self.swr_warning_active,
             "swr_warning_peak":       self.swr_warning_peak,
+            "txp_enabled":            self.txp_enabled,
+            "txp_target_w":           self.txp_target_w,
+            "txp_tolerance_pct":      self.txp_tolerance_pct,
+            "txp_mode":               self.txp_mode,
+            "txp_ceiling_w":          self.txp_ceiling_w,
+            "txp_halt_reason":        self.txp_halt_reason,
         }
 
 
@@ -255,6 +389,26 @@ class AcomBridge:
         # sub-states (e.g. 0x51 during the OPR/RX→OPR/TX relay sequence).
         self._amp_opr_frames: int = 0
         self._amp_stdby_frames: int = 0
+        self._hv_collapse_frames: int = 0
+        # Drive clamp deferred because the rig was transmitting when it came
+        # due — see _enforce_drive_limit. Holds the limit to apply, when it
+        # was deferred, and whether the "still not applied" WARNING has been
+        # emitted (once per deferral, not once per telemetry frame).
+        self._pending_drive_limit: Optional[int] = None
+        self._pending_drive_limit_since: Optional[float] = None
+        self._pending_drive_limit_warned: bool = False
+        # Multi-source TX detection — see tx_evidence()/is_transmitting().
+        self._last_telemetry_at: Optional[float] = None
+        self._tx_evidence_active: bool = False
+        self._tx_sources_seen: set[str] = set()
+        self._tx_last_asserted_at: Optional[float] = None
+        # A band re-check owed because TX was active when a frequency change
+        # was seen — see _service_pending_band_recheck. Deliberately a flag,
+        # not a stored frequency: a reading taken during TX can be the split
+        # TX VFO, so the re-check re-reads the rig when it actually runs.
+        self._band_recheck_pending: bool = False
+        # A band select whose SEND was deferred because TX was active.
+        self._pending_band_select: Optional[AcomBand] = None
         self._state_callbacks: list[StationStateCallback] = []
         self._trend_sample_callbacks: list[Callable[[TrendSample], None]] = []
 
@@ -287,6 +441,8 @@ class AcomBridge:
 
     async def set_operating_mode(self, mode: OperatingMode,
                                   confirmed: bool = False) -> tuple[bool, str]:
+        if not self.station.amp_in_path:
+            return False, "Amp not in RF path for this band"
         self._mode = mode
         self._high_power_confirmed = True
 
@@ -302,13 +458,10 @@ class AcomBridge:
             logger.info("Amp → STANDBY")
 
         # Enforce the new drive limit immediately: if the radio is currently
-        # set above the new cap (e.g. was at 80W with amp off, now switching
-        # to AMP_ON's 40W cap), bring it down rather than letting an
-        # out-of-range setting persist into the new mode.
-        new_limit = MODE_DRIVE_LIMITS[mode]
-        if self.rig.state.rf_power_pct > new_limit:
-            await self.rig.set_rf_power(new_limit)
-            logger.info(f"RF power clamped to {new_limit}W for {mode.value}")
+        # set above the new cap (e.g. was at 80 with amp off, now switching to
+        # AMP_ON's cap), bring it down rather than letting an out-of-range
+        # setting persist into the new mode.
+        await self._enforce_drive_limit(mode)
 
         logger.info(f"Operating mode → {mode.value}")
         await self._publish()
@@ -322,6 +475,15 @@ class AcomBridge:
         amp's own ANT_BAND_INFO (0x27) feedback to learn which antenna it
         landed on (see _on_antenna_change).
         """
+        if not self.station.amp_in_path:
+            return False, "Amp not in RF path for this band"
+        # goto_antenna's own loop has always checked this; this path — the
+        # console's NEXT ANT button — never did, so the operator-driven route
+        # to the same relay was the unguarded one (TX_GATING_AUDIT.md row A3
+        # attributed goto_antenna's guard to both; it covered only one).
+        if self.is_transmitting() or self._tx_was_active:
+            sources = ", ".join(self.tx_evidence()) or "recent TX"
+            return False, f"Cannot switch antenna while TX is active ({sources})"
         await self.amp.send(cmd_next_antenna())
         logger.info("Sent NEXT ANTENNA (front-panel ANT button equivalent)")
         return True, "Antenna cycle requested"
@@ -340,13 +502,16 @@ class AcomBridge:
         """
         if target not in ANTENNAS:
             return False, f"Invalid antenna number: {target}"
+        if not self.station.amp_in_path:
+            return False, "Amp not in RF path for this band"
 
         for _hop in range(4):  # at most 4 hops to reach any antenna from any start
             if self._selected_antenna == target:
                 return True, f"At antenna {ANTENNAS[target].port}"
 
-            if self.rig.state.ptt or self._tx_was_active:
-                return False, "Cannot switch antenna while TX is active"
+            if self.is_transmitting() or self._tx_was_active:
+                sources = ", ".join(self.tx_evidence()) or "recent TX"
+                return False, f"Cannot switch antenna while TX is active ({sources})"
             if not self.station.amp_connected:
                 return False, "Amp serial connection lost — antenna switch aborted"
             if self.station.fault_severity not in ("OK", ""):
@@ -388,6 +553,278 @@ class AcomBridge:
         logger.info("Sent ATAC (ATU Tune / Antenna Change)")
         return True, "ATAC cycle initiated"
 
+    # ------------------------------------------------------------------
+    # Is the station transmitting?
+    # ------------------------------------------------------------------
+
+    def tx_evidence(self) -> tuple[str, ...]:
+        """Every source that currently says the station is transmitting.
+
+        The guards in this file all defend against a false *positive* PTT —
+        a phantom TX costs audio and display, and is visible. The dangerous
+        failure is the opposite one: PTT reading RX while RF is live, which
+        is what lets a band-select command reach the amp's relays mid-
+        transmission (TX_GATING_AUDIT.md section 5, row A1). A single
+        rigctld-derived reading cannot defend against that, because the
+        backup guard reads the same socket and fails with it.
+
+        So this is an OR over independent witnesses, and it is deliberately
+        one-directional: any source saying TX wins, none of them can veto.
+
+          rig-ptt         the rigctld `t` reading. Fast, but the one that
+                          desyncs (findings G/I/J).
+          amp-keyin       the ACOM's own KEY-IN flag, off its own serial
+                          link. Independent of rigctld entirely. Blind while
+                          the amp is in STANDBY, on the direct-to-rig VHF/UHF
+                          bands, and for the first ~75-100ms of a
+                          transmission (the SDS-4000S keys the amp via AUX
+                          ~30ms after PTT).
+          amp-fwd-power   forward power out of the amp. Measured against the
+                          2026-09-19 trend logs: nonzero on 14 of 14
+                          transmissions, and nonzero in 1 of 38,388 receive
+                          samples (a single TX-edge frame, which errs toward
+                          TX-true — the safe direction).
+          amp-drive-power drive power into the amp. Same logs: nonzero on
+                          only 4 of 14 transmissions, and those four are
+                          exactly the four that made 220W+. The meter has a
+                          floor around 5-6W, and this station runs <=10W of
+                          drive, so it sits at or under that floor most of
+                          the time. Kept because it costs nothing and is a
+                          true positive whenever it does fire.
+
+        The three amp-derived sources are only consulted while the telemetry
+        behind them is fresh — see _amp_telemetry_fresh.
+        """
+        sources = self._tx_sources_now()
+        now = time.monotonic()
+        if sources:
+            self._tx_last_asserted_at = now
+            return sources
+        # Nothing is asserting right now. Every source except amp-keyin
+        # follows the RF envelope and gaps mid-transmission — between words
+        # in SSB, and on the ramps even in DATA — so a bare instantaneous
+        # read would drop TX inside a live transmission. Hold for
+        # TX_HANG_TIME_S past the last assertion. Reported as its own source
+        # name so the log says why TX is still true.
+        if (self._tx_last_asserted_at is not None
+                and now - self._tx_last_asserted_at < TX_HANG_TIME_S):
+            return ("tx-hang",)
+        return ()
+
+    def _tx_sources_now(self) -> tuple[str, ...]:
+        """The instantaneous reading, with no hang time and no side effects.
+        tx_evidence() is the one callers should use."""
+        sources: list[str] = []
+        if self.rig.state.ptt:
+            sources.append("rig-ptt")
+        if self._amp_telemetry_fresh():
+            if self.station.amp_ptt_active:
+                sources.append("amp-keyin")
+            if self.station.amp_fwd_w > 0:
+                sources.append("amp-fwd-power")
+            if self.station.amp_drive_w > 0:
+                sources.append("amp-drive-power")
+        return tuple(sources)
+
+    def is_transmitting(self) -> bool:
+        """True if ANY independent source says RF is live.
+
+        Use this for anything that drives hardware. It is deliberately NOT
+        wired to the audio gate or to _on_tx_start/_on_tx_end: those are
+        audio hygiene and trend accounting, and widening TX-true there would
+        change behaviour that has not been tested on this hardware.
+        """
+        return bool(self.tx_evidence())
+
+    def _amp_telemetry_fresh(self) -> bool:
+        if not self.station.amp_connected or self._last_telemetry_at is None:
+            return False
+        return (time.monotonic() - self._last_telemetry_at) <= AMP_TELEMETRY_FRESH_S
+
+    def _note_tx_evidence(self):
+        """Log TX-true on change only, naming what asserted it.
+
+        Called at telemetry cadence, so it must not log per frame. Only the
+        boolean edges are logged: which sources raised it, and on the way
+        down, every source that spoke at any point during that transmission.
+        That second list is the instrument — "rig-ptt" alone on a
+        transmission the amp never confirmed, or "amp-keyin, amp-fwd-power"
+        with no "rig-ptt" at all, are both findings worth having in the log.
+        """
+        raw = self._tx_sources_now()
+        if raw:
+            self._tx_sources_seen.update(raw)
+        active = self.is_transmitting()   # includes the hang time
+        if active == self._tx_evidence_active:
+            return
+        self._tx_evidence_active = active
+        if active:
+            # A rising edge can only come from a real source: the hang time
+            # extends TX, it never starts it.
+            logger.info(f"TX true — asserted by: {', '.join(raw)}")
+        else:
+            seen = ", ".join(sorted(self._tx_sources_seen)) or "nothing"
+            logger.info(
+                f"TX false after {TX_HANG_TIME_S:.0f}s hang — sources that "
+                f"spoke during it: {seen}")
+            self._tx_sources_seen.clear()
+
+    # ------------------------------------------------------------------
+    # Band select — the only console->relay path
+    # ------------------------------------------------------------------
+
+    async def _send_band_select(self, band: AcomBand, reason: str) -> bool:
+        """Single choke point for every cmd_select_band.
+
+        This is row A1/A2 of TX_GATING_AUDIT.md section 5 — the only route
+        by which the console can move the amp's band relays, and therefore
+        the only one that can hot-switch them with RF on the line.
+
+        Defers rather than drops. A band select that is simply skipped
+        leaves the amp on the *previous* band while the radio has moved,
+        which is the failure this guard exists to prevent, not a safe
+        fallback.
+        """
+        if self.is_transmitting():
+            if self._pending_band_select != band:
+                self._pending_band_select = band
+                logger.info(
+                    f"Band select {band.name} ({reason}) deferred — "
+                    f"transmitting ({', '.join(self.tx_evidence())})")
+            return False
+        await self.amp.send(cmd_select_band(band))
+        self._pending_band_select = None
+        logger.info(f"Sent amp band select {band.name} ({reason})")
+        return True
+
+    async def _service_pending_band_recheck(self):
+        """Apply whatever band work TX postponed.
+
+        Two distinct things can be owed, and both have to be flushed:
+
+        - `_band_recheck_pending`: a frequency change was observed while TX
+          was active. That reading was not trusted (during TX it can be the
+          split TX VFO), so the rig is re-read here instead of replaying it.
+        - `_pending_band_select`: the band was already resolved, but the
+          send itself was held back by _send_band_select.
+
+        Called from _on_rig_state and from _on_telemetry. The second matters:
+        telemetry runs on the amp's own serial link at ~10Hz and keeps
+        ticking through a rigctld desync or reconnect, which is exactly when
+        the rig-side path goes quiet.
+        """
+        if self.is_transmitting():
+            return
+
+        if self._band_recheck_pending:
+            self._band_recheck_pending = False
+            freq_hz = self.rig.state.freq_hz
+            if freq_hz and freq_hz > 0 and freq_hz != self._last_freq_hz:
+                self._last_freq_hz = freq_hz
+                logger.info(
+                    f"Applying band re-check deferred during TX: "
+                    f"{freq_hz} Hz")
+                await self._handle_freq_change(freq_hz, self.rig.state.band)
+
+        if self._pending_band_select is not None:
+            await self._send_band_select(
+                self._pending_band_select, "deferred during TX")
+
+    # ------------------------------------------------------------------
+    # Drive limit enforcement
+    # ------------------------------------------------------------------
+
+    async def _enforce_drive_limit(self, mode: OperatingMode):
+        """Bring the rig's RF power setting down to `mode`'s ceiling.
+
+        Never writes while the rig is transmitting. A CAT `L RFPOWER` write
+        landing inside a live transmission changes output power mid-QSO, and
+        the caller that needs this most — the telemetry mode-sync at ~10Hz —
+        has no operator behind it and no idea whether RF is on the line.
+
+        Deferring rather than skipping is deliberate. The mode-sync call site
+        only fires while `_mode != AMP_ON` and sets `_mode` itself, so its
+        condition is false forever afterwards: a plain skip would silently
+        drop the clamp and leave the rig high for the *next* transmission
+        too. The deferred write is retried from _service_pending_drive_limit.
+        """
+        limit = MODE_DRIVE_LIMITS[mode]
+        if self.rig.state.rf_power_pct <= limit:
+            self._clear_pending_drive_limit()
+            return
+
+        if self.is_transmitting():
+            if self._pending_drive_limit != limit:
+                self._pending_drive_limit = limit
+                self._pending_drive_limit_since = time.monotonic()
+                self._pending_drive_limit_warned = False
+                logger.info(
+                    f"RF power clamp to {limit} for {mode.value} deferred — "
+                    f"rig is transmitting (currently {self.rig.state.rf_power_pct})")
+            return
+
+        if await self.rig.set_rf_power(limit):
+            logger.info(f"RF power clamped to {limit} for {mode.value}")
+            self._clear_pending_drive_limit()
+        else:
+            # The write was refused or the link was down. Hold it as pending
+            # so the retry path picks it up rather than losing it here.
+            if self._pending_drive_limit != limit:
+                self._pending_drive_limit = limit
+                self._pending_drive_limit_since = time.monotonic()
+                self._pending_drive_limit_warned = False
+            logger.warning(
+                f"RF power clamp to {limit} for {mode.value} was not accepted "
+                f"by the rig — will retry")
+
+    async def _service_pending_drive_limit(self):
+        """Retry a deferred drive clamp, and complain if it never lands.
+
+        Called from two places on purpose: _on_rig_state (every rig state
+        change, so the falling edge of PTT applies it as soon as the radio
+        says RX) and _on_telemetry (~10Hz off the amp's own serial link,
+        which is independent of rigctld). The second is what stops a missed
+        TX-end or a stuck-true PTT reading from parking the clamp forever —
+        the amp keeps ticking even when the rig link is desynced.
+        """
+        if self._pending_drive_limit is None:
+            return
+        limit = self._pending_drive_limit
+
+        # Already at or below the ceiling — the operator, or an earlier
+        # retry, got there first.
+        if self.rig.state.rf_power_pct <= limit:
+            self._clear_pending_drive_limit()
+            return
+
+        if not self.is_transmitting():
+            if await self.rig.set_rf_power(limit):
+                logger.info(f"Deferred RF power clamp applied: {limit}")
+                self._clear_pending_drive_limit()
+                return
+            logger.warning("Deferred RF power clamp was not accepted by the rig — will retry")
+
+        # Still above the limit. If that has been true for long enough, the
+        # wait itself is the finding: either PTT is reading stuck-true or the
+        # CAT write keeps failing. Warn once per deferral, not once a frame.
+        if (not self._pending_drive_limit_warned
+                and self._mode == OperatingMode.AMP_ON
+                and self._pending_drive_limit_since is not None):
+            elapsed = time.monotonic() - self._pending_drive_limit_since
+            if elapsed >= PENDING_DRIVE_LIMIT_WARN_S:
+                self._pending_drive_limit_warned = True
+                logger.warning(
+                    f"Rig still at {self.rig.state.rf_power_pct} in "
+                    f"{OperatingMode.AMP_ON.value} {elapsed:.0f}s after the "
+                    f"{limit} drive clamp was deferred (TX asserted by: "
+                    f"{', '.join(self.tx_evidence()) or 'nothing'}) — check "
+                    f"for a stuck TX reading or a failing CAT write")
+
+    def _clear_pending_drive_limit(self):
+        self._pending_drive_limit = None
+        self._pending_drive_limit_since = None
+        self._pending_drive_limit_warned = False
+
     async def inhibit_tx(self, reason: str):
         if not self._tx_inhibited:
             self._tx_inhibited = True
@@ -415,18 +852,36 @@ class AcomBridge:
         self.station.rig = rig.to_dict()
 
         # Frequency is frozen in rigctld_client during TX, so this guard is
-        # belt-and-suspenders — but an explicit PTT check prevents an amp
+        # belt-and-suspenders — but an explicit TX check prevents an amp
         # band-select command from going out while RF is live under any
-        # circumstance (e.g. a rapid freq change right at TX start).
-        if not rig.ptt and rig.freq_hz != self._last_freq_hz and rig.freq_hz > 0:
-            self._last_freq_hz = rig.freq_hz
-            await self._handle_freq_change(rig.freq_hz, rig.band)
+        # circumstance (e.g. a rapid freq change right at TX start). It uses
+        # is_transmitting(), not rig.ptt: this is the A1 path, the only
+        # console->relay route, and a rig-only check fails exactly when the
+        # reply stream desyncs.
+        if rig.freq_hz != self._last_freq_hz and rig.freq_hz > 0:
+            if self.is_transmitting():
+                # Don't act on this reading — during TX it can be the split
+                # TX VFO — but don't lose it either, or the amp can be left
+                # on the wrong band. Owe a re-check instead.
+                self._band_recheck_pending = True
+            else:
+                self._last_freq_hz = rig.freq_hz
+                await self._handle_freq_change(rig.freq_hz, rig.band)
 
         if rig.ptt and not self._tx_was_active:
             await self._on_tx_start()
         elif not rig.ptt and self._tx_was_active:
             await self._on_tx_end()
         self._tx_was_active = rig.ptt
+
+        # Any state update that reads RX is an opportunity to land a deferred
+        # clamp — not just the falling edge, so a missed TX-end still clears
+        # it. No-ops when nothing is pending.
+        if not self.is_transmitting():
+            await self._service_pending_drive_limit()
+            await self._service_pending_band_recheck()
+
+        self._note_tx_evidence()
 
         await self._publish()
 
@@ -436,7 +891,10 @@ class AcomBridge:
             return
         self._current_acom_band = new_band
         if new_band is None:
-            logger.warning(f"Frequency {freq_hz} Hz out of ACOM band range")
+            if band_name in DIRECT_TO_RIG_BANDS:
+                logger.debug(f"Band → {band_name}: direct to rig, amp not in RF path")
+            else:
+                logger.warning(f"Frequency {freq_hz} Hz out of ACOM band range")
             return
         # Don't send band select until the amp has fully initialized (first
         # telemetry received). An early ANT_BAND_SELECT command while the ATU
@@ -451,8 +909,7 @@ class AcomBridge:
         # STANDBY (no drive RF for the amp's own F-counter to detect band
         # from) — confirmed on real hardware, despite not being in the
         # documented v1.3 cycle-code list for this sub-command.
-        await self.amp.send(cmd_select_band(new_band))
-        logger.info(f"Band → {band_name}: sent amp band select {new_band.name}")
+        await self._send_band_select(new_band, f"band → {band_name}")
 
     async def _on_tx_start(self):
         logger.info("TX start detected")
@@ -471,17 +928,30 @@ class AcomBridge:
         self.station.dummy_load_remaining_s = 0.0
 
     async def _dummy_load_watchdog(self):
+        """Tracks dummy_load_active/dummy_load_remaining_s for the UI
+        countdown while the dummy load is in use. The actual power/duration
+        safety trip runs at telemetry cadence (~100ms) in _on_telemetry, not
+        here — this loop's own 250ms cadence is fine for a countdown
+        display, but was too slow as the enforcement point (a clean carrier
+        can reach full output well within one 250ms tick)."""
         start = self._dummy_tx_start
         self.station.dummy_load_active = True
         while self._dummy_tx_start == start and self._tx_was_active:
             elapsed = time.monotonic() - start
-            remaining = DUMMY_LOAD_MAX_TX_S - elapsed
-            self.station.dummy_load_remaining_s = max(0.0, remaining)
+            fwd_w = self.station.amp_fwd_w
+
+            # Remaining time before the *current* power level would exceed
+            # the curve's rating — recomputed every tick since power can
+            # change mid-transmission (e.g. during a calibration sweep).
+            # Uses the same margin as the _on_telemetry trip check so the
+            # displayed countdown never disagrees with when TX actually
+            # gets cut.
+            if fwd_w > 0:
+                allowed_duration_s = _dummy_load_curve_duration_s(fwd_w / DUMMY_LOAD_CURVE_MARGIN)
+            else:
+                allowed_duration_s = DUMMY_LOAD_CURVE[-1][0]
+            self.station.dummy_load_remaining_s = max(0.0, allowed_duration_s - elapsed)
             await self._publish()
-            if elapsed >= DUMMY_LOAD_MAX_TX_S:
-                logger.warning("Dummy load 10s limit — inhibiting TX")
-                await self.inhibit_tx("Dummy load 10s limit reached")
-                break
             await asyncio.sleep(0.25)
         self.station.dummy_load_active = False
         self.station.dummy_load_remaining_s = 0.0
@@ -511,13 +981,20 @@ class AcomBridge:
         }
 
     async def _on_telemetry(self, t: AmpTelemetry):
+        self._last_telemetry_at = time.monotonic()
+        # The three fields tx_evidence() reads are published up here, ahead
+        # of everything else in this handler, so the band-sync and drive-clamp
+        # paths below judge TX from THIS frame rather than the previous one.
+        # The rest of the station fields are set further down, where they were.
+        self.station.amp_ptt_active = t.flag_keyin
+        self.station.amp_fwd_w      = t.fwd_power_w
+        self.station.amp_drive_w    = t.input_power_w
         if not self._amp_ready:
             self._amp_ready = True
             logger.info("Amp ready — syncing band to radio")
-            if self._current_acom_band is not None and not self.rig.state.ptt:
-                await self.amp.send(cmd_select_band(self._current_acom_band))
-                logger.info(
-                    f"Deferred band sync: sent band select {self._current_acom_band.name}")
+            if self._current_acom_band is not None:
+                await self._send_band_select(
+                    self._current_acom_band, "amp-ready sync")
             # Request fault codes immediately so ATU status shows in the log.
             # SETTINGS (0x12) is requested unconditionally at the serial layer
             # (acom_serial._connect) so it fires even when telemetry doesn't flow.
@@ -538,9 +1015,7 @@ class AcomBridge:
                     f"Amp mode sync → AMP_ON (detected 0x{t.mode:02X} from telemetry)")
                 self._mode = OperatingMode.AMP_ON
                 self._high_power_confirmed = True
-                new_limit = MODE_DRIVE_LIMITS[OperatingMode.AMP_ON]
-                if self.rig.state.rf_power_pct > new_limit:
-                    await self.rig.set_rf_power(new_limit)
+                await self._enforce_drive_limit(OperatingMode.AMP_ON)
         elif amp_mode_class == 0x50:           # Standby
             self._amp_stdby_frames = min(self._amp_stdby_frames + 1, 10)
             self._amp_opr_frames   = 0
@@ -553,16 +1028,63 @@ class AcomBridge:
             self._amp_opr_frames   = 0
             self._amp_stdby_frames = 0
 
+        # Retried here as well as in _on_rig_state: this runs off the amp's
+        # own serial link at ~10Hz, so it keeps ticking through a rigctld
+        # desync or reconnect that would otherwise stall the rig-side path.
+        await self._service_pending_drive_limit()
+        await self._service_pending_band_recheck()
+
         self.station.amp_mode       = t.mode_name
-        self.station.amp_fwd_w      = t.fwd_power_w
         self.station.amp_refl_w     = t.refl_power_w
         self.station.amp_swr        = t.swr
-        self.station.amp_drive_w    = t.input_power_w
         self.station.amp_temp_c     = t.pam1_temp_c
         self.station.amp_hv_v       = t.hv1_v
         self.station.amp_current_ma = t.id1_ma
-        self.station.amp_ptt_active = t.flag_keyin
         self.station.amp_atu_tuned  = t.flag_atu_tuned
+        # amp_ptt_active / amp_fwd_w / amp_drive_w are set at the top of this
+        # handler — see the note there.
+
+        # Evidence logging only — no hardware, no gating. Placed after the
+        # station fields this frame feeds so tx_evidence() reads this frame
+        # rather than the previous one.
+        self._note_tx_evidence()
+
+        # HV rail cross-check: the mode-sync block above trusts the telemetry
+        # mode byte's class bits alone. If the amp reports an OPR-class mode
+        # byte while the HV rail has actually collapsed during TX — short of
+        # a hard PAM1 HV fault bit firing on the 0x21 message, handled
+        # separately in _on_fault — the console would otherwise keep showing
+        # AMP_ON with the amp contributing nothing. This is additional and
+        # layered on top of, not a replacement for, that fault-bit path.
+        if (self._mode == OperatingMode.AMP_ON and t.flag_keyin
+                and t.hv1_v < HV_COLLAPSE_THRESHOLD_V):
+            self._hv_collapse_frames = min(self._hv_collapse_frames + 1, 10)
+            if self._hv_collapse_frames >= HV_COLLAPSE_FRAMES:
+                await self.inhibit_tx(
+                    f"Amp HV rail collapsed during TX ({t.hv1_v:.1f}V while "
+                    f"mode reports AMP_ON) — amp likely not amplifying")
+        else:
+            self._hv_collapse_frames = 0
+
+        # Dummy load power/duration limit — checked every telemetry frame
+        # (~100ms) rather than on the separate 250ms watchdog poll, since a
+        # clean carrier (e.g. WSJT-X Tune) can reach full output almost
+        # instantly and every extra 100ms of reaction time is real
+        # overshoot. Gated on _dummy_tx_start (set synchronously in
+        # _on_tx_start, before the watchdog task even starts) rather than
+        # station.dummy_load_active, to avoid a race against that task's
+        # own startup. inhibit_tx() no-ops if already inhibited, so this is
+        # safe to evaluate on every frame.
+        if self._dummy_tx_start is not None:
+            elapsed = time.monotonic() - self._dummy_tx_start
+            effective_limit_w = _dummy_load_curve_watts(elapsed) * DUMMY_LOAD_CURVE_MARGIN
+            if t.fwd_power_w > effective_limit_w:
+                logger.warning(
+                    f"Dummy load: {t.fwd_power_w:.0f}W at {elapsed:.1f}s exceeds "
+                    f"allowed {effective_limit_w:.0f}W — inhibiting TX")
+                await self.inhibit_tx(
+                    f"Dummy load power/time limit exceeded "
+                    f"({t.fwd_power_w:.0f}W at {elapsed:.1f}s, limit {effective_limit_w:.0f}W)")
 
         # SWR is purely a passive notification to the operator — never an
         # auto-inhibit. The amp's own firmware-computed fault bits (handled
@@ -587,6 +1109,7 @@ class AcomBridge:
             ts=now, fwd_w=t.fwd_power_w, refl_w=t.refl_power_w,
             swr=t.swr, temp_c=t.pam1_temp_c, drive_w=t.input_power_w,
             current_a=t.id1_ma / 1000.0, is_tx=is_tx,
+            alc=self.rig.state.alc, rf_power_pct=self.rig.state.rf_power_pct,
         )
         self._trend_buffer.append(sample)
         self._duty_samples.append((now, is_tx))
@@ -674,7 +1197,11 @@ class AcomBridge:
         self.station.tx_inhibited      = self._tx_inhibited
         self.station.tx_inhibit_reason = self._tx_inhibit_reason
         self.station.operating_mode    = self._mode.value
-        self.station.drive_limit_w     = MODE_DRIVE_LIMITS[self._mode]
+        self.station.amp_in_path       = (
+            self.station.rig.get("band") not in DIRECT_TO_RIG_BANDS)
+        self.station.drive_limit_w     = (
+            DIRECT_TO_RIG_MAX_W if not self.station.amp_in_path
+            else MODE_DRIVE_LIMITS[self._mode])
         self.station.selected_antenna  = self._selected_antenna
         for cb in self._state_callbacks:
             try:

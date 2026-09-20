@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 CSV_DIR = Path(__file__).resolve().parent.parent / "data" / "trend_logs"
 
-CSV_FIELDS = ["ts_iso", "fwd_w", "refl_w", "swr", "temp_c", "drive_w", "current_a", "is_tx"]
+CSV_FIELDS = ["ts_iso", "fwd_w", "refl_w", "swr", "temp_c", "drive_w", "current_a", "is_tx",
+              "alc", "rf_power_pct"]
 
 
 class TrendCsvLogger:
@@ -62,6 +63,7 @@ class TrendCsvLogger:
                 round(sample.fwd_w, 1), round(sample.refl_w, 1), round(sample.swr, 2),
                 round(sample.temp_c, 1), round(sample.drive_w, 1),
                 round(sample.current_a, 2), 1 if sample.is_tx else 0,
+                round(sample.alc, 3), sample.rf_power_pct,
             ])
             self._file.flush()
         except OSError as e:

@@ -1,0 +1,2588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W7TLG Console — UI v2 style guide</title>
+<!-- GENERATED FILE — do not edit.
+     Source of truth: the V2:BEGIN/V2:END block in dashboard/console.html.
+     Regenerate: ./venv/bin/python ui-redesign/build_styleguide.py -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* V2:BEGIN ═════════════════════════════════════════════════════════════
+   UI v2 design tokens and shared component classes.
+
+   Stage 1 of the redesign (ui-redesign/UI_REDESIGN_HANDOFF.md +
+   SPEC_AMENDMENTS.md, the amendments winning where the two disagree).
+
+   NOTHING in this block is used by the console yet. Every selector is
+   `--v2-`/`.v2-` prefixed and shares no name with an existing rule, so the
+   page renders byte-identically to before this block existed. Later stages
+   switch one block at a time over to these classes.
+
+   Sizes come from the mockup, with one floor: Amendment A says no text may
+   end up smaller than today's, so every font token is >= its present-day
+   counterpart. Each is commented "mockup / today" so the trade is visible
+   at the point of change. Everything scales from --v2-scale; 1rem is 12px
+   here (html carries the 12px, not just body), so rem also works.
+   ══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Scale ──────────────────────────────────────────────────────────
+     One dial for the whole v2 size system. Type and box metrics are
+     calc()'d off it; radii, borders and hairlines are not, because a
+     1.5px border scaled to 1.8px just blurs. */
+  --v2-scale: 1;
+
+  /* ── Type ───────────────────────────────────────────────────────────
+     Today the console has essentially one size (12px) for titles, labels
+     and values alike — DESIGN.md §3 asks for "real separation, timid
+     scales read as mush" and then specifies 12/12. The mockup actually
+     delivers the separation. See the stage 1 report: this supersedes §3's
+     three-size table and DESIGN.md needs updating in stage 7. */
+  --v2-font-hero:   calc(76px * var(--v2-scale));  /* mockup 76 / today 56 (.freq-readout) */
+  --v2-font-title:  calc(14px * var(--v2-scale));  /* mockup 14 / today 12 (.panel h2)     */
+  --v2-font-value:  calc(16px * var(--v2-scale));  /* mockup 15-17 / today 12              */
+  --v2-font-btn:    calc(13px * var(--v2-scale));  /* mockup n/a  / today 12 (.btn)        */
+  --v2-font-pill:   calc(13px * var(--v2-scale));  /* mockup 13   / today 12 (.badge)      */
+  --v2-font-label:  calc(12px * var(--v2-scale));  /* mockup 12   / today 12 (.ctl-label)  */
+  --v2-font-body:   calc(12px * var(--v2-scale));  /* mockup 12   / today 12 (body)        */
+  --v2-font-chip:   calc(18px * var(--v2-scale));  /* mockup 18   / today n/a (RX chip)    */
+
+  --v2-ls-title: 0.2em;    /* mockup 0.2em  / today 0.1em */
+  --v2-ls-label: 0.16em;   /* mockup 0.16em / today 0.1em */
+  --v2-ls-btn:   0.04em;   /* mockup n/a    / today 0.03em */
+  --v2-ls-chip:  0.08em;   /* mockup 0.08em / today n/a   */
+
+  --v2-weight-title: 500;  /* mockup 500 / today 400 */
+  --v2-weight-label: 500;  /* mockup 500 / today 400 */
+  --v2-weight-btn:   600;  /* mockup n/a / today 600 */
+  --v2-weight-pill:  700;  /* mockup 700 / today 600 */
+
+  /* ── Box metrics ────────────────────────────────────────────────────
+     --v2-btn-h is the one number with a real cost: 48px against today's
+     ~29px computed height is +66% of vertical space per button row, and
+     the left column carries 11 band buttons plus session, source, preamp
+     and ATT rows. Terry 2026-09-20: keep 48 for now, revisit in stage 3
+     once the left column's real height is on screen. */
+  /* Recipe G, Terry's decision F1 (2026-09-20), measured in the stage 3
+     plan: the spec's 48px put the left column 36% above today's and the
+     page 16% taller, because BAND alone carries five rows of buttons.
+     44 general / 36 for the band grid lands the page at +6%. Band labels
+     are two or three characters, so 36 is where the air was. Revisit
+     --v2-btn-h after stage 5, when the centre column's own height is
+     known — it is one variable. */
+  --v2-btn-h:        calc(44px * var(--v2-scale));  /* recipe G / mockup 48 / today ~29 */
+  --v2-btn-h-band:   calc(36px * var(--v2-scale));  /* recipe G / mockup 48 / today ~29 */
+  --v2-btn-h-dense:  calc(44px * var(--v2-scale));  /* mockup 44 / today ~27 (.dsp-toggle) */
+  --v2-touch-row:    calc(32px * var(--v2-scale));  /* mockup 32 / today ~22          */
+  --v2-input-h:      calc(32px * var(--v2-scale));  /* mockup n/a / today ~22         */
+
+  --v2-card-pad:       16px;  /* mockup 20 -> 16, Terry 2026-09-20: 20 is off
+                                 DESIGN.md §4's 4/8/16/24/32 scale (today 12 16 16) */
+  --v2-card-gap:       16px;  /* recipe G / today 16 — space between cards   */
+  --v2-grid-gap:        6px;  /* recipe G / today 4 — DESIGN.md §4's within-group step */
+  --v2-title-mb:       12px;  /* recipe G / today 8 — block title to content */
+  --v2-card-pad-tight: 16px;  /* mockup 16 / today 8 8 4 (.scope-group)     */
+  --v2-radius-card:    14px;  /* mockup 14 / today 7  (.section-box)        */
+  --v2-radius-btn:      8px;  /* mockup 8  / today 3  (.btn)                */
+  --v2-radius-pill:     6px;  /* mockup 6  / today 3  (.badge)              */
+  --v2-radius-inset:    6px;  /* mockup 6-8 / today 2-3 (inputs)            */
+  --v2-border-w:      1.5px;  /* mockup 1.5 / today 1 (.btn)                */
+
+  --v2-track-h: 8px;    /* mockup 8  / today native (~4) */
+  --v2-thumb:  22px;    /* mockup 22 / today native (~14) */
+
+  /* ── Color (spec §3 table) ──────────────────────────────────────────
+     Deliberately alongside, never replacing, the DESIGN.md tokens above.
+     Where a v2 color plays a role DESIGN.md already names, the role is
+     noted — the roles are what must stay stable, not the hexes. */
+  --v2-bg-page:   #0b1017;  /* role: --bg-0  #0A0E14 */
+  --v2-bg-chrome: #0d131c;  /* role: --bg-1  #0F141C — top bar, rails, system bar */
+  --v2-bg-card:   #121a25;  /* role: --bg-2-ish; today .section-box has no fill   */
+  --v2-bg-inset:  #0b1017;  /* text inputs, selects                               */
+
+  --v2-border:        #1f2b3b;  /* role: --border #232B38 — card edge, divider */
+  --v2-border-inset:  #2a394d;
+  --v2-border-strong: #FFFFFF;  /* today's .section-box locator border — see report */
+
+  --v2-fg:            #e8edf5;  /* role: --fg-0        #E6EAF0 */
+  --v2-label:         #8794a7;  /* role: --chrome-muted #5C6675 (muted label) */
+  --v2-label-light:   #c3ccda;  /* role: --chrome-label #97A1B0 */
+  --v2-title-fg:      #9aa1e0;  /* role: --chrome-accent #8A93D9 — furniture only,
+                                   DESIGN.md §2.1: never on an interactive control */
+  --v2-readout:       #8cc8ee;  /* role: --data-trace  #67D0F0 — measured values only */
+  --v2-readout-idle:  #6f7b90;
+
+  /* State. DESIGN.md §2.2: amber means SELECTED, everywhere, no
+     exceptions. The spec reuses amber for the SPLIT warning pill, which
+     is a second role for one color — allowed here only because the pill
+     also carries a triangle icon, which is what actually distinguishes
+     it (today's .badge-split does the same thing with a pulse). */
+  --v2-selected:     #f0b04a;  /* role: --state-selected #E8A33D */
+  --v2-selected-bg:  #3a2a10;  /* role: --state-selected-bg #2A2113 */
+  --v2-ok:           #7fd68f;  /* role: --state-ok #4ADE80 */
+  --v2-ok-bg:        #16301f;  /* role: --state-ok-bg #113322 */
+  --v2-ok-border:    #3fae5a;
+  --v2-go-bg:        #10261a;  /* Start button, spec §2.7 */
+  --v2-fault:        #ff7a63;  /* role: --state-fault #F0564A */
+  --v2-fault-bg:     #2a1210;  /* role: --state-fault-bg #3A1210 */
+  --v2-fault-border: #c8442f;
+
+  --v2-btn-bg:        #182131;  /* role: --bg-2 #161C26 */
+  --v2-btn-border:    #26344a;  /* role: --border #232B38 */
+  --v2-btn-fg:        #b3bfcf;  /* role: --chrome-label #97A1B0 */
+  --v2-btn-off-bg:    #111823;  /* disabled */
+  --v2-btn-off-border:#1c2738;
+  --v2-btn-off-fg:    #56627a;
+
+  --v2-track:      #243044;
+  --v2-thumb-bg:   #eef4fa;
+  --v2-notch-fg:   #5d6c82;
+
+  /* DESIGN.md §2.5 — the VFO readout is the primary TX indicator and
+     turns red on transmit. Named here so stage 4 reaches for the right
+     one. The PTT-TX and amp opr-tx badges stay AMBER: a deferred operator
+     decision recorded at the top of this file, and Amendment E4 says
+     DESIGN.md's semantic decisions beat mockup colors. Do not "fix" them
+     during a restyle. */
+  --v2-tx-vfo:   var(--v2-fault);
+  --v2-tx-badge: var(--v2-selected);
+
+  --v2-focus: #f0b04a;
+}
+
+/* ── Focus ────────────────────────────────────────────────────────────
+   The console defines no :focus or outline rule anywhere today — keyboard
+   focus is whatever the browser draws. Spec §3 wants a real one. Scoped
+   to v2 classes so it cannot appear on existing controls this stage. */
+.v2-btn:focus-visible,
+.v2-toggle:focus-visible,
+.v2-input:focus-visible,
+.v2-select:focus-visible,
+.v2-range:focus-visible,
+.v2-check:has(input:focus-visible),
+.v2-focusable:focus-visible {
+  outline: 2px solid var(--v2-focus);
+  outline-offset: 2px;
+}
+
+/* ── Card ─────────────────────────────────────────────────────────────
+   The border is a decision, not a default. Today's .section-box is
+   `2px solid #FFFFFF`, added by explicit operator decision (DESIGN.md
+   §2.4, amended 2026-08-30: this console sits beside RUNlogNG, two
+   terminals and WSJT-X across two monitors, and a region "needs to be
+   locatable by eye without reading labels").
+
+   TERRY'S EXPLICIT DECISION, 2026-09-20, after reviewing the stage 1
+   style guide by eye: v2 cards use the mockup's 1px --v2-border hairline.
+   This SUPERSEDES DESIGN.md §2.4's white-border rule for v2 cards;
+   DESIGN.md itself gets rewritten in stage 7. Do not re-litigate this
+   during a later stage.
+
+   The two variables stay on the rule so the old look is one line away if
+   the hairline turns out to lose the across-monitors locatability that
+   §2.4 was protecting:
+     .v2-card { --v2-card-border-w: 2px;
+                --v2-card-border-c: var(--v2-border-strong); } */
+.v2-card {
+  --v2-card-border-w: 1px;
+  --v2-card-border-c: var(--v2-border);
+  background: var(--v2-bg-card);
+  border: var(--v2-card-border-w) solid var(--v2-card-border-c);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+}
+.v2-card--tight { padding: var(--v2-card-pad-tight); }
+
+/* ── Text ─────────────────────────────────────────────────────────────── */
+.v2-title {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  text-transform: uppercase;
+  text-align: center;
+  margin-bottom: var(--v2-title-mb);
+}
+.v2-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  text-transform: uppercase;
+}
+.v2-label--light { color: var(--v2-label-light); }
+.v2-value {
+  font-size: var(--v2-font-value);
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.v2-value--green   { color: var(--v2-ok); }
+.v2-value--fg      { color: var(--v2-fg); }
+.v2-value--inactive{ color: var(--v2-readout-idle); }
+.v2-value .v2-unit { font-size: var(--v2-font-label); color: var(--v2-label); margin-left: 3px; }
+
+.v2-divider { height: 1px; background: var(--v2-border); margin: 16px 0; border: 0; }
+
+/* ── Button ───────────────────────────────────────────────────────────
+   One element, four states. Selected is amber because amber means
+   selected (DESIGN.md §2.2) — not because this happens to be a mode
+   button. Disabled is a real dim palette rather than today's opacity
+   0.35, so a disabled control keeps its own contrast instead of fading
+   toward the card. */
+.v2-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  line-height: 1.25;
+  text-align: center;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.1s, border-color 0.1s, color 0.1s;
+}
+.v2-btn:hover:not(:disabled):not(.v2-is-disabled) { border-color: var(--v2-label-light); color: var(--v2-fg); }
+.v2-btn.v2-is-selected {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+.v2-btn:disabled, .v2-btn.v2-is-disabled {
+  background: var(--v2-btn-off-bg);
+  border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg);
+  cursor: not-allowed;
+}
+.v2-btn--dense { min-height: var(--v2-btn-h-dense); }
+.v2-btn--go {
+  background: var(--v2-go-bg); border-color: var(--v2-ok-border); color: var(--v2-ok);
+}
+.v2-btn--stop {
+  background: var(--v2-fault-bg); border-color: var(--v2-fault-border); color: var(--v2-fault);
+}
+.v2-btn--go:hover:not(:disabled), .v2-btn--stop:hover:not(:disabled) { color: var(--v2-fg); }
+
+/* ── Toggle chip (NB, DNF, DNR, RF NOTCH…) ───────────────────────────── */
+.v2-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  user-select: none;
+}
+.v2-toggle.v2-is-on {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+.v2-toggle:disabled, .v2-toggle.v2-is-disabled {
+  background: var(--v2-btn-off-bg); border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg); cursor: not-allowed;
+}
+
+/* ── Pill ─────────────────────────────────────────────────────────────── */
+.v2-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 10px;
+  font-size: var(--v2-font-pill);
+  font-weight: var(--v2-weight-pill);
+  border-radius: var(--v2-radius-pill);
+  white-space: nowrap;
+}
+.v2-pill--amber { background: var(--v2-selected-bg); color: var(--v2-selected); }
+.v2-pill--green { background: var(--v2-ok-bg); color: var(--v2-ok); }
+.v2-pill--green-outline {
+  background: var(--v2-go-bg); color: var(--v2-ok);
+  border: 1px solid var(--v2-ok-border); padding: 5px 9px;
+}
+/* Amber again, but the triangle is what carries "warning" — see the
+   --v2-selected comment. Icon is content, not decoration, so it survives
+   a stylesheet failing to load. */
+.v2-pill--warn { background: var(--v2-selected-bg); color: var(--v2-selected); }
+.v2-pill--warn::before { content: '\25B3'; font-size: 1.05em; line-height: 1; }
+
+/* ── Receiver chip (RX1 / RX2) ────────────────────────────────────────
+   Identical styling for both; the label is the only difference, so a
+   screenshot of one side is identifiable (spec §2.2). */
+.v2-rx-chip {
+  display: inline-block;
+  padding: 4px 12px;
+  font-size: var(--v2-font-chip);
+  font-weight: 700;
+  letter-spacing: var(--v2-ls-chip);
+  color: var(--v2-bg-page);
+  background: var(--v2-readout);
+  border-radius: var(--v2-radius-btn);
+}
+
+/* ── Inputs ───────────────────────────────────────────────────────────── */
+.v2-input, .v2-select {
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  /* height, not min-height: Safari gives <select> an intrinsic box from
+     its own metrics and ignores min-height on it, so the two rendered at
+     different heights side by side (Terry, stage 1 review). An explicit
+     height plus box-sizing:border-box makes both engines agree. */
+  height: var(--v2-input-h);
+  box-sizing: border-box;
+  padding: 0 8px;
+  color: var(--v2-fg);
+  background: var(--v2-bg-inset);
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+}
+.v2-input { font-variant-numeric: tabular-nums; }
+/* appearance:none is what lets height apply to a <select> at all in
+   WebKit; the arrow is redrawn as a background chevron since resetting
+   appearance removes the native one. padding-right clears it. */
+.v2-select {
+  -webkit-appearance: none; appearance: none;
+  background-color: var(--v2-btn-bg);
+  background-image: linear-gradient(45deg, transparent 50%, var(--v2-label-light) 50%),
+                    linear-gradient(135deg, var(--v2-label-light) 50%, transparent 50%);
+  background-size: 5px 5px, 5px 5px;
+  background-position: calc(100% - 13px) calc(50% + 1px), calc(100% - 8px) calc(50% + 1px);
+  background-repeat: no-repeat;
+  padding-right: 26px;
+  cursor: pointer;
+}
+.v2-input:disabled, .v2-select:disabled {
+  color: var(--v2-btn-off-fg); border-color: var(--v2-btn-off-border); cursor: not-allowed;
+}
+
+/* ── Checkbox chip ────────────────────────────────────────────────────
+   Checked goes amber for the same reason every other selected thing does.
+   :has() is already relied on elsewhere in this file. */
+.v2-check {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  user-select: none;
+}
+.v2-check input[type=checkbox] { accent-color: var(--v2-selected); width: 15px; height: 15px; margin: 0; cursor: pointer; }
+.v2-check:has(input:checked) { border-color: var(--v2-selected); color: var(--v2-selected); }
+
+/* ── Slider ───────────────────────────────────────────────────────────
+   Built to sit on the EXISTING native range inputs without touching their
+   ids, handlers, or how min/max/value are written (syncFilterRange
+   rewrites min/max from code; state pushes assign .value from code). The
+   fill fraction therefore cannot come from an input event — it is
+   computed from the live value/min/max by the one shared helper at the
+   bottom of this file, which writes --v2-fill. See that helper's comment
+   for the hooks considered and rejected.
+
+   Fill ends under the thumb CENTRE, not at the track end: hence the
+   thumb/2 + (100% - thumb) * fraction geometry (spec §2.2). */
+.v2-slider-row { position: relative; }
+.v2-slider-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; margin-bottom: 6px;
+}
+.v2-range {
+  -webkit-appearance: none; appearance: none;
+  width: 100%;
+  height: var(--v2-thumb);
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  /* --v2-fill is a 0-1 number written by the helper. The 0 here is the
+     fallback for "helper not running yet", so the track renders empty
+     rather than blanking on an invalid calc(). */
+  --v2-fill: 0;
+  --v2-fill-w: calc(var(--v2-thumb) / 2 + (100% - var(--v2-thumb)) * var(--v2-fill));
+}
+.v2-range::-webkit-slider-runnable-track {
+  height: var(--v2-track-h);
+  border-radius: 999px;
+  background:
+    linear-gradient(var(--v2-readout), var(--v2-readout)) 0 0 / var(--v2-fill-w) 100% no-repeat,
+    var(--v2-track);
+}
+.v2-range::-moz-range-track {
+  height: var(--v2-track-h);
+  border-radius: 999px;
+  background:
+    linear-gradient(var(--v2-readout), var(--v2-readout)) 0 0 / var(--v2-fill-w) 100% no-repeat,
+    var(--v2-track);
+}
+.v2-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: var(--v2-thumb); height: var(--v2-thumb);
+  border-radius: 50%;
+  background: var(--v2-thumb-bg);
+  border: 3px solid var(--v2-readout);
+  margin-top: calc((var(--v2-track-h) - var(--v2-thumb)) / 2);
+}
+.v2-range::-moz-range-thumb {
+  width: var(--v2-thumb); height: var(--v2-thumb);
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--v2-thumb-bg);
+  border: 3px solid var(--v2-readout);
+}
+.v2-range:disabled { cursor: not-allowed; }
+.v2-range:disabled::-webkit-slider-thumb { background: var(--v2-btn-off-fg); border-color: var(--v2-btn-off-border); }
+.v2-range:disabled::-moz-range-thumb    { background: var(--v2-btn-off-fg); border-color: var(--v2-btn-off-border); }
+/* Dim the whole row, label and value included — today's
+   `.field-group:has(input:disabled)` established that a gated control has
+   to read as off as a unit, after an operator reported disabled sliders
+   as broken ones. */
+.v2-slider-row:has(.v2-range:disabled) { opacity: 0.4; }
+
+/* Default-value notch. The fraction is authored as data-v2-notch on the
+   input (0-1); the helper copies it to the ROW, because a percentage in
+   background-position resolves against (box - image) and would land in
+   the wrong place, while a percentage in `left` on a child of the row
+   resolves against the row and lands exactly on the same geometry as the
+   fill. input elements cannot carry ::after themselves. */
+.v2-slider-row.v2-has-notch::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--v2-thumb) / 2 + (100% - var(--v2-thumb)) * var(--v2-notch, 0) - 1px);
+  bottom: calc((var(--v2-thumb) - var(--v2-track-h)) / 2 - 3px);
+  width: 2px;
+  height: calc(var(--v2-track-h) + 6px);
+  background: var(--v2-notch-fg);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* ── Stage 2: the right column (TX) ───────────────────────────────────
+   Every selector here is scoped either to #panel-bandamp (the card and
+   title chrome, which is column-wide on purpose) or to one of the five
+   boxes stage 2 restyles — #box-amp, #box-tx-meters, #box-exciter,
+   #box-opmode, #box-fault-status. Nothing outside the right column can be
+   touched, and SSB Audio, which shares this column but is out of scope
+   until stage 3, keeps its own internals.
+
+   That scoping is not just tidiness — most of
+   these elements have their class attribute REWRITTEN WHOLESALE by
+   updateUI(), so a v2 class added in the markup would be wiped on the next
+   state push (~10Hz). The clobbered ones, confirmed by grepping every
+   `.className =` in this file:
+
+     #amp-state-badge   badge.className = badgeClass          (updateAmp)
+     #amp-swr-val       'val ' + good|warn|alert              (updateAmp)
+     #fault-severity    'fault-severity ' + ok|warning|fault  (updateAmp)
+     #mode-AMP_OFF/_ON  'btn' + active|active-amber           (updateUI)
+     #inhibit-banner    'inhibit-banner' + visible            (updateUI)
+
+   So they are restyled through the classes the JS already writes, and
+   their markup is left completely alone. Only four class names were ADDED
+   to right-column markup at all: v2-amp-hero, v2-amp-hero-bar, v2-meter,
+   v2-meter-head, plus v2-slider-row/v2-range on the exciter drive. */
+
+/* Card + title. Applied via .section-box rather than by adding .v2-card to
+   the markup, so the right column picks up the v2 look without a single
+   class change on a box that JS or the collapse persistence knows about. */
+#panel-bandamp .section-box {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  margin-bottom: var(--v2-card-gap);
+}
+#panel-bandamp .section-box h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  margin-bottom: var(--v2-title-mb);
+}
+#box-amp .divider { height: 1px; background: var(--v2-border); }
+
+/* Labels and values. .meter-row/.tx-meter-label already carry the
+   uppercase house style; this only restates size, weight and color.
+
+   Scoped to the five boxes stage 2 restyles, NOT to #panel-bandamp as a
+   whole: SSB Audio also lives in this column and is explicitly out of
+   scope this stage (it moves left in stage 3). A broader selector caught
+   its .ctl-label and .power-value and, at the narrow end of the drag,
+   pushed its TX BW buttons into a vertical stack — a block that was not
+   supposed to change at all. Only the card/title chrome below is
+   deliberately column-wide, so SSB Audio's box does not sit there with the
+   old white border among v2 hairline cards.
+
+   nowrap on both halves of a meter row: at the 200px minimum drag the
+   16px values made DRIVE P / PAM1 T / RADIO PO break across two lines.
+   Amendment A says report rather than shrink, and nothing is shrunk here —
+   the row simply stops wrapping, and the measured widths (stage 2 report)
+   confirm every row still fits at 200px. */
+#box-amp .meter-row span:first-child,
+#box-tx-meters .tx-meter-label,
+#box-exciter .ctl-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+#box-amp .meter-row .val,
+#box-tx-meters .tx-meter-value,
+#box-exciter .power-value {
+  font-size: var(--v2-font-value);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* MeterRow severity — DESIGN.md §6.3 and §2.3 beat the mockup here
+   (Amendment E4). The mockup paints FWD P and its bar a fixed green; that
+   is only what "normal" looks like. The real control keeps the existing
+   three-tier behavior, and green is not in it: --data-trace (measured
+   value) for normal, --state-fault for an alarm band. Green is a STATE
+   color in this palette (§2.2 "connected, healthy, permitted"), and a
+   watts reading is data, not a state. The existing .meter-good/-warn/
+   -alert and .val.good/.warn/.alert rules already do this and are left
+   untouched — nothing below overrides a severity color. */
+#box-amp .meter-bar-wrap {
+  height: 6px;                       /* spec §2.6: 6px rows, 14px hero */
+  border-radius: 999px;
+  background: var(--v2-track);
+  border: 1px solid var(--v2-border);
+  margin: 4px 0 14px;
+}
+#box-amp .meter-bar { border-radius: 999px; }
+
+/* FWD P hero. The row is flipped to a column so the value can be centred
+   and large while staying inside .meter-row (see the markup comment). */
+/* A minimum gap so a label and its value can never touch at the narrow
+   end of the drag. They already could before stage 2 (confirmed against a
+   render of the ui-v2-stage1 tag at 200px), but the larger v2 values make
+   it more likely, so the row now reserves the space explicitly. */
+#box-amp .meter-row { gap: 10px; }
+
+#box-amp .meter-row.v2-amp-hero {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  margin: 6px 0 4px;
+}
+/* The "FWD P" label is redundant next to a 43px number that is obviously
+   the forward power, but it is NOT display:none — that would drop it from
+   the accessibility tree too, leaving the hero as a bare number with no
+   name. Standard visually-hidden instead: still read aloud, still found by
+   in-page search, occupies no space. */
+#box-amp .meter-row.v2-amp-hero > span:first-child {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+/* Container queries, because the thing this must track is the COLUMN's
+   width, not the viewport's — the column is drag-resizable between 200 and
+   560px and the width is persisted. 1cqi is 1% of #box-amp's content box.
+
+   Those are NOT the column widths: the collapse tab and the resize handle
+   are flex siblings of .panel-body, so a 200px column leaves 106px of card
+   content, a 274px column 180px, and a 560px column 466px (all measured,
+   not derived — the first version of this rule was sized off arithmetic
+   that forgot the tab and overflowed the card at the narrow end).
+
+   Floor 22px is still nearly double today's 12px, so Amendment A's "never
+   smaller than today" holds at the narrowest drag; ceiling 60px is the
+   mockup's figure. nowrap because a wrapped power reading is worse than a
+   smaller one, and the clamp is sized so it never has to. */
+#box-amp { container-type: inline-size; }
+#box-amp .meter-row.v2-amp-hero .val {
+  font-size: clamp(22px, 24cqi, 60px);
+  font-weight: 500;
+  line-height: 1.05;
+  text-align: center;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+#box-amp .meter-bar-wrap.v2-amp-hero-bar { height: 14px; margin: 0 0 18px; }
+
+/* Badge row centred under the title. Natural width, not stretched: the
+   flex default of align-items:stretch would pull a one-line pill to the
+   row's full height. The row's own class is never rewritten, but the
+   badges' are (updateAmp assigns badge.className wholesale), so anything
+   targeting a badge is keyed on its id. */
+#box-amp .amp-state-row { justify-content: center; align-items: center; margin-bottom: 4px; }
+#amp-state-badge, #amp-atu-badge { flex: 0 0 auto; }
+
+/* At the narrow end of the drag the v2 value size genuinely does not fit:
+   "DRIVE P" + "12.4 W" needs 132px of the 106px a 200px column leaves.
+   Amendment A says report rather than shrink, and nothing here shrinks
+   below today's — the row simply reverts to TODAY'S metrics (12px value,
+   0.1em label tracking) once the card is too narrow for the v2 ones, which
+   is exactly what fits there now. Above the threshold the v2 sizing
+   applies unchanged. Reported in the stage 2 report. */
+@container (max-width: 170px) {
+  #box-amp .meter-row .val { font-size: var(--v2-font-label); }
+  #box-amp .meter-row span:first-child { letter-spacing: 0.1em; }
+  /* 2px, not the 10px above: measured, "DRIVE P" + a two-digit watts
+     reading needs 104 of the 106px available at the 200px minimum. Today's
+     rows have no gap at all there and very nearly touch, so this is not a
+     regression — it is the same squeeze with 2px of air put back. */
+  #box-amp .meter-row { gap: 2px; }
+  #box-amp .amp-diag-row { gap: 6px; }
+}
+
+/* Amp state pill (OPR/RX). Restyled through the classes updateAmp writes. */
+#box-amp .amp-state-badge {
+  font-size: var(--v2-font-pill);
+  font-weight: var(--v2-weight-pill);
+  padding: 5px 9px;
+  border-radius: var(--v2-radius-pill);
+  background: transparent;
+}
+#box-amp .amp-state-badge.opr-rx { background: var(--v2-go-bg); }
+/* opr-tx stays AMBER, not red. DESIGN.md §2.5 wants TX red everywhere, but
+   the operator chose a VFO-only fix for that pass and deferred these two
+   badges (see the note at the top of this file). Amendment E4: that
+   decision wins. Do not "correct" it during a restyle. */
+#box-amp .amp-state-badge.opr-tx { background: var(--v2-selected-bg); }
+#box-amp .amp-state-badge.disconn { background: var(--v2-fault-bg); }
+#box-amp .amp-diag-label {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+#box-amp .amp-diag-row { gap: 12px; font-size: var(--v2-font-label); }
+
+/* TX METERS — one column of stacked rows, not the old 3-up grid. */
+#box-tx-meters { container-type: inline-size; }
+#box-tx-meters .tx-meters { display: block; margin-bottom: 0; }
+@container (max-width: 170px) {
+  #box-tx-meters .tx-meter-value { font-size: var(--v2-font-label); }
+  #box-tx-meters .tx-meter-label { letter-spacing: 0.1em; }
+}
+#box-tx-meters .v2-meter:last-child .tx-meter-bar-wrap { margin-bottom: 0; }
+#box-tx-meters .v2-meter-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+#box-tx-meters .tx-meter-bar-wrap {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--v2-track);
+  border: 1px solid var(--v2-border);
+  margin: 4px 0 14px;
+}
+#box-tx-meters .tx-meter-bar { border-radius: 999px; }
+
+/* EXCITER DRIVE. The readout is already --state-ok via .power-value-green
+   and the mockup also shows it green, so there is nothing to reconcile.
+   The slider is the shared v2-range; .max is still rewritten at runtime. */
+#box-exciter .power-slider-wrap.v2-slider-row { gap: 12px; }
+#box-exciter .power-slider-wrap.v2-slider-row .v2-range { flex: 1; }
+#box-exciter .power-value-green { color: var(--v2-ok); min-width: 52px; }
+
+/* OPERATING MODE. .active (AMP OFF) and .active-amber (AMP ON) are both
+   written by updateUI; both mean "this is the selected member of the
+   group", so both get the one amber treatment (DESIGN.md §2.2). */
+/* "AMP OFF" wrapped to two lines at the default column width after stage 2
+   — the v2 button's 13px text and 12px side padding needed ~178px of the
+   180px a 274px column leaves, so the grid had nothing to give. nowrap
+   plus 6px side padding brings a pair down to ~154px. Below that the two
+   simply cannot share a row at any padding, so the container query stacks
+   them instead of letting one touch the card edge. Measured widths are in
+   the stage 2 polish report. */
+#box-opmode { container-type: inline-size; }
+#box-opmode .opmode-grid { gap: 8px; margin-bottom: 0; }
+#box-opmode .opmode-grid .btn { white-space: nowrap; }
+@container (max-width: 170px) {
+  #box-opmode .opmode-grid { grid-template-columns: 1fr; }
+}
+#box-opmode .opmode-grid .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 6px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+}
+#box-opmode .opmode-grid .btn.active,
+#box-opmode .opmode-grid .btn.active-amber {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+#box-opmode .opmode-grid .btn:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+
+/* FAULT STATUS. The caret is .section-box.collapsible > h2::before and the
+   collapse state is persisted — both untouched. Only the chip is restyled,
+   through the classes updateAmp writes. */
+/* Centred under its title. #fault-severity, not .fault-severity: updateAmp
+   rewrites the whole class attribute on this element every state push, so
+   the id is the only stable handle. width:fit-content + auto margins
+   rather than text-align on the parent, because the parent also holds the
+   collapsing body. */
+#fault-severity {
+  display: block;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+#box-fault-status .fault-severity {
+  font-size: var(--v2-font-pill);
+  font-weight: var(--v2-weight-pill);
+  padding: 5px 9px;
+  border-radius: var(--v2-radius-pill);
+  margin-bottom: 8px;
+}
+#box-fault-status .btn-critical {
+  border-radius: var(--v2-radius-btn);
+  font-size: var(--v2-font-btn);
+}
+
+/* ── Stage 3a: the tools tray ─────────────────────────────────────────
+   Follows ui-redesign/tray.png. Lives in its own grid row (see the markup
+   comment on #panel-tray for why that is what keeps the canvases still).
+
+   Collapsed height is the strip alone: 44px tabs + 22px padding top and
+   bottom = 88px, per spec §2.7. */
+.panel-tray {
+  grid-area: tray;
+  background: var(--bg-1);
+  padding: 0;
+  min-width: 0;
+}
+.v2-tray-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 20px;
+  min-height: 88px;
+}
+.v2-tray-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+.v2-tray-tabs { display: flex; gap: 8px; flex: 1 1 auto; flex-wrap: wrap; min-width: 0; }
+
+.v2-tray-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 44px;                      /* spec §2.7 */
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  text-transform: uppercase;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.v2-tray-tab[aria-selected="true"] {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+.v2-tray-tab:hover:not([aria-selected="true"]) { border-color: var(--v2-label-light); color: var(--v2-fg); }
+.v2-tray-tab:focus-visible, .v2-tray-toggle:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+
+/* Status dot. Gray when idle, --v2-ok while that tool is running, so a
+   running test is visible even with the tray shut (spec §2.7). Driven by
+   a data attribute on a DEDICATED element — never by a class on something
+   whose class attribute the update path rewrites wholesale. */
+.v2-tray-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--v2-readout-idle);
+  flex: 0 0 auto;
+  transition: background-color 0.15s;
+}
+.v2-tray-dot[data-running="1"] {
+  background: var(--v2-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v2-ok) 25%, transparent);
+}
+
+.v2-tray-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 44px; padding: 0 14px;
+  flex: 0 0 auto;
+  font-family: inherit;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  text-transform: uppercase;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+}
+.v2-tray-toggle:hover { border-color: var(--v2-label-light); color: var(--v2-fg); }
+/* Chevron drawn in CSS rather than as a glyph, so it can rotate with the
+   expanded state instead of swapping a character. */
+.v2-tray-chev {
+  width: 8px; height: 8px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(135deg);
+  transition: transform 0.15s;
+  position: relative; top: 2px;
+}
+.v2-tray-toggle[aria-expanded="true"] .v2-tray-chev { transform: rotate(-45deg); top: 4px; }
+
+.v2-tray-body { padding: 0 20px 20px; }
+.panel-tray.v2-tray-collapsed .v2-tray-body { display: none; }
+
+/* The two panels are .section-box today and keep that class — nothing is
+   removed. Their card chrome is neutralised here instead, because a card
+   inside the tray's own surface would be a box in a box. */
+#tray-body .section-box {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+}
+#tray-body .section-box + .section-box { margin-top: 0; }
+#tray-body .section-box[hidden] { display: none; }
+#tray-body .section-box h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  text-align: left;
+  margin-bottom: 16px;
+}
+/* "RX1" on Measure Noise (Amendment F8): it samples rig.sdr_strength_db,
+   which is specifically RX1's feed, and as a tray tab it would otherwise
+   read as station-wide. */
+.v2-scope-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 7px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-pill);
+  letter-spacing: 0.06em;
+  color: var(--v2-readout);
+  background: var(--v2-btn-bg);
+  border: 1px solid var(--v2-btn-border);
+  border-radius: 4px;
+  text-transform: none;
+}
+/* A/B controls may wrap over several rows; results and summary sit below.
+   Every element is kept — this only lets the rows flow. */
+#tray-body .abt-row { flex-wrap: wrap; }
+#tray-body #abt-results { max-height: 220px; }
+
+/* A/B test panel contents, to tray.png. Pure CSS — no markup change here,
+   so every id, handler and inline behaviour hook is exactly as it was in
+   the left column. The rows flow into one band of controls at a wide
+   window and wrap at a narrow one. */
+#box-abtest .section-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+#box-abtest .abt-row {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+/* Checkbox chips. The markup is <label><input type=checkbox> A1F</label>,
+   which is already the right shape — this only dresses it. Checked goes
+   amber for the same reason every selected thing does (DESIGN.md §2.2). */
+#box-abtest .abt-row label {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  white-space: nowrap;
+}
+#box-abtest .abt-row label:has(input:checked) {
+  border-color: var(--v2-selected); color: var(--v2-selected);
+}
+#box-abtest .abt-row label:has(input:focus-visible) {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+#box-abtest input[type=checkbox] { accent-color: var(--v2-selected); width: 15px; height: 15px; margin: 0; }
+#box-abtest .abt-row > span {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+#box-abtest input[type=number], #box-abtest input[type=text] {
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  height: var(--v2-input-h);
+  box-sizing: border-box;
+  padding: 0 8px;
+  color: var(--v2-fg);
+  background: var(--v2-bg-inset);
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+}
+#box-abtest input[type=number] { width: 68px; }
+/* !important because both carry an inline style="width:56px" sized for
+   the old narrow left column; at 56px the v2 input clips "14.2000" to
+   "14.". Overridden rather than edited out, so the markup move stays
+   provably behaviour-neutral. Same reason as the Start/Stop flex below. */
+#box-abtest #abt-scan-start, #box-abtest #abt-scan-stop { width: 96px !important; }
+#box-abtest input:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* Start / Stop at natural width. The inline style="flex:1" on both buttons
+   is what stretched them across the old narrow column; in a full-width
+   tray that reads as two enormous bars, so it is overridden here rather
+   than edited out of the markup — leaving the markup untouched keeps the
+   move provably behaviour-neutral. */
+#box-abtest .btn-row {
+  display: flex; gap: 8px; margin: 0; flex: 0 0 auto; flex-wrap: nowrap;
+}
+#box-abtest .btn-row .btn, #box-abtest #abt-confirm-btn {
+  flex: 0 0 auto !important;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--v2-touch-row);
+  padding: 0 16px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  border-radius: var(--v2-radius-btn);
+  border-width: var(--v2-border-w);
+}
+#box-abtest .btn.active-green, #box-abtest #abt-confirm-btn {
+  background: var(--v2-go-bg); border-color: var(--v2-ok-border); color: var(--v2-ok);
+}
+#box-abtest .btn.danger {
+  background: var(--v2-fault-bg); border-color: var(--v2-fault-border); color: var(--v2-fault);
+}
+/* STATUS sits with the controls, labelled, instead of being a bare word
+   on its own line (spec §2.7). */
+#box-abtest #abt-status {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0;
+  font-size: var(--v2-font-label);
+  color: var(--v2-fg);
+}
+#box-abtest #abt-status::before {
+  content: 'Status ';
+  color: var(--v2-label);
+  letter-spacing: var(--v2-ls-label);
+  text-transform: uppercase;
+}
+/* Confirm row, summary and results take the full width below the controls
+   — every element kept, just given its own line. */
+#box-abtest #abt-confirm-wrap { flex: 1 0 100%; gap: 12px; }
+#box-abtest #abt-summary, #box-abtest #abt-results { flex: 1 0 100%; margin: 0; }
+#box-abtest #abt-summary:empty, #box-abtest #abt-results:empty { display: none; }
+#box-abtest #abt-manual-ants { flex: 1 1 260px; }
+
+/* Measure Noise panel. */
+#box-noise .field-group { display: flex; align-items: center; gap: 12px; }
+#box-noise #noise-measure-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  padding: 0 16px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  border-radius: var(--v2-radius-btn);
+  border-width: var(--v2-border-w);
+}
+#box-noise #noise-floor-val { font-size: var(--v2-font-label); }
+
+/* ── Stage 3b: the left column (operating) ────────────────────────────
+   Recipe G (Amendment F1), measured in the stage 3 plan: --v2-btn-h 44px,
+   band buttons 36px, title margin 12px, grid gap 6px, card padding 16px,
+   card gap 16px.
+
+   Scoped to the five box ids — #box-session, #box-band, #box-digital,
+   #box-ssb-audio, #box-antenna — for the same reason the right column was:
+   updateUI/updateDSP/updateSessionUI rewrite the WHOLE class attribute on
+   the session buttons, every band button, the preamp and ATT buttons and
+   both dummy-timer elements, so a v2 class added to any of those in the
+   markup would be wiped on the next state push. They are restyled through
+   the classes the JS already writes.
+
+   #session-grid is worse still: updateSessionUI regenerates its innerHTML
+   from a template string. Nothing here depends on markup inside it — only
+   on `#session-grid .btn`, which that template always produces. The
+   template itself is untouched. */
+
+#box-session, #box-band, #box-digital, #box-ssb-audio, #box-antenna {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  margin-bottom: var(--v2-card-gap);
+}
+#box-session h2, #box-band h2, #box-digital h2,
+#box-ssb-audio h2, #box-antenna h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  margin-bottom: var(--v2-title-mb);
+}
+#box-band .divider, #box-digital .divider {
+  height: 1px; background: var(--v2-border); margin: 14px 0;
+}
+/* The VHF/UHF sub-heading is a second h2 inside BAND; it is a sub-heading,
+   not a block title, so it stays smaller than the card's own. */
+#box-band h2 + .band-grid + .divider + h2 { font-size: var(--v2-font-label); margin-bottom: 10px; }
+
+/* Buttons. One rule for every .btn in the column, then the band grid's own
+   shorter height. Selected is amber because amber means selected
+   (DESIGN.md §2.2) — .active and .active-amber are both written by the JS
+   and both mean exactly that. */
+#box-session .btn, #box-band .btn, #box-digital .btn, #box-ssb-audio .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 8px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  line-height: 1.25;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+#box-session .btn.active, #box-band .btn.active, #box-digital .btn.active,
+#box-session .btn.active-amber, #box-band .btn.active-amber, #box-digital .btn.active-amber {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+#box-session .btn:focus-visible, #box-band .btn:focus-visible,
+#box-digital .btn:focus-visible, #box-ssb-audio .btn:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+#box-session .mode-grid, #box-band .band-grid { gap: var(--v2-grid-gap); margin-bottom: 0; }
+#box-band .band-grid:first-of-type { margin-bottom: 0; }
+#box-band .btn { min-height: var(--v2-btn-h-band); }
+/* minmax(0, ...) so a track can never be floored at its label's
+   min-content and push the grid out through the side of the card — the
+   same trap the TX BW row fell into. Below the threshold three band
+   buttons genuinely do not fit on a row, so it drops to two (and the
+   VHF pair to one); the inline grid-template-columns on the VHF row is
+   why that one needs !important. */
+#box-band { container-type: inline-size; }
+#box-band .band-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@container (max-width: 150px) {
+  #box-band .band-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  #box-band .band-grid + .divider + h2 + .band-grid { grid-template-columns: 1fr !important; }
+}
+
+/* SESSION. "FT8 (WSJT-X)" must not wrap (it did, at two lines, before
+   this stage). nowrap above; and because two such buttons genuinely do
+   not fit side by side in a narrow column at any padding, the grid drops
+   to one column below the measured threshold rather than clipping.
+   Measured widths are in the stage 3b report. */
+#box-session { container-type: inline-size; }
+@container (max-width: 236px) {
+  #box-session .mode-grid { grid-template-columns: 1fr; }
+}
+#session-step { font-size: var(--v2-font-label); color: var(--v2-label); margin-top: 8px; }
+
+/* Labels and readouts shared by DIGITAL AUDIO and SSB AUDIO. */
+#box-digital .ctl-label, #box-ssb-audio .ctl-label,
+#box-digital .meter-row span:first-child {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;           /* "DT GAIN" must stay on one line */
+}
+#box-digital .power-value, #box-ssb-audio .power-value {
+  font-size: var(--v2-font-value);
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#box-digital .power-slider-wrap, #box-ssb-audio .power-slider-wrap { gap: 10px; }
+/* flex: 0 0 auto, or the label is the thing flex shrinks: "DT GAIN" came
+   out clipped to "DT GAI" with the slider sitting on top of it, because
+   the inline style="min-width:40px" let it shrink to 40px while nowrap
+   kept the text at its full 64px. */
+#box-digital .power-slider-wrap .ctl-label,
+#box-ssb-audio .power-slider-wrap .ctl-label { flex: 0 0 auto; }
+#box-digital .power-value, #box-ssb-audio .power-value { flex: 0 0 auto; }
+
+/* At the narrow end of the drag a label, a slider and a value cannot share
+   a row: at the 200px minimum the card has 112px and the label alone wants
+   64 of it, which pushed SOURCE, PREAMP and ATT out through the side of
+   the card. Below the threshold each label takes its own line and the
+   controls get the full width. Nothing is shrunk — Amendment A. */
+/* 150px, not 230: the default 288px column leaves 200px of card, where a
+   label, slider and value still share a row comfortably (and the mockup
+   shows them inline). Only the 200px minimum, at 112px of card, genuinely
+   cannot hold them — measured, not guessed. */
+#box-digital { container-type: inline-size; }
+@container (max-width: 150px) {
+  #box-digital .power-slider-wrap,
+  #ft991a-rx-group .meter-row {
+    flex-direction: column; align-items: stretch; gap: 6px;
+  }
+  #box-digital .power-slider-wrap .ctl-label { min-width: 0 !important; }
+  #ft991a-rx-group .meter-row > span:last-child { flex-wrap: wrap; }
+}
+#box-digital .power-slider-wrap.v2-slider-row .v2-range,
+#box-ssb-audio .power-slider-wrap.v2-slider-row .v2-range { flex: 1; }
+
+/* SOURCE RX1/RX2 and the FT-991A RX toggles. */
+#box-digital .dsp-agc-btn, #box-digital .dsp-toggle, #box-ssb-audio .dsp-agc-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+#box-digital .dsp-agc-btn.active, #box-digital .dsp-toggle.active,
+#box-ssb-audio .dsp-agc-btn.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+#box-digital .seg-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--v2-grid-gap); flex: 1; }
+#box-digital .dsp-toggle-row { gap: var(--v2-grid-gap); margin-top: 10px; }
+#box-digital .dsp-toggle-row .dsp-toggle { flex: 1; }
+
+/* The single merged FT-991A RX group (F5). .rx-inert keeps doing exactly
+   what it did — opacity only, never disabled, still clickable. */
+#ft991a-rx-group .amp-diag-label {
+  display: inline-block;
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  border-radius: 4px;
+  padding: 2px 7px;
+  margin-bottom: 10px;
+}
+#ft991a-rx-group .meter-row { gap: 10px; padding: 4px 0; }
+#ft991a-rx-group .meter-row > span:last-child {
+  display: flex; gap: var(--v2-grid-gap); flex-wrap: wrap; justify-content: flex-end; min-width: 0;
+}
+#ft991a-rx-group .btn {
+  min-height: var(--v2-touch-row) !important;   /* dense row, not a 44px control */
+  /* 8px, not 10: at the 288px default the card has 200px, and "PREAMP"
+     plus IPO/A1/A2 at 10px padding wanted 207 — so A2 wrapped onto its
+     own line. 8px brings the row to 191 and it sits on one line. Both
+     !important because each button carries an inline style="padding:2px 5px". */
+  padding: 0 8px !important;
+  font-size: var(--v2-font-label);
+}
+#ft991a-rx-group .meter-row > span:last-child { gap: 4px; }
+
+/* SSB AUDIO — TX BW as one row of three EQUAL-width buttons.
+
+   minmax(0, 1fr), not 1fr: a bare 1fr floors each track at its content's
+   min-content width, and "RAG-CHEW" is much wider than "DX", so the three
+   came out 53/89/39 at the default column width — one row, but not equal.
+   minmax(0, ...) lets the tracks divide the space evenly instead.
+
+   The labels then wrap inside their button rather than being shrunk:
+   "RAG-CHEW" breaks at its hyphen. Amendment A forbids making text
+   smaller than today's, and nothing here does — the button grows instead. */
+#box-ssb-audio { container-type: inline-size; }
+#box-ssb-audio .v2-bw-row .seg-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v2-grid-gap);
+  flex: 1;
+}
+#box-ssb-audio .v2-bw-row .dsp-agc-btn {
+  width: 100%;
+  white-space: normal;
+  line-height: 1.15;
+  padding: 4px 6px;
+  text-align: center;
+}
+/* The label sits ABOVE its buttons at every width, which is what
+   left-column.png shows and what gives the three equal buttons the full
+   card to divide — inline, "TX BW" would eat 50px of it and squeeze
+   RAG-CHEW into two lines at the default column width. */
+#box-ssb-audio .v2-bw-row { flex-direction: column; align-items: stretch; gap: 8px; }
+#box-ssb-audio .v2-bw-row .ctl-label { min-width: 0 !important; }
+/* At the 200px minimum the card has 112px, so three equal columns are
+   30px each and "WIDE" is wider than its own button. Below the threshold
+   they stack to full width instead, where every label fits on one line.
+   Above it — including the 288px default — they stay one row of three. */
+@container (max-width: 150px) {
+  #box-ssb-audio .v2-bw-row .seg-row { grid-template-columns: 1fr; }
+}
+
+/* ANTENNA. The tiles are status indicators, never buttons: the ACOM has no
+   remote "select antenna N" at all, so NEXT ANT is the only actuator
+   (Amendment E1). .ant-indicator already carries pointer-events:none, so
+   no hover can even fire; cursor:default and the absence of any :hover
+   rule here make that visible rather than merely true. They are <div>s
+   with no tabindex, so they are out of the tab order — nothing may add
+   one. */
+#box-antenna .ant-grid { gap: var(--v2-grid-gap); margin-bottom: var(--v2-grid-gap); }
+.v2-tile {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 3px;
+  min-height: calc(var(--v2-btn-h) * 1.45);
+  padding: 8px 6px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  line-height: 1.2;
+  text-align: center;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: default;
+}
+.v2-tile.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+.v2-tile.disabled {
+  background: var(--v2-btn-off-bg); border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg); opacity: 1;
+}
+/* 12px, the same size the alias is today — Amendment A's floor. It is the
+   antenna's real name and the thing actually read at a glance. */
+.v2-tile .ant-alias {
+  font-size: var(--v2-font-label);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: inherit;
+  opacity: 0.85;
+  margin-top: 0;
+}
+#box-antenna .btn:not(.ant-indicator) {          /* NEXT ANT — the one actuator */
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%;
+  min-height: var(--v2-btn-h);
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+#box-antenna .btn:not(.ant-indicator):hover { border-color: var(--v2-label-light); color: var(--v2-fg); }
+#box-antenna .btn:not(.ant-indicator):focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* Dummy-load timer. A safety guard (Amendment E2): it stays inside the
+   ANTENNA card, and its .visible / .critical classes and countdown logic
+   are untouched. Styled by ID because updateUI rewrites the class
+   attribute on both elements on every state push. */
+#dummy-timer-wrap { gap: 8px; margin-top: 10px; }
+#dummy-timer-wrap .muted {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+}
+#dummy-timer { font-size: var(--v2-font-value); }
+
+/* ── Stage 4a: receiver panel top row ─────────────────────────────────
+   Frequency card left, analog meter card right (spec §2.2). Both
+   receivers, identical rules — the only difference is the chip's label,
+   so a screenshot of either side is identifiable.
+
+   #vfo/#vfo2 and every badge have their class attribute rewritten
+   wholesale by updateUI (freq-readout + ' tx' on transmit;
+   'badge badge-ptt-tx' etc.), so everything here is keyed on the classes
+   the JS writes, never on a class added to the markup. */
+/* container-type goes on the PANEL, not on .v2-rx-top: an element cannot
+   answer a container query about itself, so with it on .v2-rx-top the
+   query silently never matched and the cards stayed side by side at every
+   width. */
+.panel-center, .panel-center2 { container-type: inline-size; }
+.v2-rx-top {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+/* Side by side only while the digits still fit at full size. Below that
+   they stack, rather than the readout shrinking — Amendment A. Threshold
+   measured, see the stage 4a report. */
+/* 660px of PANEL CONTENT (the panel's 16px padding is already excluded).
+   Side by side gives the frequency card (container - 16 gap)/2 - 34 of
+   inner width; the digits measure 281px at their full 56px with the
+   narrow separators, so the cards may only sit side by side from about
+   646px of container. 660 leaves ~7px of margin over that. */
+@container (max-width: 660px) {
+  .v2-rx-top { grid-template-columns: 1fr; }
+}
+
+/* Dim, narrow group separators (spec §2.2). inline-flex in a fixed 0.3em
+   box so the glyph is centred in its own gap whatever the font draws. */
+.v2-freq-sep {
+  font-style: normal;
+  color: var(--v2-notch-fg);
+  display: inline-flex;
+  justify-content: center;
+  width: 0.3em;
+  overflow: hidden;
+}
+.v2-freq-card, .v2-meter-card {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  min-width: 0;
+}
+/* Its own container: the readout's clamp()s are in cqi, and without this
+   they resolve against the PANEL, so at a 700px panel the 32px dBFS text
+   was sized for a 668px box while sitting in a 292px card — and ran
+   straight into the S9 CAL field. */
+.v2-meter-card {
+  display: flex; flex-direction: column; gap: 12px;
+  container-type: inline-size;
+}
+.v2-freq-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px;
+}
+
+/* The readout keeps its own size rules; only its alignment changes. */
+.v2-freq-card .freq-readout { text-align: left; }
+.v2-freq-card .vfo-meta { justify-content: flex-start; gap: 6px; margin-top: 12px; }
+/* Badges restyled through the classes updateUI writes. The SPLIT pulse is
+   untouched: .badge-split keeps its own animation rule above. */
+.v2-freq-card .badge {
+  font-size: var(--v2-font-pill);
+  font-weight: var(--v2-weight-pill);
+  padding: 5px 9px;
+  border-radius: var(--v2-radius-pill);
+  letter-spacing: 0.03em;
+}
+
+/* Meter face. Scales with the card: the SVG is width:100% on a fixed
+   viewBox, so every coordinate in it is resolution-independent. */
+.v2-meter-svg {
+  font-family: 'Barlow Semi Condensed', 'Avenir Next Condensed', 'Helvetica Neue', Arial, sans-serif;
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.v2-meter-needle { transition: transform 0.15s ease-out; }
+.v2-meter-peak   { transition: transform 0.12s linear; }
+@media (prefers-reduced-motion: reduce) {
+  .v2-meter-needle, .v2-meter-peak { transition: none; }
+}
+/* The old linear bar still exists and is still updated — only hidden. */
+.v2-meter-card .smeter-bar-wrap { display: none; }
+
+/* The readout must never reflow. A reading growing from "S9" to "S9+10"
+   used to wrap the S label onto its own line, which made the meter card
+   taller and pushed the spectrum and waterfall down until the signal
+   dropped again (Terry, stage 4a). So: no wrapping anywhere, width
+   reserved for the longest strings each field can ever hold, and both
+   lines at a fixed height derived from the font rather than the content.
+
+   Longest possible strings, which is what the ch reservations below are
+   sized for: "-160.0 dBFS" (11ch), "S9+60" (5ch), and the peak line
+   "PEAK -160.0 dBFS S9+60". ch is exact here because the readout is
+   JetBrains Mono with tabular figures. */
+.v2-meter-readout {
+  /* One dial for both lines' type and height, so a font change cannot
+     desynchronise the reserved heights from the text. */
+  --v2-dbfs-fs: clamp(16px, 6cqi, 32px);
+  --v2-s-fs: clamp(16px, 4.6cqi, 26px);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 12px;
+  font-variant-numeric: tabular-nums;
+}
+.v2-meter-live {
+  display: flex; align-items: baseline; gap: 10px;
+  min-width: 0;
+  flex-wrap: nowrap;
+  height: calc(var(--v2-dbfs-fs) * 1.25);
+  overflow: hidden;
+}
+/* Up to 32px (spec §2.2) but never below today's 16px — Amendment A. */
+.v2-meter-live .smeter-dbfs {
+  font-size: var(--v2-dbfs-fs);
+  font-weight: 700;
+  color: var(--v2-readout);
+  margin: 0;
+  white-space: nowrap;
+  min-width: 11ch;              /* "-160.0 dBFS" */
+  flex: 0 0 auto;
+}
+.v2-meter-live .val {
+  font-size: var(--v2-s-fs);
+  font-weight: 700;
+  color: var(--v2-readout);
+  white-space: nowrap;
+  min-width: 5ch;               /* "S9+60" */
+  flex: 0 0 auto;
+}
+.v2-meter-peakrow {
+  grid-column: 1;
+  display: flex; align-items: baseline; gap: 7px;
+  font-size: var(--v2-font-label);
+  line-height: 1.3;
+  height: calc(var(--v2-font-label) * 1.3);
+  color: var(--v2-readout-idle);
+  white-space: nowrap;
+  overflow: hidden;
+}
+#smeter-peak-db, #smeter2-peak-db { min-width: 11ch; }
+#smeter-peak-s, #smeter2-peak-s { min-width: 5ch; }
+.v2-meter-peak-icon { color: #1f80c4; font-size: 0.85em; }
+.v2-meter-peak-label {
+  letter-spacing: var(--v2-ls-label);
+  text-transform: uppercase;
+  color: var(--v2-label);
+}
+#smeter-peak-db, #smeter2-peak-db, #smeter-peak-s, #smeter2-peak-s {
+  color: var(--v2-readout); font-weight: 700;
+}
+/* S9 CAL takes its own row by default. Beside the readout it needs about
+   135px, and at a 700px panel the card has 260px of which the reserved
+   worst-case readout already wants ~190 — so on a narrow card the two
+   cannot share a row at any font size that respects the 16px floor. Its
+   own row is the same at every reading, which is the point. On a wide
+   card it moves back up beside the readout. */
+.v2-s9cal {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 8px;
+  height: var(--v2-input-h);
+}
+@container (min-width: 430px) {
+  .v2-s9cal { grid-row: 1 / span 2; grid-column: 2; }
+}
+.v2-s9cal .ctl-label {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+#s9-cal-input, #s9-cal2-input,
+.v2-s9cal input[type=number] {
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  width: 72px;                  /* fits "-100.0"; #s9-cal-input's legacy
+                                   40px is an ID rule, hence the ID here */
+  height: var(--v2-input-h);
+  box-sizing: border-box;
+  padding: 0 8px;
+  color: var(--v2-fg);
+  background: var(--v2-bg-inset);
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+}
+.v2-s9cal input:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* ── Stage 4b: receiver panel bottom row ──────────────────────────────
+   Gains card left, mode card right (spec §2.2), stacking on a narrow
+   panel exactly like the top row. Both receivers.
+
+   RX1's mode buttons have their whole class attribute reassigned by
+   updateUI's document.querySelectorAll('[data-mode]') sweep, so they are
+   styled through .btn/.active, never by a class added to the markup. */
+.v2-rx-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@container (max-width: 660px) {
+  .v2-rx-bottom { grid-template-columns: 1fr; }
+}
+.v2-gains-card, .v2-mode-card {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  min-width: 0;
+}
+.v2-gains-card {
+  display: flex; flex-direction: column; justify-content: center; gap: 18px;
+}
+.v2-gains-card .v2-slider-head { margin-bottom: 8px; }
+.v2-gains-card .tx-meter-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+/* Value right, blue (spec §2.2). Reserved width so a change from "6 dB
+   atten" to "61 dB atten", or 100% to 1000%, cannot move the label. */
+.v2-gains-card .tx-meter-value {
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+/* The v2 slider needs the native appearance reset; .vol-slider-full stays
+   on these inputs (nothing removed) and would otherwise re-assert
+   accent-color and a margin on top of it. */
+.v2-gains-card .v2-range.vol-slider-full { margin: 0; accent-color: auto; }
+
+.v2-mode-card { display: flex; flex-direction: column; }
+.v2-mode-card .v2-title { margin-bottom: var(--v2-title-mb); }
+.v2-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v2-grid-gap);
+  flex: 1;
+  align-content: center;
+}
+/* Overrides .mode-mini-grid .btn's 10px — that is the smallest text in
+   the console today and Amendment A's floor is "no smaller than today",
+   not "keep today's smallest". 13px here. */
+.v2-mode-grid .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 6px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.v2-mode-grid .btn.active, .v2-mode-grid .btn.active-amber {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+/* RX2's unwired modes: dim, not hidden, so the two grids align. */
+.v2-mode-grid .btn:disabled {
+  background: var(--v2-btn-off-bg);
+  border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg);
+  cursor: not-allowed;
+}
+.v2-mode-grid .btn:hover:not(:disabled):not(.active) {
+  border-color: var(--v2-label-light); color: var(--v2-fg);
+}
+.v2-mode-grid .btn:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* ── Stage 5: scope card and display controls ─────────────────────────
+   Amendment F13: the scope card keeps its INNER PADDING exactly as it is,
+   so the spectrum and waterfall canvases keep today's size to the pixel.
+   Only the chrome changes — the 2px white border becomes the v2 hairline.
+   The padding values below are today's (8px 8px 4px), restated rather
+   than inherited so nothing can quietly re-tune them later. */
+.panel-center .scope-group, .panel-center2 .scope-group {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  /* 9px horizontal, not today's 8px, ON PURPOSE. What F13 protects is the
+     CANVAS size, and the total inset is border + padding: today that is
+     2px + 8px = 10px a side, and the v2 hairline is 1px, so leaving the
+     padding at 8 made the canvases 2px WIDER (measured). 1 + 9 = 10
+     restores them to the pixel. Vertical padding is unchanged because the
+     canvases take their height from fixed CSS, not from this box. */
+  padding: 8px 9px 4px;
+  margin-bottom: var(--v2-card-gap);
+}
+.panel-center .section-box, .panel-center2 .section-box {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  margin-bottom: var(--v2-card-gap);
+}
+.panel-center .section-box h2, .panel-center2 .section-box h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  margin-bottom: var(--v2-title-mb);
+}
+.panel-center .freq-axis, .panel-center2 .freq-axis {
+  font-size: var(--v2-font-label);
+  color: var(--v2-label);
+}
+
+/* Two-column grid of slider fields, then a divider, then the two pickers
+   (spec §2.4). */
+.v2-display-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 20px;
+  align-items: start;
+}
+.v2-display-divider { grid-column: 1 / -1; margin: 2px 0; }
+.v2-display-grid .v2-slider-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 6px;
+}
+.v2-display-grid .ctl-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+/* Readouts keep their exact strings ("15.0 kHz", "-90dB", "50%", "30%");
+   only the type changes. Pushed right, reserved width so a value change
+   cannot shuffle the AUTO checkbox. */
+.v2-display-grid .span-val {
+  margin-left: auto;
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* AUTO sits in GAIN's header (spec §2.4). */
+/* Title row: the block title stays centred in the FULL width (so it does
+   not shift when the chip is there), with AUTO pinned to the right. The
+   chip is allowed to wrap below at narrow widths — flex-wrap plus the
+   title taking the whole line — but can never overlap it. */
+.v2-title-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-bottom: var(--v2-title-mb);
+}
+.v2-title-row h2 { flex: 1 1 auto; margin-bottom: 0 !important; text-align: center; }
+.v2-auto-chip {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-label);
+  text-transform: uppercase;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.v2-auto-chip:has(input:checked) { border-color: var(--v2-selected); color: var(--v2-selected); }
+.v2-auto-chip:has(input:focus-visible) { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+.v2-auto-chip input[type=checkbox] {
+  accent-color: var(--v2-selected); width: 15px; height: 15px; margin: 0; cursor: pointer;
+}
+/* At the narrow end the chip takes its own line under a full-width title
+   rather than squeezing beside it. */
+@container (max-width: 420px) {
+  .v2-title-row h2 { flex: 1 1 100%; }
+  .v2-auto-chip { margin-left: auto; }
+}
+
+/* All four display selects identical, keyed by ID so the legacy
+   `select#palette-select` rule cannot win — the same trap that left RX1's
+   S9 CAL input clipping "-75". RX1's palette select had no arrow and was
+   narrower than RX2's for exactly this reason. */
+#palette-select, #palette2-select, #trace-select, #trace2-select {
+  -webkit-appearance: none; appearance: none;
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  height: var(--v2-input-h);
+  box-sizing: border-box;
+  padding: 0 26px 0 8px;
+  color: var(--v2-fg);
+  background-color: var(--v2-btn-bg);
+  background-image: linear-gradient(45deg, transparent 50%, var(--v2-label-light) 50%),
+                    linear-gradient(135deg, var(--v2-label-light) 50%, transparent 50%);
+  background-size: 5px 5px, 5px 5px;
+  background-position: calc(100% - 13px) calc(50% + 1px), calc(100% - 8px) calc(50% + 1px);
+  background-repeat: no-repeat;
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+  cursor: pointer;
+}
+#palette-select:focus-visible, #palette2-select:focus-visible,
+#trace-select:focus-visible, #trace2-select:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+.v2-display-grid .v2-range { width: 100%; }
+/* The existing dim-the-whole-field mechanism is unchanged: the base rule
+   is `.field-group:has(input:disabled) { opacity: .4 }`, and each slider
+   row carries .field-group, so AUTO dimming GAIN/FLOOR and LNK dimming
+   RX2's SPAN keep working exactly as before. */
+
+.v2-picker { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.v2-picker .v2-select { flex: 1 1 auto; min-width: 0; }
+.v2-grad-strip {
+  flex: 0 0 auto;
+  width: 84px; height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--v2-border-inset);
+}
+.v2-trace-swatch {
+  flex: 0 0 auto;
+  width: 40px; height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--v2-border-inset);
+  background: #67D0F0;
+}
+@container (max-width: 660px) {
+  .v2-display-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Stage 5: tuning, filter / AGC-NR, audio EQ ───────────────────────
+   Buttons here have their class attribute rewritten wholesale by JS —
+   updateFilterWidth writes `'btn' + (which === 'NAR' ? ' active' : '')`
+   on the NARROW/WIDE pair, and setAGC/toggleNR/toggleRfNotch/
+   toggleDabNotch/toggleEQ drive .active by classList — so all of them are
+   styled through those JS-written classes, never by a class added here. */
+.panel-center .row-tuning, .panel-center2 .row-tuning {
+  display: flex;
+  flex-wrap: wrap;                /* RX2's LNK/CPY are clipped today */
+  align-items: center;
+  gap: var(--v2-grid-gap);
+}
+.panel-center .row-tuning .v2-input, .panel-center2 .row-tuning .v2-input {
+  flex: 1 1 190px;
+  min-width: 150px;
+  font-weight: 700;
+}
+.panel-center .row-tuning .btn, .panel-center2 .row-tuning .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+  min-height: var(--v2-btn-h);
+  padding: 0 14px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.panel-center .row-tuning .btn.active, .panel-center2 .row-tuning .btn.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+/* The existing disabled look is an opacity rule keyed on the ids
+   (#freq2-input:disabled, #tune2-btn:disabled, #span2-slider:disabled) —
+   untouched, so LNK still dims exactly what it dimmed before. */
+.panel-center .row-tuning .btn:focus-visible,
+.panel-center2 .row-tuning .btn:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+
+/* FILTER | AGC / NR — one card, two columns, vertical divider. */
+.panel-center .filter-agc-row, .panel-center2 .filter-agc-row {
+  gap: 0;
+  grid-template-columns: 1fr 1px 1fr;
+}
+/* All three cells placed EXPLICITLY. ::before is the first grid item in
+   source order, so giving it grid-column 2 and letting the two divs
+   auto-place put FILTER in column 3 and AGC/NR on the next row — the
+   columns came out swapped and stacked. */
+.panel-center .filter-agc-row > div:first-child,
+.panel-center2 .filter-agc-row > div:first-child {
+  grid-column: 1; grid-row: 1; padding-right: 20px; min-width: 0;
+}
+.panel-center .filter-agc-row::before, .panel-center2 .filter-agc-row::before {
+  content: ''; grid-column: 2; grid-row: 1; background: var(--v2-border);
+}
+.panel-center .filter-agc-row > div:last-child,
+.panel-center2 .filter-agc-row > div:last-child {
+  grid-column: 3; grid-row: 1; padding-left: 20px; min-width: 0;
+}
+.panel-center .filter-agc-row h2, .panel-center2 .filter-agc-row h2 { text-align: center; }
+
+.panel-center .v2-slider-head .ctl-label, .panel-center2 .v2-slider-head .ctl-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+.panel-center .v2-slider-head .power-value,
+.panel-center .v2-slider-head .dsp-val,
+.panel-center2 .v2-slider-head .power-value,
+.panel-center2 .v2-slider-head .dsp-val {
+  margin-left: auto;
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 0;
+}
+.panel-center .filter-agc-row .v2-range, .panel-center2 .filter-agc-row .v2-range { width: 100%; }
+/* The NR slider was 60px wide (.dsp-slider-mini); full width now that it
+   has a label and its own row. */
+.panel-center .dsp-slider-mini, .panel-center2 .dsp-slider-mini { width: 100%; }
+
+.panel-center .dsp-toggle-row, .panel-center2 .dsp-toggle-row { gap: var(--v2-grid-gap); margin-top: 10px; }
+.panel-center .dsp-toggle, .panel-center2 .dsp-toggle,
+.panel-center .dsp-agc-btn, .panel-center2 .dsp-agc-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 1 1 auto;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.panel-center .dsp-toggle.active, .panel-center2 .dsp-toggle.active,
+.panel-center .dsp-agc-btn.active, .panel-center2 .dsp-agc-btn.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+.panel-center .filter-agc-row .btn, .panel-center2 .filter-agc-row .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+}
+.panel-center .filter-agc-row .btn.active, .panel-center2 .filter-agc-row .btn.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+.panel-center .slider-label, .panel-center2 .slider-label {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+
+/* AUDIO EQ — centre-notched sliders, dimmed when EQ is off exactly as
+   before (that dimming is .eq-row:has(.eq-square-btn:not(.active)), left
+   alone). */
+.panel-center .eq-row, .panel-center2 .eq-row { gap: 16px; align-items: center; }
+.panel-center .eq-square-btn, .panel-center2 .eq-square-btn {
+  width: auto; min-width: 52px;
+  height: var(--v2-touch-row);
+  flex: 0 0 auto;
+  font-size: var(--v2-font-btn);
+  border-radius: var(--v2-radius-btn);
+}
+.panel-center .eq-bmt-group, .panel-center2 .eq-bmt-group {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; flex: 1;
+}
+.panel-center .eq-bmt-group .field-group, .panel-center2 .eq-bmt-group .field-group {
+  display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0;
+}
+.panel-center .eq-bmt-group .ctl-label, .panel-center2 .eq-bmt-group .ctl-label {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+}
+.panel-center .eq-bmt-group .dsp-val, .panel-center2 .eq-bmt-group .dsp-val {
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* The ±12 sliders are scaleY(1.5)'d today to be grabbable; the v2 track is
+   already 8px, so that transform would just distort it. */
+.panel-center .eq-bmt-group input[type=range], .panel-center2 .eq-bmt-group input[type=range] {
+  transform: none;
+}
+@container (max-width: 660px) {
+  .panel-center .filter-agc-row, .panel-center2 .filter-agc-row { grid-template-columns: 1fr; }
+  .panel-center .filter-agc-row::before, .panel-center2 .filter-agc-row::before { display: none; }
+  .panel-center .filter-agc-row > div, .panel-center2 .filter-agc-row > div {
+    grid-column: 1; grid-row: auto; padding: 0;
+  }
+  .panel-center .filter-agc-row > div:last-child,
+  .panel-center2 .filter-agc-row > div:last-child { margin-top: 16px; }
+  .panel-center .eq-bmt-group, .panel-center2 .eq-bmt-group { grid-template-columns: 1fr; gap: 12px; }
+}
+
+/* ── Stage 6: the page shell ──────────────────────────────────────────
+   Top bar, system messages bar, collapse tabs and resize handles. CSS
+   only — no markup, no JS, no ids. The status dots are driven by
+   StatusBar.setDot with classList.toggle('on', ...), which preserves
+   other classes, so .dot/.dot.on/.status-item.on are exactly the hooks to
+   style through. */
+
+/* The grid gaps show through as the page's own rules; body and gaps both
+   move to the v2 page colour so the shell matches the cards. */
+html, body { background: var(--v2-bg-page); }
+.console { background: var(--v2-border); }
+
+/* ── Top bar ──────────────────────────────────────────────────────── */
+.panel-status {
+  min-height: 56px;
+  background: var(--v2-bg-chrome);
+  border-bottom: 1px solid var(--v2-border);
+  padding: 0 20px;
+  gap: 18px;
+}
+.panel-status .app-name {
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: 0.22em;
+  color: var(--v2-title-fg);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* Colour is never the only signal: the label is always present, and the
+   text changes colour with the dot (DESIGN.md §1). */
+.panel-status .status-item {
+  font-size: var(--v2-font-label);
+  letter-spacing: 0.08em;
+  color: var(--v2-label);
+  gap: 7px;
+  white-space: nowrap;
+}
+.panel-status .status-item.on { color: var(--v2-ok); }
+.panel-status .dot {
+  width: 9px; height: 9px;
+  margin-right: 0;
+  background: var(--v2-fault);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v2-fault) 18%, transparent);
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+.panel-status .dot.on {
+  background: var(--v2-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v2-ok) 22%, transparent);
+}
+/* Tool links as bordered buttons. The span is the button; the <a> inside
+   keeps its href, target and rel untouched and fills it. */
+.panel-status .nav-link {
+  display: inline-flex; align-items: center;
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: 0.04em;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.panel-status .nav-link:hover { border-color: var(--v2-label-light); color: var(--v2-fg); }
+.panel-status .nav-link a { display: inline-flex; align-items: center; gap: 6px; }
+.panel-status .nav-link:focus-within { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* ── System messages bar ──────────────────────────────────────────── */
+.panel-sysmsgs {
+  min-height: 44px;
+  background: var(--v2-bg-chrome);
+  border-top: 1px solid var(--v2-border);
+  padding: 0 20px;
+  align-items: center;
+}
+.panel-sysmsgs .app-name {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-title-fg);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.panel-sysmsgs .sysmsg-log { font-size: var(--v2-font-label); }
+.panel-sysmsgs .sysmsg-empty, .panel-sysmsgs .sysmsg-item { color: var(--v2-label); }
+/* .sysmsg-item.error / .info keep their own colours — untouched. */
+.panel-sysmsgs .sysmsg-item .ts { color: var(--v2-readout-idle); }
+
+/* ── Rails: collapse tab and resize handle ────────────────────────────
+   Element, ids, drag-resize, double-click reset, persistence and collapse
+   behaviour are all untouched; this is paint plus a wider grab target.
+   The handle goes 6px -> 8px so it can actually be caught with a mouse,
+   which costs the SIDE columns 2px of content and the centre column
+   nothing (its track is 1fr, sized by the grid, not by what sits inside
+   the side panels). */
+.panel-collapse-tab {
+  background: var(--v2-bg-chrome);
+  color: var(--v2-label);
+  font-size: 13px;
+}
+.panel-collapse-tab:hover { background: var(--v2-btn-bg); color: var(--v2-fg); }
+.panel-collapse-tab:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: -2px; }
+.panel-modedsp .panel-collapse-tab { border-left: 1px solid var(--v2-border); }
+.panel-bandamp .panel-collapse-tab { border-right: 1px solid var(--v2-border); }
+.panel-resize-handle {
+  flex: 0 0 8px;
+  background: var(--v2-bg-chrome);
+  position: relative;
+}
+/* A visible grip line, inset so the full 8px stays grabbable. */
+.panel-resize-handle::after {
+  content: '';
+  position: absolute; top: 50%; left: 50%;
+  width: 2px; height: 34px;
+  transform: translate(-50%, -50%);
+  background: var(--v2-border);
+  border-radius: 1px;
+}
+.panel-resize-handle:hover::after, .panel-resize-handle.dragging::after {
+  background: var(--v2-selected);
+}
+.panel-resize-handle:hover, .panel-resize-handle.dragging { background: var(--v2-btn-bg); }
+
+/* V2:END */
+
+/* ── Style-guide page chrome (NOT part of the v2 system) ───────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--v2-bg-page);
+  color: var(--v2-fg);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+body { padding: 32px 40px 80px; }
+h1 { font-size: 20px; font-weight: 500; letter-spacing: 0.12em;
+     text-transform: uppercase; color: var(--v2-title-fg); margin-bottom: 10px; }
+.sg-note { color: var(--v2-label); max-width: 70ch; margin-bottom: 8px; }
+.sg-note code, code { color: var(--v2-readout); }
+.sg-sec { margin-top: 40px; border-top: 1px solid var(--v2-border); padding-top: 18px; }
+.sg-h { font-size: 12px; font-weight: 500; letter-spacing: 0.18em;
+        text-transform: uppercase; color: var(--v2-label-light); margin-bottom: 16px; }
+.sg-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; margin-bottom: 8px; }
+.sg-row--tight { gap: 8px; align-items: center; }
+.sg-stack { display: flex; flex-direction: column; gap: 10px; }
+.sg-kv { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sg-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.sg-freq { font-size: 76px; font-weight: 500; color: var(--v2-fg); line-height: 1; }
+/* The separators are their own 0.3em gap, optically centred in it, and
+   they must not touch the digit either side (Terry, stage 1 review: they
+   sat low and ran into the next digit). inline-flex + justify-content
+   centres the glyph horizontally in the gap regardless of how wide the
+   font draws a full stop; the -0.12em nudge lifts it off the baseline to
+   sit against the digits' optical centre rather than their feet. */
+.sg-freq i { font-style: normal; color: var(--v2-notch-fg);
+             display: inline-flex; justify-content: center; align-items: center;
+             width: 0.3em; overflow: hidden;
+             position: relative; top: -0.12em; }
+</style>
+</head>
+<body>
+<h1>W7TLG Console — UI v2 style guide</h1>
+<p class="sg-note">
+  Generated from the <code>V2:BEGIN … V2:END</code> block in
+  <code>dashboard/console.html</code> by
+  <code>ui-redesign/build_styleguide.py</code>. The CSS below is the real
+  stylesheet, not a copy — edit it in console.html and regenerate.
+  Nothing here is wired to the console; the sliders are live only in the
+  sense that the shared fill helper is driving them.
+</p>
+
+<section class="sg-sec">
+  <h2 class="sg-h">Card + block title + labels and values</h2>
+  <div class="sg-row">
+    <div class="v2-card" style="width:320px">
+      <div class="v2-title">Session</div>
+      <div class="sg-stack">
+        <div class="sg-kv"><span class="v2-label">Field label</span><span class="v2-value">100<span class="v2-unit">%</span></span></div>
+        <div class="sg-kv"><span class="v2-label v2-label--light">Light label</span><span class="v2-value v2-value--green">1200<span class="v2-unit">W</span></span></div>
+        <div class="sg-kv"><span class="v2-label">Inactive</span><span class="v2-value v2-value--inactive">—</span></div>
+        <div class="sg-kv"><span class="v2-label">Primary</span><span class="v2-value v2-value--fg">7.074.000</span></div>
+      </div>
+      <hr class="v2-divider">
+      <div class="v2-label">After a divider</div>
+    </div>
+    <div class="v2-card v2-card--tight" style="width:320px">
+      <div class="v2-title">Tight card</div>
+      <p class="sg-note" style="margin:0">
+        <code>.v2-card--tight</code> — 16px padding, for the spectrum and
+        meter cards.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="sg-sec">
+  <h2 class="sg-h">Buttons</h2>
+  <div class="sg-row">
+    <button class="v2-btn">Off</button>
+    <button class="v2-btn v2-is-selected">Selected</button>
+    <button class="v2-btn" disabled>Disabled</button>
+    <button class="v2-btn v2-btn--go">&#9654; Start</button>
+    <button class="v2-btn v2-btn--stop">&#9632; Stop</button>
+    <button class="v2-btn v2-btn--dense">Dense 44</button>
+    <button class="v2-btn v2-btn--dense v2-is-selected">Dense selected</button>
+  </div>
+  <div class="sg-row sg-row--tight">
+    <span class="sg-note">Tab through these to see the focus ring
+      (2px <code>#f0b04a</code>, 2px offset).</span>
+  </div>
+  <div class="sg-row">
+    <div style="width:320px">
+      <div class="v2-title">Mode</div>
+      <div class="sg-grid3">
+        <button class="v2-btn">USB</button>
+        <button class="v2-btn">LSB</button>
+        <button class="v2-btn" disabled>CW</button>
+        <button class="v2-btn" disabled>AM</button>
+        <button class="v2-btn" disabled>FM</button>
+        <button class="v2-btn v2-is-selected">DATA-U</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sg-sec">
+  <h2 class="sg-h">Toggle chips</h2>
+  <div class="sg-row">
+    <button class="v2-toggle">DNR</button>
+    <button class="v2-toggle v2-is-on">DNR on</button>
+    <button class="v2-toggle" disabled>RF NOTCH</button>
+    <button class="v2-toggle">DAB NOTCH</button>
+  </div>
+</section>
+
+<section class="sg-sec">
+  <h2 class="sg-h">Pills and the receiver chip</h2>
+  <div class="sg-row">
+    <span class="v2-pill v2-pill--amber">40m</span>
+    <span class="v2-pill v2-pill--amber">PKTUSB</span>
+    <span class="v2-pill v2-pill--green">RX</span>
+    <span class="v2-pill v2-pill--green">FT8</span>
+    <span class="v2-pill v2-pill--green">DIGI AUDIO</span>
+    <span class="v2-pill v2-pill--warn">SPLIT</span>
+    <span class="v2-pill v2-pill--green-outline">OPR/RX</span>
+  </div>
+  <div class="sg-row">
+    <span class="v2-rx-chip">RX1</span>
+    <span class="v2-rx-chip">RX2</span>
+  </div>
+</section>
+
+<section class="sg-sec">
+  <h2 class="sg-h">Inputs, selects, checkbox chips</h2>
+  <div class="sg-row">
+    <input class="v2-input" type="text" value="7.074000" style="width:190px">
+    <input class="v2-input" type="number" value="-75" style="width:64px">
+    <input class="v2-input" type="text" value="disabled" disabled style="width:120px">
+    <select class="v2-select">
+      <option>Default</option><option>Linrad</option><option>Grayscale</option>
+      <option>Hot</option><option>GQRX</option>
+    </select>
+    <label class="v2-check"><input type="checkbox"> Manual switching</label>
+    <label class="v2-check"><input type="checkbox" checked> A1F</label>
+    <label class="v2-check"><input type="checkbox" checked> A3R</label>
+    <label class="v2-check"><input type="checkbox"> A4R</label>
+  </div>
+</section>
+
+<section class="sg-sec">
+  <h2 class="sg-h">Sliders</h2>
+  <p class="sg-note">
+    Plain native <code>&lt;input type=range&gt;</code>. The fill is drawn
+    from <code>--v2-fill</code>, which the shared helper recomputes from
+    the live <code>value/min/max</code> every frame — so a slider moved by
+    code, not by hand, fills correctly too. Press the button below to prove
+    it.
+  </p>
+  <div class="sg-row">
+    <div class="v2-card" style="width:420px">
+      <div class="v2-title">Gains</div>
+
+      <div class="v2-slider-row" style="margin-bottom:18px">
+        <div class="v2-slider-head">
+          <span class="v2-label">AF Gain</span>
+          <span class="v2-value" id="sg-af-val">100<span class="v2-unit">%</span></span>
+        </div>
+        <input class="v2-range" type="range" id="sg-af"
+               min="0" max="1000" step="10" value="100" data-v2-notch="0.3162">
+      </div>
+
+      <div class="v2-slider-row">
+        <div class="v2-slider-head">
+          <span class="v2-label">RF Gain</span>
+          <span class="v2-value">6<span class="v2-unit">dB atten</span></span>
+        </div>
+        <input class="v2-range" type="range" min="0" max="6" step="1" value="5">
+      </div>
+    </div>
+
+    <div class="v2-card" style="width:420px">
+      <div class="v2-title">States</div>
+      <div class="v2-slider-row" style="margin-bottom:18px">
+        <div class="v2-slider-head">
+          <span class="v2-label">At zero</span><span class="v2-value">0</span>
+        </div>
+        <input class="v2-range" type="range" min="0" max="100" value="0">
+      </div>
+      <div class="v2-slider-row" style="margin-bottom:18px">
+        <div class="v2-slider-head">
+          <span class="v2-label">At full</span><span class="v2-value">100</span>
+        </div>
+        <input class="v2-range" type="range" min="0" max="100" value="100">
+      </div>
+      <div class="v2-slider-row">
+        <div class="v2-slider-head">
+          <span class="v2-label">Disabled</span><span class="v2-value">50</span>
+        </div>
+        <input class="v2-range" type="range" min="0" max="100" value="50" disabled>
+      </div>
+    </div>
+  </div>
+  <div class="sg-row">
+    <button class="v2-btn" id="sg-drive">Move AF Gain from code</button>
+    <span class="sg-note" id="sg-drive-note">
+      sets <code>.value</code> directly, the way a state push does — no
+      input event fires.
+    </span>
+  </div>
+</section>
+
+<section class="sg-sec">
+  <h2 class="sg-h">Frequency card (assembled)</h2>
+  <div class="sg-row">
+    <div class="v2-card" style="width:438px">
+      <div class="sg-kv" style="margin-bottom:14px">
+        <span class="v2-label">Frequency</span>
+        <span class="v2-rx-chip">RX1</span>
+      </div>
+      <div class="sg-freq">7<i>.</i>074<i>.</i>000</div>
+      <div class="sg-row sg-row--tight" style="margin-top:16px">
+        <span class="v2-pill v2-pill--amber">40m</span>
+        <span class="v2-pill v2-pill--amber">PKTUSB</span>
+        <span class="v2-pill v2-pill--green">RX</span>
+        <span class="v2-pill v2-pill--warn">SPLIT</span>
+        <span class="v2-pill v2-pill--green">FT8</span>
+        <span class="v2-pill v2-pill--green">DIGI AUDIO</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+/* V2:BEGIN — shared v2 slider fill helper.
+
+   Stage 1. Nothing on the page carries .v2-range yet, so this loop finds
+   zero elements and does nothing until a later stage opts a slider in.
+
+   WHY A POLL AND NOT AN EVENT. The v2 slider draws its own fill, so it
+   needs the live fraction (value - min) / (max - min). Every other way of
+   learning that fraction was rejected:
+
+     - an `input`/`change` listener only fires on HUMAN interaction. Half
+       the value changes here come from code — updateUI() writes .value
+       from every state push (AF Gain, RF Gain, DT Gain, exciter drive),
+       and syncFilterRange rewrites .min/.max on every mode change. A
+       listener would leave the fill stale exactly when the radio, not the
+       operator, moved the control.
+     - a MutationObserver on the value/min/max ATTRIBUTES misses the same
+       cases: `el.value = x` sets the IDL property and never touches the
+       attribute, so the observer would not fire at all.
+     - redefining the `value` property on HTMLInputElement.prototype would
+       catch everything, but it is a global monkey-patch of a DOM
+       prototype shared with every other module on this page. This file's
+       whole architecture is "no shared mutable state across modules"; a
+       patched prototype is the worst possible version of that.
+
+   Which leaves reading the DOM. The brief's own suggestion, and the only
+   option that needs no cooperation from the existing setters — the hard
+   requirement, since those setters are load-bearing (two test files
+   assert on their source text verbatim) and are not to be edited.
+
+   Cost is a querySelectorAll over one class plus a string compare per
+   slider per frame, and an early-out when nothing moved, so a frame where
+   no slider changed writes no style and triggers no layout. The page
+   already runs two rAF loops (drawSpectrum, drawSpectrum2); rAF also
+   parks itself when the tab is hidden, which a setInterval would not. */
+(function V2Sliders() {
+
+  // Last-written signature per element, so an unchanged slider costs one
+  // string compare and no style write. WeakMap, not a dataset field:
+  // nothing here should be visible in the DOM or keep a detached node
+  // alive after a later stage re-renders a block.
+  const lastSig = new WeakMap();
+
+  function fractionOf(el) {
+    const min = parseFloat(el.min);
+    const max = parseFloat(el.max);
+    const val = parseFloat(el.value);
+    // syncFilterRange can leave min === max transiently (FM has no filter
+    // range at all), and a bare <input type=range> with no min/max parses
+    // as NaN. Both mean "no meaningful position" — 0, not NaN, which
+    // would poison the calc() and blank the track.
+    if (!isFinite(min) || !isFinite(max) || !isFinite(val) || max <= min) return 0;
+    return Math.min(1, Math.max(0, (val - min) / (max - min)));
+  }
+
+  function tick() {
+    const els = document.querySelectorAll('.v2-range');
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      const frac = fractionOf(el);
+      const notch = el.dataset.v2Notch;
+      // 4 decimals is ~1/3 of a pixel on a 900px track — finer than the
+      // fill can render, coarse enough that float noise doesn't churn.
+      const sig = frac.toFixed(4) + '|' + (notch === undefined ? '' : notch);
+      if (lastSig.get(el) === sig) continue;
+      lastSig.set(el, sig);
+
+      el.style.setProperty('--v2-fill', String(frac));
+
+      // The notch renders on the ROW, not the input — see the CSS comment
+      // on .v2-slider-row.v2-has-notch::after for why it cannot live on
+      // the input itself.
+      const row = el.closest('.v2-slider-row');
+      if (!row) continue;
+      const n = parseFloat(notch);
+      if (isFinite(n)) {
+        row.style.setProperty('--v2-notch', String(Math.min(1, Math.max(0, n))));
+        row.classList.add('v2-has-notch');
+      } else {
+        row.style.removeProperty('--v2-notch');
+        row.classList.remove('v2-has-notch');
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  requestAnimationFrame(tick);
+})();
+/* ── V2METER:BEGIN — pure S-meter math ────────────────────────────────
+   Stateless by construction. Both receivers call these; neither owns
+   them. Every receiver-specific value (calibration, peak, hold clock)
+   stays inside its own module's closure and is passed in and back out,
+   so this file's "no shared mutable state across modules" rule holds —
+   see the header comment on module isolation.
+
+   Extracted and unit-tested by ui-redesign/test_meter_math.js; the
+   V2METER markers are what that script looks for. */
+
+// dBFS -> arc fraction 0..1. Spec §2.2: with calibration `cal` (dBFS at
+// S9), s = 9 + (dBFS - cal)/6. Below S9 the scale is linear in S units
+// over the first 58% of the arc; above it, linear in dB over the last 42%.
+function v2MeterFraction(dbFs, cal) {
+  if (!isFinite(dbFs) || !isFinite(cal)) return 0;
+  const s = 9 + (dbFs - cal) / 6;
+  if (s < 9) {
+    const f = (Math.max(s, 1) - 1) / 8 * 0.58;
+    return Math.max(0, Math.min(1, f));
+  }
+  const over = Math.max(0, dbFs - cal);
+  return Math.max(0, Math.min(1, 0.58 + Math.min(over, 60) / 60 * 0.42));
+}
+
+// Arc fraction -> needle angle in degrees from vertical.
+function v2MeterAngle(frac) {
+  return -38 + 76 * Math.max(0, Math.min(1, frac));
+}
+
+// Peak hold. Pure: takes the previous {db, at} and the live reading, and
+// returns the next one. Timestamps, not frame counts, so the decay rate
+// is the same whatever the frame rate or push cadence.
+//
+// Rules (spec §2.2): a reading at or above the current peak sets the peak
+// and restarts the hold; the peak holds for holdMs; after that it decays
+// at decayDbPerS toward the live level and never falls below it.
+function v2PeakStep(prev, dbFs, nowMs, holdMs, decayDbPerS) {
+  if (!isFinite(dbFs)) return prev;
+  if (holdMs === undefined) holdMs = 6000;
+  if (decayDbPerS === undefined) decayDbPerS = 3;
+  // `at` is when the hold started; `last` is when this was last stepped.
+  if (!prev || !isFinite(prev.db)) return { db: dbFs, at: nowMs, last: nowMs };
+  if (dbFs >= prev.db) return { db: dbFs, at: nowMs, last: nowMs };
+
+  const holdEnd = prev.at + holdMs;
+  if (nowMs <= holdEnd) return { db: prev.db, at: prev.at, last: nowMs };
+
+  // Decay INCREMENTALLY, from the previous step (or the end of the hold,
+  // whichever is later) to now. Decaying prev.db by the whole time since
+  // the hold ended compounds: the value has already fallen once, so a
+  // second call charges it for the same seconds again and the marker
+  // drops at 3 dB/s times the number of calls. Caught by
+  // test_meter_math.js, invisible in a static render.
+  const from = Math.max(prev.last, holdEnd);
+  const decayed = prev.db - decayDbPerS * (Math.max(0, nowMs - from) / 1000);
+  // Never below the live level; once it lands there it tracks it.
+  return { db: Math.max(decayed, dbFs), at: prev.at, last: nowMs };
+}
+/* V2METER:END */
+
+/* ── V2AF:BEGIN — pure AF GAIN taper ──────────────────────────────────
+   The slider is a POSITION 0..1000, not a percentage. A linear 0-1000%
+   slider puts the useful range in its first tenth; a square taper puts
+   100% about a third of the way along, which is where the notch is.
+   Stateless; unit-tested by ui-redesign/test_af_taper.js. */
+const V2_AF_POS_MAX = 1000;
+const V2_AF_GAIN_MAX = 1000;   // percent
+
+function v2AfPosToGain(pos) {
+  const x = Math.max(0, Math.min(1, parseFloat(pos) / V2_AF_POS_MAX));
+  return V2_AF_GAIN_MAX * x * x;
+}
+function v2AfGainToPos(gainPct) {
+  const g = Math.max(0, Math.min(V2_AF_GAIN_MAX, parseFloat(gainPct)));
+  return V2_AF_POS_MAX * Math.sqrt(g / V2_AF_GAIN_MAX);
+}
+/* V2AF:END */
+
+/* ── V2TRACE:BEGIN — spectrum trace colours and palette previews ──────
+   Pure and stateless; each receiver holds its own selection in its own
+   closure. Amendment F12: "ice" is today's exact look and is the default,
+   NOT the mockup's lighter "Ice blue".
+
+   DESIGN.md §2.2 tension, recorded not resolved: amber here is a TRACE
+   colour the operator picked for a measured waterfall, while §2.2 gives
+   amber one meaning, "this option is the selected choice in its group".
+   Nothing on this palette is a control, so nothing can be misread as
+   selected — but it is a second use of the hue and stage 7 should say so
+   explicitly rather than leave it implied. Not changed. */
+const V2_TRACE_COLOURS = {
+  ice:     '#67D0F0',   // today's --data-trace, the default (F12)
+  cyan:    '#4fd8e8',
+  green:   '#6fe08a',
+  amber:   '#f0b04a',
+  magenta: '#e06fd0',
+  white:   '#e8edf5',
+};
+const V2_TRACE_FILL_ALPHA = 0.25;   // today's fill alpha, unchanged
+
+function v2TraceColour(name) {
+  return V2_TRACE_COLOURS[name] || V2_TRACE_COLOURS.ice;
+}
+function v2TraceFill(name) {
+  const hex = v2TraceColour(name);
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + V2_TRACE_FILL_ALPHA + ')';
+}
+
+// A CSS linear-gradient built from a palette's own [pos,r,g,b] stops, so
+// the preview strip cannot drift from what the waterfall actually paints.
+function v2PaletteGradient(stops) {
+  if (!stops || !stops.length) return 'none';
+  const parts = stops.map(st =>
+    'rgb(' + Math.round(st[1]) + ',' + Math.round(st[2]) + ',' + Math.round(st[3]) + ') '
+    + (st[0] * 100).toFixed(2) + '%');
+  return 'linear-gradient(to right, ' + parts.join(', ') + ')';
+}
+/* V2TRACE:END */
+
+/* ── V2WHEEL:BEGIN — the slider wheel guard ───────────────────────────
+   Amendment F18, superseding F14. The wheel adjusts every slider again
+   with no modifier: Terry uses it for precision and Shift-only made that
+   impossible. The accident it has to prevent is the original one — AVG
+   drifting to 39% because the pointer happened to be over a slider while
+   the page was being scrolled.
+
+   So the gate is REST, not a key. A wheel event only adjusts when the
+   pointer has settled: not during or just after a page scroll, and not in
+   the instant after the pointer arrives on the control. Deliberate use —
+   point at a slider, pause, roll — always passes. Scrolling the page past
+   a slider never does.
+
+   Pure so it can be tested directly; the timestamps are kept by the two
+   listeners installed below. */
+const V2_WHEEL_AFTER_SCROLL_MS = 250;   // page was just scrolling
+const V2_WHEEL_AFTER_ENTER_MS = 120;    // pointer just arrived
+
+function v2WheelShouldAdjust(nowMs, lastPageScrollMs, enteredMs) {
+  if (isFinite(lastPageScrollMs) && nowMs - lastPageScrollMs < V2_WHEEL_AFTER_SCROLL_MS) return false;
+  if (isFinite(enteredMs) && nowMs - enteredMs < V2_WHEEL_AFTER_ENTER_MS) return false;
+  return true;
+}
+
+/* The two clocks the guard reads. Installed once, at load, and they look
+   up no element — which is what lets this whole block sit before the
+   module IIFEs (the placement lesson from stage 5). Capturing scroll
+   listener so it sees scrolls on any container, not just the document. */
+let _v2LastPageScroll = -Infinity;
+let _v2EnteredEl = null;
+let _v2EnteredAt = -Infinity;
+
+document.addEventListener('scroll', () => { _v2LastPageScroll = performance.now(); },
+                          { capture: true, passive: true });
+document.addEventListener('mouseover', (e) => {
+  const el = e.target;
+  if (!el || el.tagName !== 'INPUT' || el.type !== 'range') return;
+  if (el !== _v2EnteredEl) { _v2EnteredEl = el; _v2EnteredAt = performance.now(); }
+}, { capture: true, passive: true });
+
+// What every wheel handler calls. Keeps the two clocks private.
+function v2WheelAllowed(el) {
+  const now = performance.now();
+  const entered = (el === _v2EnteredEl) ? _v2EnteredAt : -Infinity;
+  return v2WheelShouldAdjust(now, _v2LastPageScroll, entered);
+}
+/* V2WHEEL:END */
+
+// Frequency readout markup: the group separators are dim and narrower
+// than a digit (spec §2.2), which needs them wrapped rather than styled
+// as plain text. Pure and stateless. Input is machine-generated digits,
+// dots and spaces; anything else is escaped rather than trusted.
+function v2FreqMarkup(str) {
+  let out = '';
+  for (const ch of String(str)) {
+    if (ch === '.') out += '<i class="v2-freq-sep">.</i>';
+    else if (ch >= '0' && ch <= '9') out += ch;
+    else if (ch === ' ') out += ' ';
+    else out += ch.replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  return out;
+}
+
+/* V2:END */
+</script>
+<script>
+// Styleguide-only. Proves the fill helper catches a programmatic write:
+// this assigns .value the way updateUI() does on a state push, fires no
+// input event, and the fill still follows.
+(function () {
+  var btn = document.getElementById('sg-drive');
+  var el = document.getElementById('sg-af');
+  var out = document.getElementById('sg-af-val');
+  var steps = [0, 100, 250, 500, 1000, 100];
+  var i = 0;
+  btn.addEventListener('click', function () {
+    var v = steps[i++ % steps.length];
+    el.value = v;                       // no dispatchEvent, deliberately
+    out.innerHTML = v + '<span class="v2-unit">%</span>';
+  });
+})();
+</script>
+</body>
+</html>

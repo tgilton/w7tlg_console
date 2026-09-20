@@ -16,6 +16,7 @@ Endpoints:
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,13 +26,18 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from amplifier.acom_bridge import AcomBridge, OperatingMode, StationState
+from amplifier.acom_bridge import AcomBridge, ANTENNAS, OperatingMode, StationState
 from amplifier.acom_serial import AcomSerial, find_acom_port
 from amplifier.antenna_ab_test import AntennaAbTest
+from amplifier.tx_power_calibration import TxPowerCalibration
 from amplifier.trend_csv_logger import TrendCsvLogger
 from config.station_profile import station_profile
-from rig.rigctld_client import RigctldClient, RigState
+from rig.rigctld_client import (
+    RigctldClient, is_valid_hw_frequency, is_valid_hw_mode,
+    note_ptt_reply_value)
 from sdr.sdr_client import SdrClient
+from session.session_manager import SessionManager
+from session.session_profiles import PROFILES
 from wsjtx.udp_listener import wsjtx_listener
 from wsjtx.protocol import Status as WsjtxStatus, LoggedAdif
 from wsjtx.qso_logger import qso_telemetry_logger
@@ -50,6 +56,22 @@ RIGCTLD_PORT  = 4532
 # ACOM_PORT     = "/dev/cu.usbserial-A9V19CH7"
 ACOM_PORT = "/dev/cu.usbserial-A92518IM"
 ACOM_BAUD     = 9600
+
+
+def resolve_acom_port() -> Optional[str]:
+    """Prefer the configured ACOM_PORT, but fall back to auto-discovery
+    when it no longer exists — e.g. after a macOS USB-serial
+    re-enumeration changes the /dev/cu.usbserial-* path. Previously this
+    was `ACOM_PORT or find_acom_port()`, which never actually fell back
+    since ACOM_PORT is always a non-empty string."""
+    if ACOM_PORT and os.path.exists(ACOM_PORT):
+        return ACOM_PORT
+    if ACOM_PORT:
+        logger.warning(
+            f"Configured ACOM_PORT {ACOM_PORT} not found — "
+            f"attempting auto-discovery.")
+    return find_acom_port()
+
 
 # ---------------------------------------------------------------------------
 # WebSocket connection manager
@@ -163,9 +185,25 @@ class AudioConnectionManager:
 manager = ConnectionManager()
 spectrum_manager = SpectrumConnectionManager()
 audio_manager = AudioConnectionManager()
+# Channel B (Tuner 2 / Antenna 2) gets its own connection managers — kept
+# fully separate from Channel A's rather than multiplexed onto the same
+# WS connections, matching how SdrClient itself keeps Channel B's
+# publish path isolated (see project memory on the RSPduo migration).
+spectrum_manager_b = SpectrumConnectionManager()
+audio_manager_b = AudioConnectionManager()
+# RX0 diversity combine (dashboard/diversity.html) — audio only, no
+# spectrum of its own. See sdr/combiner.py.
+audio_manager_0 = AudioConnectionManager()
+spectrum_manager_0 = SpectrumConnectionManager()
+# See subscribe_fine_spectrum/unsubscribe_fine_spectrum in handle_ws_command —
+# ref-counts real demand for AudioDemodulator.fine_spectrum_enabled instead of
+# it running unconditionally.
+_fine_spectrum_subscribers: set[WebSocket] = set()
 bridge: Optional[AcomBridge] = None
 sdr: Optional[SdrClient] = None
 ab_test: Optional[AntennaAbTest] = None
+tx_cal: Optional[TxPowerCalibration] = None
+session_manager: Optional[SessionManager] = None
 claude_advisor: Optional["ClaudeAdvisor"] = None
 trend_csv = TrendCsvLogger()
 
@@ -174,6 +212,12 @@ trend_csv = TrendCsvLogger()
 # dashboard — see trend_csv_logger.py docstring.
 _MONITOR_HEARTBEAT_TIMEOUT_S = 10.0
 _last_monitor_heartbeat: float = 0.0
+
+# Which channel currently feeds the single BlackHole digital-audio cable —
+# tracked here rather than inferred from AudioDemodulator's private
+# callback list (see set_digital_source). Defaults to "A", matching the
+# fixed subscription every session started with before source-select existed.
+_digital_source_channel: str = "A"
 
 
 async def _monitor_liveness_watcher():
@@ -188,6 +232,14 @@ async def _monitor_liveness_watcher():
 
 async def on_ab_test_status(status: dict):
     await manager.broadcast({"type": "ab_test_status", "data": status})
+
+
+async def on_tx_cal_status(status: dict):
+    await manager.broadcast({"type": "tx_cal_status", "data": status})
+
+
+async def on_session_status(status: dict):
+    await manager.broadcast({"type": "session_status", "data": status})
 
 
 async def _propagation_poll_loop():
@@ -227,6 +279,12 @@ async def _propagation_poll_loop():
         await asyncio.sleep(180.0)
 
 
+# Port aliases for display — sourced from acom_bridge.ANTENNAS (the same
+# config that drives the A4R dummy-load TX cutoff) so the console never
+# carries a second, driftable copy of these names.
+ANTENNA_NAMES = {a.number: a.name for a in ANTENNAS.values()}
+
+
 def build_state_payload(state: StationState) -> dict:
     data = state.to_dict()
     data["rig"] = dict(data["rig"])   # copy — to_dict() hands back the live StationState.rig dict by reference
@@ -246,6 +304,62 @@ def build_state_payload(state: StationState) -> dict:
         data["rig"]["sdr_nr_atten_limit_db"] = sdr.audio.nr_atten_limit_db
         data["rig"]["digital_audio_available"] = sdr.digital_audio.available
         data["rig"]["digital_audio_active"] = sdr.digital_audio.active
+        data["rig"]["digital_source_channel"] = _digital_source_channel
+        # Diagnostic (Terry 2026-09-12: "RX2 selected as source and no
+        # sound getting to WSJT-X" — browser audio confirmed flowing fine,
+        # narrowing down whether the BlackHole callback registration or
+        # the actual device write is the gap).
+        data["rig"]["digital_audio_registered_a"] = \
+            sdr.digital_audio.on_audio_frame in sdr.audio._audio_callbacks
+        data["rig"]["digital_audio_registered_b"] = \
+            sdr.digital_audio.on_audio_frame in sdr.audio_b._audio_callbacks
+        data["rig"]["digital_audio_qsize"] = sdr.digital_audio._q.qsize()
+        data["rig"]["sdr_antenna"] = sdr.antenna_label
+        data["rig"]["sdr_rf_gain_pct"] = sdr.rf_gain_pct
+        data["rig"]["sdr_rf_notch_enabled"] = sdr.rf_notch_enabled
+        data["rig"]["sdr_dab_notch_enabled"] = sdr.dab_notch_enabled
+        # Phase 0 dual-tuner proof-of-life — Channel B (Tuner 2 / Antenna 2)
+        # has no pipeline of its own yet, just a liveness check, so this is
+        # the only way to confirm Dual Tuner mode actually worked without
+        # grepping logs. See project memory on preferring live telemetry.
+        data["rig"]["sdr_channel_b_alive"] = sdr.channel_b_alive
+        # Channel B's own state — parallel to the Channel A fields above,
+        # but sourced entirely from sdr.audio_b/sdr.*_b since Channel B has
+        # no rig/CAT counterpart. sdr_target_freq_hz_b/mode_b/bandwidth_hz_b
+        # are Channel B's own "dial frequency" — Channel A gets this from
+        # rig.freq_hz/rig.mode (CAT ground truth), Channel B has none, so
+        # its own AudioDemodulator's target is the ground truth instead.
+        data["rig"]["sdr_rf_freq_hz_b"] = sdr.rf_freq_hz_b
+        data["rig"]["sdr_rf_gain_pct_b"] = sdr.rf_gain_pct_b
+        data["rig"]["sdr_rf_notch_enabled_b"] = sdr.rf_notch_enabled_b
+        data["rig"]["sdr_dab_notch_enabled_b"] = sdr.dab_notch_enabled_b
+        data["rig"]["sdr_antenna_b"] = sdr.antenna_label_b
+        data["rig"]["sdr_target_freq_hz_b"] = sdr.audio_b.target.freq_hz
+        data["rig"]["sdr_mode_b"] = sdr.audio_b.target.mode
+        data["rig"]["sdr_bandwidth_hz_b"] = sdr.audio_b.target.bandwidth_hz
+        data["rig"]["sdr_rx_volume_b"] = sdr.audio_b.manual_gain
+        data["rig"]["sdr_agc_mode_b"] = sdr.audio_b.agc_mode
+        data["rig"]["sdr_eq_enabled_b"] = sdr.audio_b.eq_enabled
+        data["rig"]["sdr_eq_bass_db_b"] = sdr.audio_b.eq_bass_db
+        data["rig"]["sdr_eq_mid_db_b"] = sdr.audio_b.eq_mid_db
+        data["rig"]["sdr_eq_treble_db_b"] = sdr.audio_b.eq_treble_db
+        data["rig"]["sdr_nr_enabled_b"] = sdr.audio_b.nr_enabled
+        data["rig"]["sdr_nr_atten_limit_db_b"] = sdr.audio_b.nr_atten_limit_db
+        # Diversity pane's phase-rotate experiment — see set_phase_offset.
+        data["rig"]["sdr_phase_offset_deg"] = sdr.audio.phase_offset_deg
+        data["rig"]["sdr_phase_offset_deg_b"] = sdr.audio_b.phase_offset_deg
+        # Diversity pane's phase-coherence scope — see SdrClient.iq_phase_diff_deg.
+        data["rig"]["iq_phase_diff_deg"] = sdr.iq_phase_diff_deg()
+        # Diversity pane's RX0 combine — see sdr/combiner.py.
+        data["rig"]["combine_enabled"] = sdr.combiner.enabled
+        data["rig"]["combine_gain"] = sdr.combiner.gain
+        data["rig"]["combine_phase_deg"] = sdr.combiner.phase_deg
+        data["rig"]["combine_sample_delay"] = sdr.combiner.sample_delay
+        data["rig"]["combine_level_dbfs"] = sdr.combiner.level_dbfs
+        data["rig"]["combine_dropped_a"] = sdr.combiner.dropped_count_a
+        data["rig"]["combine_dropped_b"] = sdr.combiner.dropped_count_b
+        data["rig"]["combine_qsize_a"] = sdr.combiner._q_a.qsize()
+        data["rig"]["combine_qsize_b"] = sdr.combiner._q_b.qsize()
         if not data["rig"].get("ptt", False):
             freq_hz = data["rig"].get("freq_hz")
             if freq_hz:
@@ -253,7 +367,16 @@ def build_state_payload(state: StationState) -> dict:
                 db_fs = sdr.passband_strength_db(float(freq_hz), float(bandwidth_hz))
                 if db_fs is not None:
                     data["rig"]["sdr_strength_db"] = db_fs
+            # target_freq_hz starts None until something sends
+            # set_audio_target for channel B (no frontend does yet) — same
+            # reason Channel A's block above guards on freq_hz being set.
+            if sdr.audio_b.target.freq_hz is not None:
+                db_fs_b = sdr.passband_strength_db_b(
+                    sdr.audio_b.target.freq_hz, sdr.audio_b.target.bandwidth_hz)
+                if db_fs_b is not None:
+                    data["rig"]["sdr_strength_db_b"] = db_fs_b
     data["station_profile"] = station_profile.to_dict()
+    data["antenna_names"] = ANTENNA_NAMES
     return data
 
 
@@ -266,11 +389,22 @@ async def on_station_state(state: StationState):
             sdr.gate_tx()
         elif not ptt:
             sdr.audio.tx_active = False
+            # gate_tx() sets both audio.tx_active and audio_b.tx_active as a
+            # side effect on the rising edge (AudioDemodulator.gate_tx), but
+            # nothing was clearing Channel B's back to False here — it would
+            # go permanently silent after the first TX. Mirror the Channel A
+            # line above.
+            sdr.audio_b.tx_active = False
+            sdr.combiner.tx_active = False
     await manager.broadcast({"type": "state", "data": build_state_payload(state)})
 
 
 async def on_spectrum_frame(frame: dict):
     await spectrum_manager.broadcast_frame(frame)
+
+
+async def on_spectrum_frame_b(frame: dict):
+    await spectrum_manager_b.broadcast_frame(frame)
 
 
 async def on_spot_alert(alert: SpotAlert):
@@ -313,11 +447,88 @@ async def on_audio_frame(audio_bytes: bytes):
     await audio_manager.broadcast_audio(audio_bytes)
 
 
-_last_is_digital = False
+async def on_audio_frame_b(audio_bytes: bytes):
+    if sdr is not None and sdr.audio_b.tx_active:
+        return
+    await audio_manager_b.broadcast_audio(audio_bytes)
 
-# How often the fast PTT watchdog polls rigctld (ms).  5ms gives ~2.5ms
-# average detection lag, comfortably ahead of the bridge's 100ms ACOM poll.
-_FAST_PTT_POLL_MS  = 5
+
+async def on_audio_frame_0(audio_bytes: bytes):
+    # RX0 diversity combine — see sdr/combiner.py.
+    if sdr is not None and sdr.combiner.tx_active:
+        return
+    await audio_manager_0.broadcast_audio(audio_bytes)
+
+
+async def on_spectrum_frame_0(frame: dict):
+    await spectrum_manager_0.broadcast_frame(frame)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """Read a boolean env var, falling back to `default` for anything not
+    clearly one or the other. A typo must not silently disable a safety-
+    adjacent feature, so only explicit off-words turn something off."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    val = raw.strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return True
+    if val in ("0", "false", "no", "off"):
+        return False
+    logger.warning(
+        f"{name}={raw!r} is not a yes/no value — using default "
+        f"({'on' if default else 'off'})")
+    return default
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read an integer env var, falling back to `default` for anything
+    unparseable or outside [minimum, maximum]."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        val = int(raw.strip())
+    except (ValueError, AttributeError):
+        logger.warning(f"{name}={raw!r} is not a number — using default ({default})")
+        return default
+    if not (minimum <= val <= maximum):
+        logger.warning(
+            f"{name}={val} is outside {minimum}-{maximum} — using default ({default})")
+        return default
+    return val
+
+
+# Whether to run the fast PTT watchdog at all. ON by default — it is what
+# silences the SDR audio at TX start, and the reason it exists is a real
+# recorded failure (commit c5f2ee2: mic PTT gives no software notice, and
+# the 100ms bridge poll let the high-AGC-gain output blast through).
+#
+# It is a switch rather than a deletion because its cost is also real and
+# not yet measured: it writes `t` to rigctld every _FAST_PTT_POLL_MS on its
+# own connection, and IMPLEMENTATION_PLAN_U2.md findings G and J name that
+# request rate as a suspect in the reply-stream desync. Turning it off for
+# one session and comparing the log is how that gets settled.
+#
+# NOTHING SAFETY-RELATED DEPENDS ON THIS. See TX_GATING_AUDIT.md section 6:
+# every element here is audio hygiene. The amp/relay guards run off
+# AcomBridge.is_transmitting() and the rig poll loop, neither of which this
+# task feeds. With it off, TX audio muting falls back to the 100ms bridge
+# poll path (on_station_state), which is what the console did before
+# c5f2ee2 — later, not absent.
+FAST_PTT_MONITOR_ENABLED = _env_flag("FAST_PTT_MONITOR", True)
+
+# How often the fast PTT watchdog polls rigctld (ms). 5ms was chosen for
+# ~2.5ms average detection lag, comfortably ahead of the bridge's 100ms ACOM
+# poll — but see TX_GATING_AUDIT.md: rigctld's daemon-level response cache
+# (RIGCTLD_DAEMON_CACHE_MS = 50) lives on the shared RIG object inside
+# rigctld, not per-connection, so if it covers `t` then replies here can be
+# up to 50ms stale and the real lag is bounded by the cache, not by this
+# interval. Raising this costs little in that case and cuts the request rate
+# proportionally, which is the cheaper half of the finding-G experiment.
+_FAST_PTT_POLL_MS  = _env_int("FAST_PTT_POLL_MS", 5, minimum=1, maximum=1000)
+
 # How long to hold the TX gate after PTT drops — covers antenna relay
 # bounce and IQ pipeline drain on TX→RX return.
 _POST_TX_HOLD_S    = 0.15
@@ -355,6 +566,17 @@ async def _fast_ptt_monitor():
                 await asyncio.sleep(_FAST_PTT_POLL_MS / 1000)
                 continue
 
+            # NOTE (TX_GATING_AUDIT.md section 2.2), deliberately not fixed
+            # here: hamlib also returns 2 (RIG_PTT_ON_MIC) and 3
+            # (RIG_PTT_ON_DATA), and rig/rigctld_client.py's parse_ptt_reply
+            # accepts 0-3 for exactly that reason. This compares against '1'
+            # alone, so the two readers of the same signal use different
+            # grammars: if this rig ever reports 2 for mic PTT, the fast gate
+            # would silently never fire for voice TX — the case it was
+            # written for. It demonstrably does fire today, so hamlib returns
+            # 1 on at least the observed path; whether that holds for mic PTT
+            # versus CAT PTT is unverified and is a one-line hardware check.
+            note_ptt_reply_value(decoded, "fast PTT monitor")
             ptt = decoded == '1'
 
             if ptt and not last_ptt:
@@ -398,6 +620,8 @@ async def _fast_ptt_monitor():
                 if not ptt:
                     if sdr is not None and sdr.available:
                         sdr.audio.tx_active = False
+                        sdr.audio_b.tx_active = False   # see on_station_state's matching fix
+                        sdr.combiner.tx_active = False
                     logger.debug("Fast PTT: TX gate closed")
 
             last_ptt = ptt
@@ -415,24 +639,73 @@ async def _fast_ptt_monitor():
         await asyncio.sleep(_FAST_PTT_POLL_MS / 1000)
 
 
-async def on_rig_state_for_audio_mode(rig_state: RigState):
-    """Drives the SDR audio chain's voice/digital profile off the rig's own
-    mode (DATA-U etc.) — separate from AcomBridge's own rig-state callback,
-    since this is purely an SDR-audio concern, not a safety interlock."""
+_last_is_digital = False
+
+
+async def on_session_status_for_audio_mode(status: dict):
+    """Drives BOTH channels' audio-profile voice/digital toggle (AGC/NR/
+    EQ/passband — AudioDemodulator.enter_digital_mode()/exit_digital_mode())
+    off the operator's one selected SESSION (SSB vs FT8/JS8Call), not off
+    RX1's live rig CAT mode.
+
+    Used to be split: RX1 followed rig_state.is_digital directly (an
+    on_rig_state_for_audio_mode callback on the rig itself) while RX2
+    piggybacked on that same edge. That meant manually toggling RX1's raw
+    MODE button (e.g. back to plain USB for a quick voice check) silently
+    flipped RX2's profile too, even though RX2 has no CAT radio and no
+    concept of "the rig's mode" at all (Terry 2026-09-11: RX2 audio went
+    weak/noise-like purely from toggling RX1's mode, RX2 itself untouched).
+    Terry: "there is no real use case for having them in different modes...
+    ONE session mode selection for the whole console... determines the
+    state of the RXs" — so both channels now follow the single session
+    choice uniformly, and neither reacts to a bare CAT mode edit that
+    didn't go through an actual session switch.
+
+    This does NOT touch either channel's own USB/LSB sideband selection
+    (AudioDemodulator.mode) — RX2 keeps that fully independent so it can
+    listen to a different band/sideband than RX1 while sharing the same
+    voice/digital profile (Terry: run SSB on 20m from RX1 while RX2
+    listens to 40m LSB)."""
     global _last_is_digital
     if sdr is None or not sdr.available:
         return
-    # Belt-and-suspenders guard: mode is already frozen during TX in
-    # rigctld_client, but the first poll cycle where PTT goes active can
-    # still race. Never switch the audio chain based on a mid-TX mode reading.
-    if rig_state.ptt:
-        return
-    is_digital = bool(rig_state.is_digital)
+    session_id = status.get("current_session_id")
+    profile = PROFILES.get(session_id) if session_id else None
+    is_digital = bool(profile and profile.rig_mode.startswith("PKT"))
     if is_digital and not _last_is_digital:
         sdr.audio.enter_digital_mode()
+        sdr.audio_b.enter_digital_mode()
     elif not is_digital and _last_is_digital:
         sdr.audio.exit_digital_mode()
+        sdr.audio_b.exit_digital_mode()
     _last_is_digital = is_digital
+
+
+def seed_channel_b_audio_target(sdr_client) -> None:
+    """Give Channel B's AudioDemodulator a real, non-None target the
+    instant the SDR comes up, instead of leaving it at the constructor
+    default (AudioTarget(freq_hz=None, ...), see sdr/audio_demod.py) until
+    something sends set_audio_target. feed() silently drops every sample
+    while target.freq_hz is None.
+
+    Channel A doesn't need this: the operator's own speaker-unmute click
+    (sendAudioTargetFromRig in console.html) reliably forces a real target
+    early. Channel B has no equivalent guaranteed-early trigger — its
+    first set_audio_target depended entirely on the client's cold-start
+    Link bootstrap (applyRx1ToRx2/linkBootstrapApplied2) winning a race
+    against RX1's own view finishing initialization, which it could lose,
+    leaving RX2 silent to WSJT-X until the operator happened to click
+    something in its panel (e.g. its own USB mode button) that called
+    setAudioTarget().
+
+    rf_freq_hz_b is a plain constructor-time attribute (never reassigned
+    to None anywhere in SdrClient), so it's always real by the time this
+    runs right after `await sdr.start()` — no need to wait for a first
+    RF-frequency callback. The client's own Link bootstrap still runs
+    afterward as normal and immediately retargets to RX1's actual
+    frequency/mode; this just removes the dead-silence window before that
+    happens."""
+    sdr_client.audio_b.set_target(sdr_client.rf_freq_hz_b, "USB", 3000.0)
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +714,7 @@ async def on_rig_state_for_audio_mode(rig_state: RigState):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bridge, sdr, ab_test, claude_advisor
+    global bridge, sdr, ab_test, tx_cal, session_manager, claude_advisor
     logger.info("Starting W7TLG Console...")
 
     # Tighter than the original 0.5s — the panadapter's rig-frequency marker
@@ -449,12 +722,12 @@ async def lifespan(app: FastAPI):
     # like a series of jumps rather than smooth motion.
     rig = RigctldClient(host=RIGCTLD_HOST, port=RIGCTLD_PORT, poll_interval=0.1)
 
-    acom_port = ACOM_PORT or find_acom_port()
+    acom_port = resolve_acom_port()
     if not acom_port:
         logger.warning("No ACOM serial port found — amp features disabled.")
         acom_port = "/dev/null"
 
-    amp = AcomSerial(port=acom_port, baud=ACOM_BAUD)
+    amp = AcomSerial(port=acom_port, baud=ACOM_BAUD, port_resolver=resolve_acom_port)
     bridge = AcomBridge(rig=rig, amp=amp)
     bridge.on_state_change(on_station_state)
     bridge.on_trend_sample(trend_csv.log)
@@ -475,15 +748,39 @@ async def lifespan(app: FastAPI):
     sdr = SdrClient(rf_freq_hz=initial_freq_hz) if initial_freq_hz else SdrClient()
     sdr.on_spectrum(on_spectrum_frame)
     sdr.audio.on_audio(on_audio_frame)
+    # Channel B (Tuner 2 / Antenna 2) has no rig/CAT counterpart to follow
+    # — it's an independent SDR-only VFO, so it just starts wherever
+    # Channel A did (rf_freq_hz_b defaults to rf_freq_hz in SdrClient) and
+    # the operator retunes it from its own panadapter.
+    sdr.on_spectrum_b(on_spectrum_frame_b)
+    sdr.audio_b.on_audio(on_audio_frame_b)
+    sdr.combiner.on_audio(on_audio_frame_0)
+    sdr.combiner.on_spectrum(on_spectrum_frame_0)
     await sdr.start()
     if not sdr.available:
         logger.warning("SDR unavailable — panadapter features disabled.")
-    rig.on_state_change(on_rig_state_for_audio_mode)
-    asyncio.create_task(_fast_ptt_monitor())
+    else:
+        seed_channel_b_audio_target(sdr)
+    if FAST_PTT_MONITOR_ENABLED:
+        asyncio.create_task(_fast_ptt_monitor())
+        logger.info(
+            f"Fast PTT monitor: ON, polling every {_FAST_PTT_POLL_MS}ms")
+    else:
+        logger.info(
+            "Fast PTT monitor: OFF (FAST_PTT_MONITOR) — TX audio muting falls "
+            "back to the 100ms bridge poll. Amp/relay safety guards are "
+            "unaffected; they do not use this task.")
     asyncio.create_task(_monitor_liveness_watcher())
 
     ab_test = AntennaAbTest(bridge=bridge, sdr=sdr)
     ab_test.on_status(on_ab_test_status)
+
+    tx_cal = TxPowerCalibration(bridge=bridge)
+    tx_cal.on_status(on_tx_cal_status)
+
+    session_manager = SessionManager(bridge=bridge, sdr=sdr, wsjtx_listener=wsjtx_listener)
+    session_manager.on_status(on_session_status)
+    session_manager.on_status(on_session_status_for_audio_mode)
 
     # WSJT-X UDP listener — passive third listener on the same multicast
     # group RUMLogNG/GridTracker2 already use (224.0.0.1:2237, lo0). See
@@ -492,6 +789,10 @@ async def lifespan(app: FastAPI):
     # rest of the console — it's a nice-to-have data feed, not part of
     # rig/amp safety paths.
     wsjtx_listener.on_status(on_wsjtx_status)
+    # Additive registration — on_status() supports multiple callbacks —
+    # gives SessionManager its own liveness clock rather than reusing
+    # wsjtx_listener.connected (sticky/naive, see session_manager.py).
+    wsjtx_listener.on_status(session_manager.on_wsjtx_status)
     wsjtx_listener.on_logged_adif(qso_telemetry_logger.on_logged_adif)
     # Award tracker reads WSJT-X's local ADIF log — re-read it after every
     # newly logged QSO so "missing states" reflects what was just worked,
@@ -786,10 +1087,17 @@ async def websocket_endpoint(websocket: WebSocket):
             await handle_ws_command(text, websocket)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        if websocket in _fine_spectrum_subscribers:
+            _fine_spectrum_subscribers.discard(websocket)
+            if not _fine_spectrum_subscribers and sdr is not None and sdr.available:
+                sdr.audio.fine_spectrum_enabled = False
+                sdr.audio_b.fine_spectrum_enabled = False
 
 
 async def handle_ws_command(text: str, ws: WebSocket):
     if bridge is None:
+        await ws.send_text(json.dumps({
+            "type": "error", "message": "Bridge not initialized"}))
         return
     try:
         msg = json.loads(text)
@@ -804,15 +1112,26 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 "ok": ok, "message": reply}))
 
         elif cmd == "set_frequency":
-            ok = await bridge.rig.set_frequency(int(msg["freq_hz"]))
-            await ws.send_text(json.dumps({
-                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+            freq_hz = int(msg["freq_hz"])
+            if not is_valid_hw_frequency(freq_hz):
+                await ws.send_text(json.dumps({
+                    "type": "cmd_response", "cmd": cmd, "ok": False,
+                    "error": f"{freq_hz} Hz is outside the rig's tunable range"}))
+            else:
+                ok = await bridge.rig.set_frequency(freq_hz)
+                await ws.send_text(json.dumps({
+                    "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
         elif cmd == "set_mode":
-            ok = await bridge.rig.set_mode(
-                msg["mode"], int(msg.get("passband", 0)))
-            await ws.send_text(json.dumps({
-                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+            mode = msg["mode"]
+            if not is_valid_hw_mode(mode):
+                await ws.send_text(json.dumps({
+                    "type": "cmd_response", "cmd": cmd, "ok": False,
+                    "error": f"'{mode}' is not a mode this rig supports"}))
+            else:
+                ok = await bridge.rig.set_mode(mode, int(msg.get("passband", 0)))
+                await ws.send_text(json.dumps({
+                    "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
         elif cmd == "set_rf_power":
             requested = int(msg["pct"])
@@ -825,6 +1144,12 @@ async def handle_ws_command(text: str, ws: WebSocket):
         elif cmd == "set_preamp":
             level = int(msg["level"])
             ok = await bridge.rig.set_preamp(level)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_att":
+            db = int(msg["db"])
+            ok = await bridge.rig.set_att(db)
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
@@ -851,28 +1176,104 @@ async def handle_ws_command(text: str, ws: WebSocket):
             # audio purposes since the SDR, not the radio, is the receiver).
             # Optional level (1-15, matching the UI slider) sets the
             # attenuation limit — higher = more aggressive suppression.
+            # channel:"B" routes to Channel B's own AudioDemodulator instead
+            # of Channel A's — same pattern used by every SDR-audio command
+            # below, since these are all purely SDR-side (no rig involved)
+            # and Channel B has its own independent AudioDemodulator.
             ok = False
             if sdr is not None and sdr.available:
+                audio = sdr.audio_b if msg.get("channel") == "B" else sdr.audio
                 if "on" in msg:
-                    sdr.audio.nr_enabled = bool(msg["on"])
+                    audio.nr_enabled = bool(msg["on"])
                 if "level" in msg:
                     level = max(1, min(15, int(msg["level"])))
-                    sdr.audio.nr_atten_limit_db = 6.0 + (level - 1) / 14.0 * 34.0
+                    audio.nr_atten_limit_db = 6.0 + (level - 1) / 14.0 * 34.0
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
+        elif cmd == "set_phase_offset":
+            # Diversity phase-rotate experiment (dashboard/diversity.html)
+            # — a manual static phase shift on one channel's baseband, so
+            # the operator can turn it while listening for a null/
+            # reinforcement against the other channel in the stereo mix.
+            # See AudioDemodulator.phase_offset_deg.
+            ok = False
+            if sdr is not None and sdr.available:
+                audio = sdr.audio_b if msg.get("channel") == "B" else sdr.audio
+                audio.phase_offset_deg = float(msg["deg"]) % 360.0
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_combine_enabled":
+            # RX0 diversity combine (dashboard/diversity.html) — costs
+            # real CPU (a third full downmix/decimate/filter pipeline), so
+            # off until the Diversity page actually asks for it. See
+            # sdr/combiner.py.
+            ok = False
+            if sdr is not None and sdr.available:
+                sdr.combiner.enabled = bool(msg["enabled"])
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_combine_weight":
+            # z = gain * e^(j*phase_deg), applied to RX2 before RX0 = RX1 - z*RX2.
+            ok = False
+            if sdr is not None and sdr.available:
+                if "gain" in msg:
+                    sdr.combiner.gain = max(0.0, float(msg["gain"]))
+                if "phase_deg" in msg:
+                    sdr.combiner.phase_deg = float(msg["phase_deg"]) % 360.0
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "calibrate_combine":
+            # One-shot (not adaptive — see sdr/combiner.py's own docstring):
+            # cross-correlates recent RX1/RX2 baseband to find and store the
+            # actual integer sample delay between the two channels'
+            # independent processing threads, needed for a clean null.
+            delay = None
+            if sdr is not None and sdr.available:
+                delay = sdr.combiner.calibrate()
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": delay is not None,
+                "sample_delay": delay}))
+
+        elif cmd == "subscribe_fine_spectrum":
+            # The diversity page's own RX1/RX2 spectrum panels — see
+            # AudioDemodulator.fine_spectrum_enabled. Ref-counted across
+            # possibly-multiple diversity tabs; _fine_spectrum_subscribers
+            # cleaned up automatically on disconnect below.
+            _fine_spectrum_subscribers.add(ws)
+            if sdr is not None and sdr.available:
+                sdr.audio.fine_spectrum_enabled = True
+                sdr.audio_b.fine_spectrum_enabled = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": True}))
+
+        elif cmd == "unsubscribe_fine_spectrum":
+            _fine_spectrum_subscribers.discard(ws)
+            if not _fine_spectrum_subscribers and sdr is not None and sdr.available:
+                sdr.audio.fine_spectrum_enabled = False
+                sdr.audio_b.fine_spectrum_enabled = False
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": True}))
+
         elif cmd == "set_eq":
             ok = False
             if sdr is not None and sdr.available:
+                audio = sdr.audio_b if msg.get("channel") == "B" else sdr.audio
                 if "enabled" in msg:
-                    sdr.audio.eq_enabled = bool(msg["enabled"])
+                    audio.eq_enabled = bool(msg["enabled"])
                 if "bass_db" in msg:
-                    sdr.audio.eq_bass_db = max(-12.0, min(12.0, float(msg["bass_db"])))
+                    audio.eq_bass_db = max(-12.0, min(12.0, float(msg["bass_db"])))
                 if "mid_db" in msg:
-                    sdr.audio.eq_mid_db = max(-12.0, min(12.0, float(msg["mid_db"])))
+                    audio.eq_mid_db = max(-12.0, min(12.0, float(msg["mid_db"])))
                 if "treble_db" in msg:
-                    sdr.audio.eq_treble_db = max(-12.0, min(12.0, float(msg["treble_db"])))
+                    audio.eq_treble_db = max(-12.0, min(12.0, float(msg["treble_db"])))
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
@@ -902,19 +1303,58 @@ async def handle_ws_command(text: str, ws: WebSocket):
 
         elif cmd == "set_agc":
             value = int(msg["value"])
-            ok = await bridge.rig.set_agc(value)
+            channel = msg.get("channel", "A")
+            # Channel B has no rig/CAT counterpart — the rig AGC call only
+            # applies to Channel A. See set_audio_nr above for the general
+            # channel-routing pattern used throughout this block.
+            ok = True if channel == "B" else await bridge.rig.set_agc(value)
             # Also drives the SDR audio chain's auto-leveling speed — the
             # radio's own CAT-commanded AGC has no audible effect, since the
             # RSPdx-R2 (not the radio's receiver) is what's actually heard.
             if sdr is not None and sdr.available:
-                sdr.audio.agc_mode = {0: "off", 2: "fast", 3: "slow"}.get(value, "slow")
+                audio = sdr.audio_b if channel == "B" else sdr.audio
+                audio.agc_mode = {0: "off", 2: "fast", 3: "slow"}.get(value, "slow")
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
 
         elif cmd == "set_rx_volume":
             ok = False
             if sdr is not None and sdr.available:
-                sdr.audio.manual_gain = max(0.0, min(10.0, float(msg["gain"])))
+                audio = sdr.audio_b if msg.get("channel") == "B" else sdr.audio
+                audio.manual_gain = max(0.0, min(10.0, float(msg["gain"])))
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_rf_gain":
+            ok = False
+            if sdr is not None and sdr.available:
+                if msg.get("channel") == "B":
+                    sdr.set_rf_gain_pct_b(float(msg["pct"]))
+                else:
+                    sdr.set_rf_gain_pct(float(msg["pct"]))
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_rf_notch":
+            ok = False
+            if sdr is not None and sdr.available:
+                if msg.get("channel") == "B":
+                    sdr.set_rf_notch_b(bool(msg["enabled"]))
+                else:
+                    sdr.set_rf_notch(bool(msg["enabled"]))
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_dab_notch":
+            ok = False
+            if sdr is not None and sdr.available:
+                if msg.get("channel") == "B":
+                    sdr.set_dab_notch_b(bool(msg["enabled"]))
+                else:
+                    sdr.set_dab_notch(bool(msg["enabled"]))
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
@@ -942,19 +1382,38 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 "type": "trend_data", **trend}))
 
         elif cmd == "set_panadapter_freq":
+            # Channel A's frequency is normally rig-CAT-driven (radio is
+            # ground truth — see project memory on the panadapter tuning
+            # model); this command is the manual-override path. Channel B
+            # has no rig at all, so for it this IS the only way to tune —
+            # not an override of anything. Tier A (T1) still applies to
+            # both: reuse the rig's hardware-range bound as the sanity
+            # check here too, since this console's SDR channels only ever
+            # tune within the same amateur-adjacent spectrum the rig covers.
             ok = False
-            if sdr is not None and sdr.available:
-                sdr.set_center_freq_hz(float(msg["freq_hz"]))
+            error = None
+            freq_hz = float(msg["freq_hz"])
+            if not is_valid_hw_frequency(freq_hz):
+                error = f"{freq_hz:.0f} Hz is outside the rig's tunable range"
+            elif sdr is not None and sdr.available:
+                if msg.get("channel") == "B":
+                    sdr.set_center_freq_hz_b(freq_hz)
+                else:
+                    sdr.set_center_freq_hz(freq_hz)
                 ok = True
-            await ws.send_text(json.dumps({
-                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+            response = {"type": "cmd_response", "cmd": cmd, "ok": ok}
+            if error:
+                response["error"] = error
+            await ws.send_text(json.dumps(response))
 
         elif cmd == "set_audio_target":
             ok = False
             if sdr is not None and sdr.available:
-                sdr.audio.target_freq_hz = float(msg["freq_hz"])
-                sdr.audio.mode = msg.get("mode", "USB")
-                sdr.audio.bandwidth_hz = float(msg.get("bandwidth_hz", 3000))
+                audio = sdr.audio_b if msg.get("channel") == "B" else sdr.audio
+                audio.set_target(
+                    float(msg["freq_hz"]),
+                    msg.get("mode", "USB"),
+                    float(msg.get("bandwidth_hz", 3000)))
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
@@ -962,7 +1421,49 @@ async def handle_ws_command(text: str, ws: WebSocket):
         elif cmd == "set_audio_enabled":
             ok = False
             if sdr is not None and sdr.available:
-                sdr.audio.enabled = bool(msg["enabled"])
+                audio = sdr.audio_b if msg.get("channel") == "B" else sdr.audio
+                audio.enabled = bool(msg["enabled"])
+                ok = True
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok}))
+
+        elif cmd == "set_digital_source":
+            # Which channel's demodulated audio feeds the single BlackHole
+            # cable to WSJT-X etc. — a plain subscribe/unsubscribe swap on
+            # AudioDemodulator.on_audio(), not two virtual cables (see
+            # project memory on the RSPduo migration for why one cable is
+            # the right design here).
+            ok = False
+            if sdr is not None and sdr.available:
+                global _digital_source_channel
+                channel = msg.get("channel", "A")
+                target = sdr.audio_b if channel == "B" else sdr.audio
+                other = sdr.audio if channel == "B" else sdr.audio_b
+                other.off_audio(sdr.digital_audio.on_audio_frame)
+                target.on_audio(sdr.digital_audio.on_audio_frame)
+                # AudioDemodulator.enabled (the per-channel AUDIO button,
+                # for local speaker monitoring) gates ALL processing —
+                # feed() is a no-op while it's off. Selecting a channel as
+                # the digital source has to imply "process this channel's
+                # audio" regardless of whether the operator has separately
+                # clicked its own AUDIO button, or nothing reaches WSJT-X
+                # at all (Terry 2026-09-12: "the audio is not passing
+                # through to WSJT-X" after selecting RX2 as source). Only
+                # forces the target on — leaves `other` alone, since the
+                # operator may still want to listen to it locally.
+                target.enabled = True
+                # Digital-mode audio profile (AGC/NR/EQ/passband, fine
+                # spectrum) is NOT touched here — see
+                # on_session_status_for_audio_mode's own comment. It's
+                # driven by the operator's selected SESSION and applies to
+                # both channels together, not per-source: an earlier
+                # version called exit_digital_mode()
+                # on `other` here, which froze the deselected channel's
+                # fine spectrum while the radio was still genuinely in
+                # digital mode (Terry 2026-09-12: RX1 looked dead/stale
+                # right after selecting RX2 as source, even with real FT8
+                # traffic on frequency).
+                _digital_source_channel = channel
                 ok = True
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok}))
@@ -974,13 +1475,17 @@ async def handle_ws_command(text: str, ws: WebSocket):
         elif cmd == "ab_test_start":
             ok, reply = False, "AB test not initialized"
             if ab_test is not None:
+                manual = bool(msg.get("manual", False))
+                antennas = ([str(a) for a in msg["antennas"]] if manual
+                            else [int(a) for a in msg["antennas"]])
                 ok, reply = await ab_test.start(
-                    antennas=[int(a) for a in msg["antennas"]],
+                    antennas=antennas,
                     rounds=int(msg.get("rounds", 5)),
                     scan_start_hz=float(msg["scan_start_hz"]),
                     scan_stop_hz=float(msg["scan_stop_hz"]),
                     bandwidth_hz=float(msg.get("bandwidth_hz", 2400.0)),
                     profile_duration_s=float(msg.get("profile_duration_s", 30.0)),
+                    manual=manual,
                 )
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
@@ -992,10 +1497,56 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
 
+        elif cmd == "ab_test_confirm_switch":
+            ok, reply = False, "AB test not initialized"
+            if ab_test is not None:
+                ok, reply = ab_test.confirm_switch()
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "cal_start":
+            ok, reply = False, "Calibration not initialized"
+            if tx_cal is not None:
+                steps = [int(s) for s in msg["steps"]] if "steps" in msg else None
+                ok, reply = await tx_cal.start(steps=steps)
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "cal_stop":
+            ok, reply = False, "Calibration not initialized"
+            if tx_cal is not None:
+                ok, reply = await tx_cal.stop()
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "cal_status":
+            if tx_cal is not None:
+                await ws.send_text(json.dumps({
+                    "type": "tx_cal_status", "data": tx_cal.get_status()}))
+
         elif cmd == "ab_test_status":
             if ab_test is not None:
                 await ws.send_text(json.dumps({
                     "type": "ab_test_status", "data": ab_test.get_status()}))
+
+        elif cmd == "session_switch":
+            ok, reply = False, "Session manager not initialized"
+            if session_manager is not None:
+                ok, reply = await session_manager.switch(msg["session_id"])
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "session_confirm_quit":
+            ok, reply = False, "Session manager not initialized"
+            if session_manager is not None:
+                ok, reply = session_manager.confirm_quit()
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": ok, "message": reply}))
+
+        elif cmd == "session_status":
+            if session_manager is not None:
+                await ws.send_text(json.dumps({
+                    "type": "session_status", "data": session_manager.get_status()}))
 
         else:
             await ws.send_text(json.dumps({
@@ -1003,7 +1554,8 @@ async def handle_ws_command(text: str, ws: WebSocket):
 
     except Exception as e:
         logger.error(f"WebSocket command error: {e}")
-        await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
+        await ws.send_text(json.dumps({
+            "type": "error", "message": "Internal error processing command"}))
 
 
 # ---------------------------------------------------------------------------
@@ -1068,6 +1620,13 @@ async def advisor_view():
         return HTMLResponse(html_path.read_text())
     return HTMLResponse("<h1>Advisor HTML not found</h1>")
 
+@app.get("/diversity", response_class=HTMLResponse)
+async def diversity_view():
+    html_path = Path(__file__).parent / "diversity.html"
+    if html_path.exists():
+        return HTMLResponse(html_path.read_text())
+    return HTMLResponse("<h1>Diversity HTML not found</h1>")
+
 
 @app.get("/audio-worklet.js")
 async def audio_worklet():
@@ -1093,4 +1652,44 @@ async def audio_websocket(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         audio_manager.disconnect(websocket)
+
+
+@app.websocket("/ws/spectrum_b")
+async def spectrum_websocket_b(websocket: WebSocket):
+    await spectrum_manager_b.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        spectrum_manager_b.disconnect(websocket)
+
+
+@app.websocket("/ws/spectrum_0")
+async def spectrum_websocket_0(websocket: WebSocket):
+    await spectrum_manager_0.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        spectrum_manager_0.disconnect(websocket)
+
+
+@app.websocket("/ws/audio_b")
+async def audio_websocket_b(websocket: WebSocket):
+    await audio_manager_b.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        audio_manager_b.disconnect(websocket)
+
+
+@app.websocket("/ws/audio_0")
+async def audio_websocket_0(websocket: WebSocket):
+    await audio_manager_0.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        audio_manager_0.disconnect(websocket)
 

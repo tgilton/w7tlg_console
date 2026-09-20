@@ -71,6 +71,9 @@ class AmpCmd(IntEnum):
     ANT_BAND_SELECT    = 0x09  # Byte4 = antenna#, Byte5 = band#
     BUZZER             = 0x0A
     SEND_LOG           = 0x0B
+    # Intentional alias of CLEAR_SOFT_FAULTS (same wire value 0x08), not a
+    # duplicate/typo — the amp protocol has no separate "hard fault clear"
+    # code, so both names resolve to one IntEnum member.
     CLEAR_FAULTS       = 0x08
 
 # Amplifier mode codes (used with MODE_CHANGE)
@@ -411,10 +414,6 @@ def parse_full_telemetry(data: bytes) -> Optional[AmpTelemetry]:
     # Bytes 60-62: Error code display — confirmed 0x00 (no error)
     t.error_code  = data[60]
     t.error_param = struct.unpack_from('<H', data, 61)[0]
-
-    # Bytes 63-65: Error code display
-    t.error_code  = data[63]
-    t.error_param = struct.unpack_from('<H', data, 64)[0]
 
     return t
 

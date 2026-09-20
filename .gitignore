@@ -19,3 +19,6 @@ RPRT*
 
 # Secrets — never commit
 .env
+
+# Console run logs — generated output, not source
+logs/
