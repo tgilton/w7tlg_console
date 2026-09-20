@@ -2626,18 +2626,36 @@ select#palette-select {
       </span>
       <span class="field-group">
         <span class="ctl-label">Avg</span>
-        <input type="range" class="display-slider" id="avg-slider" min="0" max="100" value="80" oninput="Panadapter.onAvgSlider(this.value)">
-        <span class="span-val" id="avg-val">80%</span>
+        <input type="range" class="display-slider" id="avg-slider" min="0" max="100" value="30" oninput="Panadapter.onAvgSlider(this.value)">
+        <span class="span-val" id="avg-val">30%</span>
       </span>
       <span class="field-group">
         <span class="ctl-label">WF Palette</span>
-        <select id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
+        <select class="v2-select" id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
           <option value="default">Default</option>
           <option value="linrad">Linrad</option>
           <option value="grayscale">Grayscale</option>
           <option value="hot">Hot</option>
           <option value="gqrx">GQRX</option>
+          <option value="turbo">Turbo</option>
+          <option value="viridis">Viridis</option>
+          <option value="inferno">Inferno</option>
+          <option value="magma">Magma</option>
+          <option value="plasma">Plasma</option>
+          <option value="amber">Amber phosphor</option>
+          <option value="green">Green phosphor</option>
         </select>
+        <span class="v2-grad-strip" id="palette-strip" aria-hidden="true"></span>
+        <span class="ctl-label">Trace</span>
+        <select class="v2-select" id="trace-select" onchange="Panadapter.onTraceSelect(this.value)">
+          <option value="ice">Ice blue</option>
+          <option value="cyan">Cyan</option>
+          <option value="green">Green</option>
+          <option value="amber">Amber</option>
+          <option value="magenta">Magenta</option>
+          <option value="white">White</option>
+        </select>
+        <span class="v2-trace-swatch" id="trace-swatch" aria-hidden="true"></span>
       </span>
     </div>
     <div class="divider"></div>
@@ -2907,18 +2925,36 @@ select#palette-select {
       </span>
       <span class="field-group">
         <span class="ctl-label">Avg</span>
-        <input type="range" class="display-slider" id="avg2-slider" min="0" max="100" value="80" oninput="Panadapter2.onAvgSlider(this.value)">
-        <span class="span-val" id="avg2-val">80%</span>
+        <input type="range" class="display-slider" id="avg2-slider" min="0" max="100" value="30" oninput="Panadapter2.onAvgSlider(this.value)">
+        <span class="span-val" id="avg2-val">30%</span>
       </span>
       <span class="field-group">
         <span class="ctl-label">WF Palette</span>
-        <select id="palette2-select" onchange="Panadapter2.onPaletteSelect(this.value)">
+        <select class="v2-select" id="palette2-select" onchange="Panadapter2.onPaletteSelect(this.value)">
           <option value="default">Default</option>
           <option value="linrad">Linrad</option>
           <option value="grayscale">Grayscale</option>
           <option value="hot">Hot</option>
           <option value="gqrx">GQRX</option>
+          <option value="turbo">Turbo</option>
+          <option value="viridis">Viridis</option>
+          <option value="inferno">Inferno</option>
+          <option value="magma">Magma</option>
+          <option value="plasma">Plasma</option>
+          <option value="amber">Amber phosphor</option>
+          <option value="green">Green phosphor</option>
         </select>
+        <span class="v2-grad-strip" id="palette2-strip" aria-hidden="true"></span>
+        <span class="ctl-label">Trace</span>
+        <select class="v2-select" id="trace2-select" onchange="Panadapter2.onTraceSelect(this.value)">
+          <option value="ice">Ice blue</option>
+          <option value="cyan">Cyan</option>
+          <option value="green">Green</option>
+          <option value="amber">Amber</option>
+          <option value="magenta">Magenta</option>
+          <option value="white">White</option>
+        </select>
+        <span class="v2-trace-swatch" id="trace2-swatch" aria-hidden="true"></span>
       </span>
     </div>
     <div class="divider"></div>
@@ -3914,13 +3950,13 @@ function drawSpectrum() {
     ctx.lineTo(xs[drawPoints.length - 1], h);
     ctx.lineTo(xs[0], h);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(103, 208, 240, 0.25)'; // --data-trace
+    ctx.fillStyle = v2TraceFill(traceName);      // TRACE selector; 'ice' == today's --data-trace
     ctx.fill();
 
     ctx.beginPath();
     ctx.moveTo(xs[0], ys[0]);
     for (let i = 1; i < drawPoints.length; i++) ctx.lineTo(xs[i], ys[i]);
-    ctx.strokeStyle = '#67D0F0'; // --data-trace
+    ctx.strokeStyle = v2TraceColour(traceName);
     ctx.lineWidth = 1.5 * dpr;
     ctx.stroke();
 
@@ -3963,22 +3999,79 @@ const PALETTES = {
   grayscale: [ [0.00,0,0,0], [1.00,255,255,255] ],
   hot: [ [0.00,0,0,0], [0.40,200,0,0], [0.70,255,160,0], [0.85,255,240,0], [1.00,255,255,255] ],
   gqrx: [ [0.00,0,0,32], [0.25,0,40,120], [0.50,0,150,200], [0.70,100,210,100], [0.85,240,220,0], [1.00,255,80,30] ],
+  /* Added stage 5 (spec §2.3). Stops evenly spaced 0..1, same
+     [pos,r,g,b] format as the five above, which are untouched
+     stop-for-stop — "default" in particular must keep reproducing today's
+     waterfall exactly. dbToColor and the wfContrast 1.5 gamma are
+     unchanged; these are just more stop lists for it to interpolate. */
+  turbo: [ [0.00,48,18,59], [0.0714,65,69,171], [0.1429,70,117,237], [0.2143,57,162,252], [0.2857,27,207,212], [0.3571,36,236,166], [0.4286,97,252,108], [0.5000,164,252,59], [0.5714,209,232,52], [0.6429,243,198,58], [0.7143,254,155,45], [0.7857,243,99,21], [0.8571,217,56,6], [0.9286,177,25,1], [1.00,122,4,2] ],
+  viridis: [ [0.00,68,1,84], [0.1111,72,40,120], [0.2222,62,74,137], [0.3333,49,104,142], [0.4444,38,130,142], [0.5556,31,158,137], [0.6667,53,183,121], [0.7778,110,206,88], [0.8889,181,222,43], [1.00,253,231,37] ],
+  inferno: [ [0.00,0,0,4], [0.1111,27,12,65], [0.2222,74,12,107], [0.3333,120,28,109], [0.4444,165,44,96], [0.5556,207,68,70], [0.6667,237,105,37], [0.7778,251,155,6], [0.8889,247,209,61], [1.00,252,255,164] ],
+  magma: [ [0.00,0,0,4], [0.1111,24,15,61], [0.2222,68,15,118], [0.3333,114,31,129], [0.4444,158,47,127], [0.5556,205,64,113], [0.6667,241,96,93], [0.7778,253,150,104], [0.8889,254,202,141], [1.00,252,253,191] ],
+  plasma: [ [0.00,13,8,135], [0.1111,71,3,159], [0.2222,115,1,168], [0.3333,156,23,158], [0.4444,189,55,134], [0.5556,216,87,107], [0.6667,237,121,83], [0.7778,251,159,58], [0.8889,253,202,38], [1.00,240,249,33] ],
+  amber: [ [0.00,5,3,0], [0.2500,58,37,0], [0.5000,138,90,0], [0.7500,224,160,32], [1.00,255,240,176] ],
+  green: [ [0.00,0,10,2], [0.2500,4,68,15], [0.5000,15,154,44], [0.7500,51,255,102], [1.00,230,255,238] ],
 };
 let currentPalette = 'default';
-function onPaletteSelect(v) { currentPalette = v; }
+// Persisted per receiver (stage 5). Validated against the known names so
+// a stale or hand-edited value cannot leave the waterfall un-paintable.
+function loadDisplayPrefs() {
+  let pal = null, tr = null;
+  try { pal = localStorage.getItem('wfPalette:rx1'); } catch (e) {}
+  try { tr = localStorage.getItem('spectrumTrace:rx1'); } catch (e) {}
+  if (pal && PALETTES[pal]) {
+    currentPalette = pal;
+    const el = document.getElementById('palette-select');
+    if (el) el.value = pal;
+  }
+  if (tr && V2_TRACE_COLOURS[tr]) {
+    traceName = tr;
+    const el = document.getElementById('trace-select');
+    if (el) el.value = tr;
+  }
+  applyPaletteStrip();
+  applyTraceSwatch();
+}
+function applyPaletteStrip() {
+  const el = document.getElementById('palette-strip');
+  if (el) el.style.background = v2PaletteGradient(PALETTES[currentPalette]);
+}
+function applyTraceSwatch() {
+  const el = document.getElementById('trace-swatch');
+  if (el) el.style.background = v2TraceColour(traceName);
+}
+function onPaletteSelect(v) {
+  if (!PALETTES[v]) return;
+  currentPalette = v;
+  try { localStorage.setItem('wfPalette:rx1', v); } catch (e) {}
+  applyPaletteStrip();
+  // New rows only — history is not redrawn (spec §2.3 allows that).
+}
+// Trace colour. Read by drawSpectrum for both the stroke and the fill.
+let traceName = 'ice';
+function onTraceSelect(v) {
+  if (!V2_TRACE_COLOURS[v]) return;
+  traceName = v;
+  try { localStorage.setItem('spectrumTrace:rx1', v); } catch (e) {}
+  applyTraceSwatch();
+}
 
 let wfContrast = 1.5;
 function onContrastSlider(v) { wfContrast = parseFloat(v) / 10; }
 
 let smoothedSpectrum = null;
-let specAvgAlpha = 0.80 * 0.95;
+// One constant behind the markup value and both derived floats, so a
+// fresh load and the slider can never disagree (Amendment C2: 30%, was
+// 80%). Change it here and in the two `value="30"` attributes together.
+const AVG_DEFAULT_FRAC = 0.30;
+let specAvgAlpha = AVG_DEFAULT_FRAC * 0.95;
 // AVG drives both smoothing axes from one knob: temporal (specAvgAlpha, how
 // fast the trace settles frame-to-frame) and spatial (spatialSmoothHz, how
 // wide a neighborhood of FFT bins gets box-averaged in cropToView — see
 // SPATIAL_SMOOTH_MAX_HZ there for why they're different problems). Scaling
 // both together from the same percentage keeps it one "smoothness" control
 // instead of two the operator has to reason about separately.
-let spatialSmoothHz = 0.80 * SPATIAL_SMOOTH_MAX_HZ;
+let spatialSmoothHz = AVG_DEFAULT_FRAC * SPATIAL_SMOOTH_MAX_HZ;
 function onAvgSlider(v) {
   const frac = parseFloat(v) / 100;
   specAvgAlpha = frac * 0.95;
@@ -4165,6 +4258,7 @@ function init() {
   wfOverlayCanvas = document.getElementById('waterfall-overlay-canvas');
   wfOverlayCtx = wfOverlayCanvas.getContext('2d');
   spectrumWrap = document.getElementById('spectrum-wrap');
+  loadDisplayPrefs();
 
   spectrumWrap.addEventListener('wheel', evt => {
     evt.preventDefault();
@@ -4230,14 +4324,27 @@ function init() {
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     }, { capture: true }));
 
+  // Amendment F14: these four change ONLY with Shift held. They used to
+  // take a plain wheel and preventDefault it, so scrolling the page with
+  // the pointer anywhere near a spectrum slider silently changed the
+  // display instead of scrolling — which is how AVG ended up at 39% in
+  // Terry's screenshot. Without Shift the event is left entirely alone,
+  // so the page scrolls normally.
+  //
+  // On macOS a Shift+wheel is delivered as HORIZONTAL scroll, so the
+  // delta arrives in deltaX rather than deltaY. Take whichever is
+  // non-zero, preferring deltaY.
   ['span-slider', 'floor-slider', 'gain-slider', 'avg-slider'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('wheel', e => {
+      if (!e.shiftKey) return;            // plain scroll belongs to the page
       e.preventDefault();
       if (el.disabled) return;
       const step = parseFloat(el.step) || 1;
-      const dir = e.deltaY < 0 ? 1 : -1;
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (delta === 0) return;
+      const dir = delta < 0 ? 1 : -1;
       el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
                           parseFloat(el.value) + step * dir));
       el.dispatchEvent(new Event('input'));
@@ -4248,7 +4355,7 @@ function init() {
 return {
   init, tuneToInput, snapToWholeBand, recenterView, toggleMute,
   onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider,
-  onPaletteSelect,
+  onPaletteSelect, onTraceSelect,
   // Read-only — lets Panadapter2's Copy/Link (a different <script> tag's
   // own closure, can't see this module's view state directly; see the
   // cross-script scoping note in project memory) mirror RX1's actual
@@ -5088,12 +5195,12 @@ function drawSpectrum2() {
     ctx2.lineTo(xs[drawPoints.length - 1], h);
     ctx2.lineTo(xs[0], h);
     ctx2.closePath();
-    ctx2.fillStyle = 'rgba(103, 208, 240, 0.25)';
+    ctx2.fillStyle = v2TraceFill(traceName2);      // TRACE selector; 'ice' == today's --data-trace
     ctx2.fill();
     ctx2.beginPath();
     ctx2.moveTo(xs[0], ys[0]);
     for (let i = 1; i < drawPoints.length; i++) ctx2.lineTo(xs[i], ys[i]);
-    ctx2.strokeStyle = '#67D0F0';
+    ctx2.strokeStyle = v2TraceColour(traceName2);
     ctx2.lineWidth = 1.5 * dpr;
     ctx2.stroke();
     drawTargetMarker2(ctx2, w, h, dpr);
@@ -5113,13 +5220,67 @@ const PALETTES2 = {
   grayscale: [ [0.00,0,0,0], [1.00,255,255,255] ],
   hot: [ [0.00,0,0,0], [0.40,200,0,0], [0.70,255,160,0], [0.85,255,240,0], [1.00,255,255,255] ],
   gqrx: [ [0.00,0,0,32], [0.25,0,40,120], [0.50,0,150,200], [0.70,100,210,100], [0.85,240,220,0], [1.00,255,80,30] ],
+  /* Added stage 5 (spec §2.3). Stops evenly spaced 0..1, same
+     [pos,r,g,b] format as the five above, which are untouched
+     stop-for-stop — "default" in particular must keep reproducing today's
+     waterfall exactly. dbToColor and the wfContrast 1.5 gamma are
+     unchanged; these are just more stop lists for it to interpolate. */
+  turbo: [ [0.00,48,18,59], [0.0714,65,69,171], [0.1429,70,117,237], [0.2143,57,162,252], [0.2857,27,207,212], [0.3571,36,236,166], [0.4286,97,252,108], [0.5000,164,252,59], [0.5714,209,232,52], [0.6429,243,198,58], [0.7143,254,155,45], [0.7857,243,99,21], [0.8571,217,56,6], [0.9286,177,25,1], [1.00,122,4,2] ],
+  viridis: [ [0.00,68,1,84], [0.1111,72,40,120], [0.2222,62,74,137], [0.3333,49,104,142], [0.4444,38,130,142], [0.5556,31,158,137], [0.6667,53,183,121], [0.7778,110,206,88], [0.8889,181,222,43], [1.00,253,231,37] ],
+  inferno: [ [0.00,0,0,4], [0.1111,27,12,65], [0.2222,74,12,107], [0.3333,120,28,109], [0.4444,165,44,96], [0.5556,207,68,70], [0.6667,237,105,37], [0.7778,251,155,6], [0.8889,247,209,61], [1.00,252,255,164] ],
+  magma: [ [0.00,0,0,4], [0.1111,24,15,61], [0.2222,68,15,118], [0.3333,114,31,129], [0.4444,158,47,127], [0.5556,205,64,113], [0.6667,241,96,93], [0.7778,253,150,104], [0.8889,254,202,141], [1.00,252,253,191] ],
+  plasma: [ [0.00,13,8,135], [0.1111,71,3,159], [0.2222,115,1,168], [0.3333,156,23,158], [0.4444,189,55,134], [0.5556,216,87,107], [0.6667,237,121,83], [0.7778,251,159,58], [0.8889,253,202,38], [1.00,240,249,33] ],
+  amber: [ [0.00,5,3,0], [0.2500,58,37,0], [0.5000,138,90,0], [0.7500,224,160,32], [1.00,255,240,176] ],
+  green: [ [0.00,0,10,2], [0.2500,4,68,15], [0.5000,15,154,44], [0.7500,51,255,102], [1.00,230,255,238] ],
 };
 let currentPalette2 = 'default';
-function onPaletteSelect(v) { currentPalette2 = v; }
+// Persisted per receiver (stage 5). Validated against the known names so
+// a stale or hand-edited value cannot leave the waterfall un-paintable.
+function loadDisplayPrefs2() {
+  let pal = null, tr = null;
+  try { pal = localStorage.getItem('wfPalette:rx2'); } catch (e) {}
+  try { tr = localStorage.getItem('spectrumTrace:rx2'); } catch (e) {}
+  if (pal && PALETTES2[pal]) {
+    currentPalette2 = pal;
+    const el = document.getElementById('palette2-select');
+    if (el) el.value = pal;
+  }
+  if (tr && V2_TRACE_COLOURS[tr]) {
+    traceName2 = tr;
+    const el = document.getElementById('trace2-select');
+    if (el) el.value = tr;
+  }
+  applyPaletteStrip2();
+  applyTraceSwatch2();
+}
+function applyPaletteStrip2() {
+  const el = document.getElementById('palette2-strip');
+  if (el) el.style.background = v2PaletteGradient(PALETTES2[currentPalette2]);
+}
+function applyTraceSwatch2() {
+  const el = document.getElementById('trace2-swatch');
+  if (el) el.style.background = v2TraceColour(traceName2);
+}
+function onPaletteSelect(v) {
+  if (!PALETTES2[v]) return;
+  currentPalette2 = v;
+  try { localStorage.setItem('wfPalette:rx2', v); } catch (e) {}
+  applyPaletteStrip2();
+  // New rows only — history is not redrawn (spec §2.3 allows that).
+}
+// Trace colour. Read by drawSpectrum2 for both the stroke and the fill.
+let traceName2 = 'ice';
+function onTraceSelect(v) {
+  if (!V2_TRACE_COLOURS[v]) return;
+  traceName2 = v;
+  try { localStorage.setItem('spectrumTrace:rx2', v); } catch (e) {}
+  applyTraceSwatch2();
+}
 let wfContrast2 = 1.5;
 let smoothedSpectrum2 = null;
-let specAvgAlpha2 = 0.80 * 0.95;
-let spatialSmoothHz2 = 0.80 * SPATIAL_SMOOTH_MAX_HZ;
+const AVG_DEFAULT_FRAC2 = 0.30;      // see Panadapter's own note
+let specAvgAlpha2 = AVG_DEFAULT_FRAC2 * 0.95;
+let spatialSmoothHz2 = AVG_DEFAULT_FRAC2 * SPATIAL_SMOOTH_MAX_HZ;
 function onAvgSlider(v) {
   const frac = parseFloat(v) / 100;
   specAvgAlpha2 = frac * 0.95;
@@ -5437,6 +5598,7 @@ function init() {
   spectrumWrap2 = document.getElementById('spectrum2-wrap');
 
   loadS9Cal2();
+  loadDisplayPrefs2();
 
   // Narrows width2-slider's min/max off its HTML-default 200-3000 to match
   // mode2's actual WID zone at load, instead of leaving it wrong until the
@@ -5526,15 +5688,29 @@ function init() {
       if (audioCtx2 && audioCtx2.state === 'suspended') audioCtx2.resume();
     }, { capture: true }));
 
+  // Amendment F14: these four change ONLY with Shift held. They used to
+  // take a plain wheel and preventDefault it, so scrolling the page with
+  // the pointer anywhere near a spectrum slider silently changed the
+  // display instead of scrolling — which is how AVG ended up at 39% in
+  // Terry's screenshot. Without Shift the event is left entirely alone,
+  // so the page scrolls normally.
+  //
+  // On macOS a Shift+wheel is delivered as HORIZONTAL scroll, so the
+  // delta arrives in deltaX rather than deltaY. Take whichever is
+  // non-zero, preferring deltaY.
   ['span2-slider', 'floor2-slider', 'gain2-slider', 'avg2-slider'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('wheel', e => {
+      if (!e.shiftKey) return;            // plain scroll belongs to the page
       e.preventDefault();
       if (el.disabled) return;
       const step = parseFloat(el.step) || 1;
-      const dir = e.deltaY < 0 ? 1 : -1;
-      el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max), parseFloat(el.value) + step * dir));
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (delta === 0) return;
+      const dir = delta < 0 ? 1 : -1;
+      el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
+                          parseFloat(el.value) + step * dir));
       el.dispatchEvent(new Event('input'));
     }, { passive: false });
   });
@@ -5578,7 +5754,7 @@ function init() {
 return {
   init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1, onRx1ViewChange,
   onS9CalInput,
-  onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect,
+  onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect, onTraceSelect,
   setMode, setAudioTarget, setWidth, setFilterWidthMode, toggleNR, setNR, setAGC, setRxVolume, setRfGain, toggleEQ, setEQ,
   toggleRfNotch, toggleDabNotch,
   hfStateToPct2, hfPctToState2, hfGainLabel2,
@@ -7011,6 +7187,49 @@ function v2AfGainToPos(gainPct) {
   return V2_AF_POS_MAX * Math.sqrt(g / V2_AF_GAIN_MAX);
 }
 /* V2AF:END */
+
+/* ── V2TRACE:BEGIN — spectrum trace colours and palette previews ──────
+   Pure and stateless; each receiver holds its own selection in its own
+   closure. Amendment F12: "ice" is today's exact look and is the default,
+   NOT the mockup's lighter "Ice blue".
+
+   DESIGN.md §2.2 tension, recorded not resolved: amber here is a TRACE
+   colour the operator picked for a measured waterfall, while §2.2 gives
+   amber one meaning, "this option is the selected choice in its group".
+   Nothing on this palette is a control, so nothing can be misread as
+   selected — but it is a second use of the hue and stage 7 should say so
+   explicitly rather than leave it implied. Not changed. */
+const V2_TRACE_COLOURS = {
+  ice:     '#67D0F0',   // today's --data-trace, the default (F12)
+  cyan:    '#4fd8e8',
+  green:   '#6fe08a',
+  amber:   '#f0b04a',
+  magenta: '#e06fd0',
+  white:   '#e8edf5',
+};
+const V2_TRACE_FILL_ALPHA = 0.25;   // today's fill alpha, unchanged
+
+function v2TraceColour(name) {
+  return V2_TRACE_COLOURS[name] || V2_TRACE_COLOURS.ice;
+}
+function v2TraceFill(name) {
+  const hex = v2TraceColour(name);
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + V2_TRACE_FILL_ALPHA + ')';
+}
+
+// A CSS linear-gradient built from a palette's own [pos,r,g,b] stops, so
+// the preview strip cannot drift from what the waterfall actually paints.
+function v2PaletteGradient(stops) {
+  if (!stops || !stops.length) return 'none';
+  const parts = stops.map(st =>
+    'rgb(' + Math.round(st[1]) + ',' + Math.round(st[2]) + ',' + Math.round(st[3]) + ') '
+    + (st[0] * 100).toFixed(2) + '%');
+  return 'linear-gradient(to right, ' + parts.join(', ') + ')';
+}
+/* V2TRACE:END */
 
 // Frequency readout markup: the group separators are dim and narrower
 // than a digit (spec §2.2), which needs them wrapped rather than styled

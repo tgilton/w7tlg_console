@@ -102,3 +102,11 @@ F9. The one-column session at narrow widths is accepted. RAG-CHEW
 F10. Stage 4 is split. 4a = frequency card, S-meter (needle + peak hold),
      RX chip, S9 CAL on both receivers. 4b (later) = gains card, AF GAIN
      default and taper, mode card.
+F11. Stage 4 complete. AF GAIN default 100% confirmed live.
+F12. TRACE default = today's exact look (#67D0F0 line, rgba(103,208,240,
+     0.25) fill), not the mockup's "Ice blue".
+F13. The scope card (spectrum + waterfall) keeps its inner padding so the
+     canvases keep today's size: the spectrum and waterfall must look as
+     they do now, only the card chrome changes to the v2 hairline.
+F14. Mouse wheel on the four spectrum sliders (span, floor, gain, avg)
+     changes them only while Shift is held.
