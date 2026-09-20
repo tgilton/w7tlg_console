@@ -727,15 +727,15 @@ select#palette-select {
      --v2-btn-h is the one number with a real cost: 48px against today's
      ~29px computed height is +66% of vertical space per button row, and
      the left column carries 11 band buttons plus session, source, preamp
-     and ATT rows. Flagged in the stage 1 report as a decision, not a
-     settled value. --v2-card-pad 20px is off DESIGN.md §4's 4/8/16/24/32
-     spacing scale — also flagged there. */
+     and ATT rows. Terry 2026-09-20: keep 48 for now, revisit in stage 3
+     once the left column's real height is on screen. */
   --v2-btn-h:        calc(48px * var(--v2-scale));  /* mockup 48 / today ~29 computed  */
   --v2-btn-h-dense:  calc(44px * var(--v2-scale));  /* mockup 44 / today ~27 (.dsp-toggle) */
   --v2-touch-row:    calc(32px * var(--v2-scale));  /* mockup 32 / today ~22          */
   --v2-input-h:      calc(32px * var(--v2-scale));  /* mockup n/a / today ~22         */
 
-  --v2-card-pad:       20px;  /* mockup 20 / today 12 16 16 (.section-box)  */
+  --v2-card-pad:       16px;  /* mockup 20 -> 16, Terry 2026-09-20: 20 is off
+                                 DESIGN.md §4's 4/8/16/24/32 scale (today 12 16 16) */
   --v2-card-pad-tight: 16px;  /* mockup 16 / today 8 8 4 (.scope-group)     */
   --v2-radius-card:    14px;  /* mockup 14 / today 7  (.section-box)        */
   --v2-radius-btn:      8px;  /* mockup 8  / today 3  (.btn)                */
@@ -814,21 +814,30 @@ select#palette-select {
 .v2-input:focus-visible,
 .v2-select:focus-visible,
 .v2-range:focus-visible,
-.v2-check:focus-within,
+.v2-check:has(input:focus-visible),
 .v2-focusable:focus-visible {
   outline: 2px solid var(--v2-focus);
   outline-offset: 2px;
 }
 
 /* ── Card ─────────────────────────────────────────────────────────────
-   NOTE the border. Today's .section-box is `2px solid #FFFFFF` — not a
-   leftover, an explicit operator decision (DESIGN.md §2.4, amended
-   2026-08-30: this console sits beside RUNlogNG, two terminals and
-   WSJT-X across two monitors, and a region "needs to be locatable by eye
-   without reading labels"). The mockup's near-black hairline drops that
-   entirely. Shipping the mockup value, since the design was approved, but
-   `--v2-card-border-w: 2px; --v2-card-border-c: var(--v2-border-strong);`
-   restores the old look in one place. Raised in the stage 1 report. */
+   The border is a decision, not a default. Today's .section-box is
+   `2px solid #FFFFFF`, added by explicit operator decision (DESIGN.md
+   §2.4, amended 2026-08-30: this console sits beside RUNlogNG, two
+   terminals and WSJT-X across two monitors, and a region "needs to be
+   locatable by eye without reading labels").
+
+   TERRY'S EXPLICIT DECISION, 2026-09-20, after reviewing the stage 1
+   style guide by eye: v2 cards use the mockup's 1px --v2-border hairline.
+   This SUPERSEDES DESIGN.md §2.4's white-border rule for v2 cards;
+   DESIGN.md itself gets rewritten in stage 7. Do not re-litigate this
+   during a later stage.
+
+   The two variables stay on the rule so the old look is one line away if
+   the hairline turns out to lose the across-monitors locatability that
+   §2.4 was protecting:
+     .v2-card { --v2-card-border-w: 2px;
+                --v2-card-border-c: var(--v2-border-strong); } */
 .v2-card {
   --v2-card-border-w: 1px;
   --v2-card-border-c: var(--v2-border);
@@ -978,7 +987,12 @@ select#palette-select {
 .v2-input, .v2-select {
   font-family: inherit;
   font-size: var(--v2-font-label);
-  min-height: var(--v2-input-h);
+  /* height, not min-height: Safari gives <select> an intrinsic box from
+     its own metrics and ignores min-height on it, so the two rendered at
+     different heights side by side (Terry, stage 1 review). An explicit
+     height plus box-sizing:border-box makes both engines agree. */
+  height: var(--v2-input-h);
+  box-sizing: border-box;
   padding: 0 8px;
   color: var(--v2-fg);
   background: var(--v2-bg-inset);
@@ -986,7 +1000,20 @@ select#palette-select {
   border-radius: var(--v2-radius-inset);
 }
 .v2-input { font-variant-numeric: tabular-nums; }
-.v2-select { background: var(--v2-btn-bg); cursor: pointer; }
+/* appearance:none is what lets height apply to a <select> at all in
+   WebKit; the arrow is redrawn as a background chevron since resetting
+   appearance removes the native one. padding-right clears it. */
+.v2-select {
+  -webkit-appearance: none; appearance: none;
+  background-color: var(--v2-btn-bg);
+  background-image: linear-gradient(45deg, transparent 50%, var(--v2-label-light) 50%),
+                    linear-gradient(135deg, var(--v2-label-light) 50%, transparent 50%);
+  background-size: 5px 5px, 5px 5px;
+  background-position: calc(100% - 13px) calc(50% + 1px), calc(100% - 8px) calc(50% + 1px);
+  background-repeat: no-repeat;
+  padding-right: 26px;
+  cursor: pointer;
+}
 .v2-input:disabled, .v2-select:disabled {
   color: var(--v2-btn-off-fg); border-color: var(--v2-btn-off-border); cursor: not-allowed;
 }
@@ -1093,6 +1120,251 @@ select#palette-select {
   background: var(--v2-notch-fg);
   border-radius: 1px;
   pointer-events: none;
+}
+
+/* ── Stage 2: the right column (TX) ───────────────────────────────────
+   Every selector here is scoped either to #panel-bandamp (the card and
+   title chrome, which is column-wide on purpose) or to one of the five
+   boxes stage 2 restyles — #box-amp, #box-tx-meters, #box-exciter,
+   #box-opmode, #box-fault-status. Nothing outside the right column can be
+   touched, and SSB Audio, which shares this column but is out of scope
+   until stage 3, keeps its own internals.
+
+   That scoping is not just tidiness — most of
+   these elements have their class attribute REWRITTEN WHOLESALE by
+   updateUI(), so a v2 class added in the markup would be wiped on the next
+   state push (~10Hz). The clobbered ones, confirmed by grepping every
+   `.className =` in this file:
+
+     #amp-state-badge   badge.className = badgeClass          (updateAmp)
+     #amp-swr-val       'val ' + good|warn|alert              (updateAmp)
+     #fault-severity    'fault-severity ' + ok|warning|fault  (updateAmp)
+     #mode-AMP_OFF/_ON  'btn' + active|active-amber           (updateUI)
+     #inhibit-banner    'inhibit-banner' + visible            (updateUI)
+
+   So they are restyled through the classes the JS already writes, and
+   their markup is left completely alone. Only four class names were ADDED
+   to right-column markup at all: v2-amp-hero, v2-amp-hero-bar, v2-meter,
+   v2-meter-head, plus v2-slider-row/v2-range on the exciter drive. */
+
+/* Card + title. Applied via .section-box rather than by adding .v2-card to
+   the markup, so the right column picks up the v2 look without a single
+   class change on a box that JS or the collapse persistence knows about. */
+#panel-bandamp .section-box {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  margin-bottom: 16px;
+}
+#panel-bandamp .section-box h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  margin-bottom: 16px;
+}
+#box-amp .divider { height: 1px; background: var(--v2-border); }
+
+/* Labels and values. .meter-row/.tx-meter-label already carry the
+   uppercase house style; this only restates size, weight and color.
+
+   Scoped to the five boxes stage 2 restyles, NOT to #panel-bandamp as a
+   whole: SSB Audio also lives in this column and is explicitly out of
+   scope this stage (it moves left in stage 3). A broader selector caught
+   its .ctl-label and .power-value and, at the narrow end of the drag,
+   pushed its TX BW buttons into a vertical stack — a block that was not
+   supposed to change at all. Only the card/title chrome below is
+   deliberately column-wide, so SSB Audio's box does not sit there with the
+   old white border among v2 hairline cards.
+
+   nowrap on both halves of a meter row: at the 200px minimum drag the
+   16px values made DRIVE P / PAM1 T / RADIO PO break across two lines.
+   Amendment A says report rather than shrink, and nothing is shrunk here —
+   the row simply stops wrapping, and the measured widths (stage 2 report)
+   confirm every row still fits at 200px. */
+#box-amp .meter-row span:first-child,
+#box-tx-meters .tx-meter-label,
+#box-exciter .ctl-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+#box-amp .meter-row .val,
+#box-tx-meters .tx-meter-value,
+#box-exciter .power-value {
+  font-size: var(--v2-font-value);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* MeterRow severity — DESIGN.md §6.3 and §2.3 beat the mockup here
+   (Amendment E4). The mockup paints FWD P and its bar a fixed green; that
+   is only what "normal" looks like. The real control keeps the existing
+   three-tier behavior, and green is not in it: --data-trace (measured
+   value) for normal, --state-fault for an alarm band. Green is a STATE
+   color in this palette (§2.2 "connected, healthy, permitted"), and a
+   watts reading is data, not a state. The existing .meter-good/-warn/
+   -alert and .val.good/.warn/.alert rules already do this and are left
+   untouched — nothing below overrides a severity color. */
+#box-amp .meter-bar-wrap {
+  height: 6px;                       /* spec §2.6: 6px rows, 14px hero */
+  border-radius: 999px;
+  background: var(--v2-track);
+  border: 1px solid var(--v2-border);
+  margin: 4px 0 14px;
+}
+#box-amp .meter-bar { border-radius: 999px; }
+
+/* FWD P hero. The row is flipped to a column so the value can be centred
+   and large while staying inside .meter-row (see the markup comment). */
+/* A minimum gap so a label and its value can never touch at the narrow
+   end of the drag. They already could before stage 2 (confirmed against a
+   render of the ui-v2-stage1 tag at 200px), but the larger v2 values make
+   it more likely, so the row now reserves the space explicitly. */
+#box-amp .meter-row { gap: 10px; }
+
+#box-amp .meter-row.v2-amp-hero {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0;
+  margin-top: 4px;
+}
+/* Container queries, because the thing this must track is the COLUMN's
+   width, not the viewport's — the column is drag-resizable between 200 and
+   560px and the width is persisted. 1cqi is 1% of #box-amp's content box.
+
+   Those are NOT the column widths: the collapse tab and the resize handle
+   are flex siblings of .panel-body, so a 200px column leaves 106px of card
+   content, a 274px column 180px, and a 560px column 466px (all measured,
+   not derived — the first version of this rule was sized off arithmetic
+   that forgot the tab and overflowed the card at the narrow end).
+
+   Floor 22px is still nearly double today's 12px, so Amendment A's "never
+   smaller than today" holds at the narrowest drag; ceiling 60px is the
+   mockup's figure. nowrap because a wrapped power reading is worse than a
+   smaller one, and the clamp is sized so it never has to. */
+#box-amp { container-type: inline-size; }
+#box-amp .meter-row.v2-amp-hero .val {
+  font-size: clamp(22px, 24cqi, 60px);
+  font-weight: 500;
+  line-height: 1.05;
+  text-align: center;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+#box-amp .meter-bar-wrap.v2-amp-hero-bar { height: 14px; margin-bottom: 18px; }
+
+/* At the narrow end of the drag the v2 value size genuinely does not fit:
+   "DRIVE P" + "12.4 W" needs 132px of the 106px a 200px column leaves.
+   Amendment A says report rather than shrink, and nothing here shrinks
+   below today's — the row simply reverts to TODAY'S metrics (12px value,
+   0.1em label tracking) once the card is too narrow for the v2 ones, which
+   is exactly what fits there now. Above the threshold the v2 sizing
+   applies unchanged. Reported in the stage 2 report. */
+@container (max-width: 170px) {
+  #box-amp .meter-row .val { font-size: var(--v2-font-label); }
+  #box-amp .meter-row span:first-child { letter-spacing: 0.1em; }
+  /* 2px, not the 10px above: measured, "DRIVE P" + a two-digit watts
+     reading needs 104 of the 106px available at the 200px minimum. Today's
+     rows have no gap at all there and very nearly touch, so this is not a
+     regression — it is the same squeeze with 2px of air put back. */
+  #box-amp .meter-row { gap: 2px; }
+  #box-amp .amp-diag-row { gap: 6px; }
+}
+
+/* Amp state pill (OPR/RX). Restyled through the classes updateAmp writes. */
+#box-amp .amp-state-badge {
+  font-size: var(--v2-font-pill);
+  font-weight: var(--v2-weight-pill);
+  padding: 5px 9px;
+  border-radius: var(--v2-radius-pill);
+  background: transparent;
+}
+#box-amp .amp-state-badge.opr-rx { background: var(--v2-go-bg); }
+/* opr-tx stays AMBER, not red. DESIGN.md §2.5 wants TX red everywhere, but
+   the operator chose a VFO-only fix for that pass and deferred these two
+   badges (see the note at the top of this file). Amendment E4: that
+   decision wins. Do not "correct" it during a restyle. */
+#box-amp .amp-state-badge.opr-tx { background: var(--v2-selected-bg); }
+#box-amp .amp-state-badge.disconn { background: var(--v2-fault-bg); }
+#box-amp .amp-diag-label {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+#box-amp .amp-diag-row { gap: 12px; font-size: var(--v2-font-label); }
+
+/* TX METERS — one column of stacked rows, not the old 3-up grid. */
+#box-tx-meters { container-type: inline-size; }
+#box-tx-meters .tx-meters { display: block; margin-bottom: 0; }
+@container (max-width: 170px) {
+  #box-tx-meters .tx-meter-value { font-size: var(--v2-font-label); }
+  #box-tx-meters .tx-meter-label { letter-spacing: 0.1em; }
+}
+#box-tx-meters .v2-meter:last-child .tx-meter-bar-wrap { margin-bottom: 0; }
+#box-tx-meters .v2-meter-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+#box-tx-meters .tx-meter-bar-wrap {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--v2-track);
+  border: 1px solid var(--v2-border);
+  margin: 4px 0 14px;
+}
+#box-tx-meters .tx-meter-bar { border-radius: 999px; }
+
+/* EXCITER DRIVE. The readout is already --state-ok via .power-value-green
+   and the mockup also shows it green, so there is nothing to reconcile.
+   The slider is the shared v2-range; .max is still rewritten at runtime. */
+#box-exciter .power-slider-wrap.v2-slider-row { gap: 12px; }
+#box-exciter .power-slider-wrap.v2-slider-row .v2-range { flex: 1; }
+#box-exciter .power-value-green { color: var(--v2-ok); min-width: 52px; }
+
+/* OPERATING MODE. .active (AMP OFF) and .active-amber (AMP ON) are both
+   written by updateUI; both mean "this is the selected member of the
+   group", so both get the one amber treatment (DESIGN.md §2.2). */
+#box-opmode .opmode-grid { gap: 8px; margin-bottom: 0; }
+#box-opmode .opmode-grid .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 12px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+}
+#box-opmode .opmode-grid .btn.active,
+#box-opmode .opmode-grid .btn.active-amber {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+#box-opmode .opmode-grid .btn:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+
+/* FAULT STATUS. The caret is .section-box.collapsible > h2::before and the
+   collapse state is persisted — both untouched. Only the chip is restyled,
+   through the classes updateAmp writes. */
+#box-fault-status .fault-severity {
+  font-size: var(--v2-font-pill);
+  font-weight: var(--v2-weight-pill);
+  padding: 5px 9px;
+  border-radius: var(--v2-radius-pill);
+  margin-bottom: 8px;
+}
+#box-fault-status .btn-critical {
+  border-radius: var(--v2-radius-btn);
+  font-size: var(--v2-font-btn);
 }
 
 /* V2:END */
@@ -1728,8 +2000,13 @@ select#palette-select {
         <span class="amp-state-badge disconn" id="amp-state-badge">DISCONNECTED</span>
         <span class="amp-state-badge" id="amp-atu-badge" style="display:none">ATU &#10003;</span>
       </div>
-      <div class="meter-row"><span>Fwd P</span><span class="val good" id="amp-fwd-val">0 W</span></div>
-      <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div></div>
+      <!-- FWD P is the hero readout (spec §2.6). #amp-fwd-val stays INSIDE
+           a .meter-row on purpose: its green-when-good color comes from
+           `.meter-row .val.good`, which stops matching the moment the
+           value leaves that ancestor. The row is turned into a column by
+           CSS instead, so the markup delta is two added class names. -->
+      <div class="meter-row v2-amp-hero"><span>Fwd P</span><span class="val good" id="amp-fwd-val">0 W</span></div>
+      <div class="meter-bar-wrap v2-amp-hero-bar"><div class="meter-bar meter-good" id="amp-fwd-bar" style="width:0%"></div></div>
       <div class="meter-row"><span>Rev P</span><span class="val" id="amp-refl-val">— W</span></div>
       <div class="meter-bar-wrap"><div class="meter-bar meter-good" id="amp-refl-bar" style="width:0%"></div></div>
       <div class="meter-row"><span>SWR</span><span class="val good" id="amp-swr-val">—</span></div>
@@ -1756,27 +2033,76 @@ select#palette-select {
       </div>
     </div>
 
-    <!-- TX meters + SSB Audio — moved here 2026-09-11 (Terry: "the right
-         side of the entire console should be Transmit (TX) stuff"). ALC/
-         Radio PO/SWR and mic/comp/TX BW are all about the transmitted
-         signal, not receive — they don't belong near either RX panel. -->
-    <div class="section-box">
+    <!-- TX meters — moved here 2026-09-11 (Terry: "the right side of the
+         entire console should be Transmit (TX) stuff"). ALC/Radio PO/SWR
+         are about the transmitted signal, not receive. SSB Audio used to
+         follow immediately; stage 2 moved it to the bottom of the column
+         and stage 3 moves it out to the left entirely. -->
+    <div class="section-box" id="box-tx-meters">
       <h2>TX Meters</h2>
+      <!-- Stacked rows (label left, value right, bar under) to match the
+           amp rows above, per spec §2.6. .tx-meters and .inactive both stay
+           on the container: updateUI toggles .inactive to dim the whole
+           group in RX, and the empty-bar-plus-em-dash RX state is unchanged
+           (DESIGN.md §6.3, "absence must be visible"). -->
       <div class="tx-meters inactive" id="tx-meters">
-        <div>
-          <div class="tx-meter-label">ALC</div>
+        <div class="v2-meter">
+          <div class="v2-meter-head">
+            <div class="tx-meter-label">ALC</div>
+            <div class="tx-meter-value" id="alc-val">—</div>
+          </div>
           <div class="tx-meter-bar-wrap"><div class="tx-meter-bar alc" id="alc-bar"></div></div>
-          <div class="tx-meter-value" id="alc-val">—</div>
         </div>
-        <div>
-          <div class="tx-meter-label">Radio PO</div>
+        <div class="v2-meter">
+          <div class="v2-meter-head">
+            <div class="tx-meter-label">Radio PO</div>
+            <div class="tx-meter-value" id="po-val">—</div>
+          </div>
           <div class="tx-meter-bar-wrap"><div class="tx-meter-bar po" id="po-bar"></div></div>
-          <div class="tx-meter-value" id="po-val">—</div>
         </div>
-        <div>
-          <div class="tx-meter-label">SWR</div>
+        <div class="v2-meter">
+          <div class="v2-meter-head">
+            <div class="tx-meter-label">SWR</div>
+            <div class="tx-meter-value" id="swr-val">—</div>
+          </div>
           <div class="tx-meter-bar-wrap"><div class="tx-meter-bar swr" id="swr-bar"></div></div>
-          <div class="tx-meter-value" id="swr-val">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-box" id="box-exciter">
+      <h2>Exciter Drive</h2>
+      <!-- .max is rewritten at runtime from s.drive_limit_w (AMP ON caps it
+           at 15W) — that assignment, and the two literal lines the drive
+           limit test asserts on, are untouched here. v2-range only changes
+           how the track paints. -->
+      <div class="power-slider-wrap v2-slider-row">
+        <input class="v2-range" type="range" min="5" max="100" value="50" id="rf-power-slider"
+          oninput="document.getElementById('rf-power-val').textContent = this.value + 'W'"
+          onmousedown="RigControl.setDragging('rfPwr', true)"
+          onmouseup="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))"
+          ontouchstart="RigControl.setDragging('rfPwr', true)"
+          ontouchend="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))">
+        <span class="power-value power-value-green" id="rf-power-val">50W</span>
+      </div>
+    </div>
+    <div class="section-box" id="box-opmode">
+      <h2>Operating Mode</h2>
+      <div class="opmode-grid">
+        <button class="btn active" id="mode-AMP_OFF" onclick="RigControl.setOpMode('AMP_OFF')">AMP OFF</button>
+        <button class="btn" id="mode-AMP_ON" onclick="RigControl.setOpMode('AMP_ON')">AMP ON</button>
+      </div>
+    </div>
+
+    <div class="section-box collapsible collapsed" id="box-fault-status">
+      <h2 onclick="toggleSectionBox('box-fault-status')">Fault Status</h2>
+      <span class="fault-severity ok" id="fault-severity">OK</span>
+      <div class="section-body">
+        <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--chrome-muted)">No active faults</span></div>
+        <span class="inhibit-banner" id="inhibit-banner">&#9940; TX INHIBITED &mdash; <span id="inhibit-reason">—</span></span>
+        <div class="btn-row" style="margin-top:6px">
+          <button class="btn danger btn-critical" id="btn-inhibit" style="flex:1" onclick="RigControl.inhibitTx()">&#9940; Inhibit</button>
+          <button class="btn active-green btn-critical" id="btn-allow" style="flex:1" onclick="RigControl.allowTx()">&#10003; Allow</button>
         </div>
       </div>
     </div>
@@ -1819,39 +2145,6 @@ select#palette-select {
       </div>
     </div>
 
-    <div class="section-box collapsible collapsed" id="box-fault-status">
-      <h2 onclick="toggleSectionBox('box-fault-status')">Fault Status</h2>
-      <span class="fault-severity ok" id="fault-severity">OK</span>
-      <div class="section-body">
-        <div class="fault-messages" id="fault-messages"><span class="muted" style="color:var(--chrome-muted)">No active faults</span></div>
-        <span class="inhibit-banner" id="inhibit-banner">&#9940; TX INHIBITED &mdash; <span id="inhibit-reason">—</span></span>
-        <div class="btn-row" style="margin-top:6px">
-          <button class="btn danger btn-critical" id="btn-inhibit" style="flex:1" onclick="RigControl.inhibitTx()">&#9940; Inhibit</button>
-          <button class="btn active-green btn-critical" id="btn-allow" style="flex:1" onclick="RigControl.allowTx()">&#10003; Allow</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="section-box" id="box-opmode">
-      <h2>Operating Mode</h2>
-      <div class="opmode-grid">
-        <button class="btn active" id="mode-AMP_OFF" onclick="RigControl.setOpMode('AMP_OFF')">AMP OFF</button>
-        <button class="btn" id="mode-AMP_ON" onclick="RigControl.setOpMode('AMP_ON')">AMP ON</button>
-      </div>
-    </div>
-
-    <div class="section-box">
-      <h2>Exciter Drive</h2>
-      <div class="power-slider-wrap">
-        <input type="range" min="5" max="100" value="50" id="rf-power-slider"
-          oninput="document.getElementById('rf-power-val').textContent = this.value + 'W'"
-          onmousedown="RigControl.setDragging('rfPwr', true)"
-          onmouseup="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))"
-          ontouchstart="RigControl.setDragging('rfPwr', true)"
-          ontouchend="RigControl.sliderRelease('rfPwr', () => RigControl.setPower(document.getElementById('rf-power-slider').value))">
-        <span class="power-value power-value-green" id="rf-power-val">50W</span>
-      </div>
-    </div>
     </div>
   </div>
 

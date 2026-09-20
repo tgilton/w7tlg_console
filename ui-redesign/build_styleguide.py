@@ -283,8 +283,16 @@ h1 { font-size: 20px; font-weight: 500; letter-spacing: 0.12em;
 .sg-kv { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .sg-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .sg-freq { font-size: 76px; font-weight: 500; color: var(--v2-fg); line-height: 1; }
-.sg-freq i { font-style: normal; color: var(--v2-notch-fg); display: inline-block;
-             width: 0.3em; text-align: center; }
+/* The separators are their own 0.3em gap, optically centred in it, and
+   they must not touch the digit either side (Terry, stage 1 review: they
+   sat low and ran into the next digit). inline-flex + justify-content
+   centres the glyph horizontally in the gap regardless of how wide the
+   font draws a full stop; the -0.12em nudge lifts it off the baseline to
+   sit against the digits' optical centre rather than their feet. */
+.sg-freq i { font-style: normal; color: var(--v2-notch-fg);
+             display: inline-flex; justify-content: center; align-items: center;
+             width: 0.3em; overflow: hidden;
+             position: relative; top: -0.12em; }
 """
 
 DEMO_JS = """
