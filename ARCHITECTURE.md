@@ -8,7 +8,7 @@ The console is a single FastAPI process that owns three persistent hardware conn
 
 Beyond the original rig/amp/SDR core, the console also owns four more persistent connections that don't touch RF hardware at all: a WSJT-X UDP multicast listener, a Reverse Beacon Network telnet client (CW spots), a DXSpider cluster telnet client (SSB spots), and periodic HTTP polling (PSKReporter, NOAA, POTA) — plus on-demand HTTP calls (HamQTH/QRZ lookups, Anthropic for the AI advisor). All of these are deliberately isolated from the safety-critical rig/amp path: failure to connect (network down, a service unreachable) logs a warning and degrades that one feature, it never blocks startup or affects TX/RX. See "External Data Sources" below for the full list and "Known limitations" for what's approximate/best-effort about each.
 
-**The browser side is a single-window shell over the same backend, not one page per feature.** `dashboard/console.html` (route `/console`) is a persistent, resizable panadapter pane plus a tabbed right pane (Dashboard/Monitor/Propagation/Spot-Seek/AI Advisor), built from iframes pointing at the same standalone pages that also still work in their own browser tab (`/`, `/panadapter`, `/monitor`, `/propagation`, `/spotseek`, `/advisor`). This is deliberate, not incidental: `panadapter.html` and `index.html` each carry a lot of hard-won, safety-tuned logic (TX audio mute timing, feedback-loop prevention, digital-mode view locking) as top-level global-scope JS variables — merging them into one page's shared scope risked silent variable collisions and regressions in exactly the code that must not regress. Iframes give true isolation (separate `window` scope, separate WebSocket connections) at the cost of some redundant `/ws` traffic, which is irrelevant for a single-operator LAN console. It also solves trend-CSV logging "for free": a hidden-but-mounted iframe keeps its JS and WebSocket running, so `trend_csv_logger.py`'s existing heartbeat gate now effectively means "runs whenever the console shell is open," not "whenever `/monitor` specifically is the visible tab" — no code changes needed there at all.
+**The browser side is a single-window console over the same backend, not one page per feature.** `dashboard/console.html` (route `/console`) is the station console: one page, one document, no build step, carrying both receivers, the rig and amp control plane, and the tools tray. It began as an iframe shell (Phase A, git history at commit `5840933`) that embedded `index.html`, `panadapter.html` and `monitor.html` precisely because those pages each carry a lot of hard-won, safety-tuned logic (TX audio mute timing, feedback-loop prevention, digital-mode view locking) as top-level globals that must not collide. Phase B merged them into one document while keeping that isolation by construction — IIFE modules with private state, each owning its own WebSocket connections and its own DOM subtree — which removed the redundant `/ws` traffic and the cross-frame `postMessage` problem in one step. The standalone pages (`/`, `/panadapter`, `/monitor`, `/propagation`, `/spotseek`, `/advisor`) still exist and still work in their own browser tab; they are linked from the status bar, not embedded. `trend_csv_logger.py`'s heartbeat gate now effectively means "runs whenever the console is open".
 
 **The SDR, not the radio's own receiver, is what's actually heard.** Under this station's SDR Switch wiring, the antenna is on the RSPdx-R2 for RX; the radio's own receive antenna port sees nothing except briefly during TX (when the switch hands the antenna to the TX chain). `rig.strength_db`/the radio's own AGC are therefore dead for anything audible — RX audio, S-meter, and noise reduction/EQ all come from the SDR's own demodulation (`sdr/audio_demod.py`), not the FT-991A. This same SDR audio also feeds digital-mode software (WSJT-X etc.) over a virtual audio cable (`sdr/virtual_audio_output.py`), so voice and digital modes share one RX path with no antenna/hardware switch between them — see "Digital Mode Integration" in [README.md](README.md).
 
@@ -230,7 +230,7 @@ After all rounds complete, `_compute_summary()` matches channels that were activ
 `goto_antenna()` (on `AcomBridge`) is the one new piece of antenna-switching logic this added: unlike `next_antenna()` (fire-and-forget, mirrors the front-panel button), `goto_antenna(target)` cycles forward — re-sending `cmd_next_antenna()` with retries if telemetry confirmation doesn't arrive — until `_selected_antenna` matches `target`, checking TX state/amp connection/fault status before every hop so a multi-hop traversal (e.g. A3R back to A1F necessarily passes through A4R, the dummy load, since the relay is forward-only) can't continue blind into a fault or into TX.
 
 ### `amplifier/trend_csv_logger.py`
-`TrendCsvLogger` persists `AcomBridge`'s existing in-memory `TrendSample`s (otherwise lost on restart) to CSV. Liveness is heartbeat-based rather than tied to a WebSocket connection object: `dashboard/monitor.html` sends a `monitor_heartbeat` ws command every 4s, `server.py`'s `_monitor_liveness_watcher()` task starts/stops the logger based on whether a heartbeat arrived in the last 10s. This indirection exists because `/monitor` shares `/ws` with the dashboard — there's no way to tell "a monitor tab is open" from connection state alone, since a dashboard-only connection looks identical. Since `/console`'s Monitor tab is a hidden-but-mounted iframe rather than a closed connection when another tab is active, this heartbeat keeps arriving for as long as the console shell itself is open — no changes needed here for that to work.
+`TrendCsvLogger` persists `AcomBridge`'s existing in-memory `TrendSample`s (otherwise lost on restart) to CSV. Liveness is heartbeat-based rather than tied to a WebSocket connection object: `dashboard/monitor.html` sends a `monitor_heartbeat` ws command every 4s, `server.py`'s `_monitor_liveness_watcher()` task starts/stops the logger based on whether a heartbeat arrived in the last 10s. This indirection exists because `/monitor` shares `/ws` with the dashboard — there's no way to tell "a monitor tab is open" from connection state alone, since a dashboard-only connection looks identical. `dashboard/console.html` sends the same `monitor_heartbeat` on the same 4s cadence from its own `/ws` connection, so trend logging runs for as long as the console is open, whether or not `/monitor` is.
 
 ### `config/station_profile.py`
 `StationProfileManager` holds two hardcoded `StationProfile` records (La Quinta CA, Boise ID — grid/call/city/state each) and the currently-selected one, persisted to `data/station_profile.json` (only written on an actual change, not on every read). A module-level singleton (`station_profile`), read by `advisor/propagation.py` (grid for PSKReporter queries), `advisor/claude_advisor.py` (location context in the system prompt), `advisor/monitor.py` (alert text), and `wsjtx/dx_cluster.py`/`wsjtx/award_tracker.py`-adjacent code that needs "my callsign." Deliberately a manual toggle, not auto-detected (e.g. from IP geolocation) — a wrong auto-detection would silently corrupt QTH-dependent data (award/confirmation records) with no obvious symptom, which is worse than requiring one click.
@@ -281,13 +281,183 @@ REST surface (`/api/state`, `/api/mode`, `/api/antenna/next`, `/api/tx`) duplica
 **`lifespan` also owns the External Data Sources connections** (see that section above), each started after the rig/amp/SDR core and each wrapped so its own failure can't affect the others or the console's startup: `wsjtx_listener` (joins the WSJT-X multicast group; `OSError` on join is caught and logged, not raised), `rbn_client`/`dx_cluster_client` (telnet, own internal reconnect loop, never blocks startup), `spotter.start_pota_polling()` (background poll task), `claude_advisor` (constructed, not connected — Anthropic calls are on-demand per advisor request), and `_propagation_poll_loop()` (a `asyncio.create_task`, runs independently every 3 minutes). REST endpoints added alongside: `/api/station-profile` (GET/POST), `/api/propagation`, `/api/advisor/stream` (POST, Server-Sent Events) / `/api/advisor/clear`, `/api/watchlist` (GET/POST/DELETE), `/api/lookup/callsign`, `/api/awards/states` / `/api/awards/dxcc`. New broadcast message types on the same `/ws` channel as `state`: `station_profile`, `wsjtx_status`, `propagation`, `propagation_alert`, `spot_alert`.
 
 ### `dashboard/console.html`
-The unified single-window shell (see "Overview" above for why it's iframe-based). Tab switching is pure CSS (`display:none`/`.active`) on already-mounted iframes, never `src` swaps — that's what keeps every tab's WebSocket connection and JS state alive in the background regardless of which tab is visually active. The panadapter pane's width and the active tab are both persisted to `localStorage` so a page reload doesn't reset the layout. Fully additive: adding this file changed nothing about `/`, `/panadapter`, `/monitor` themselves, which are exactly the same standalone pages they were before, just now also embedded here.
+**The station console — one 7,800-line page, and the file almost all
+front-end work happens in.** Route `/console`. Left column (session, band,
+digital audio, SSB audio, antenna), a centre column of two full receiver
+panels (RX1 and RX2, each with frequency readout, analog S-meter,
+spectrum, waterfall, gains, mode, filter and EQ), a right column of amp
+and TX telemetry, a full-width tools tray, and a system-message bar.
+Rewritten to the v2 design in stages 0-6b (2026-09-20) — see DESIGN.md
+§12, `ui-redesign/README.md`, and the per-stage reports.
+
+This is **Phase B**: it replaced an earlier iframe shell (git history at
+`5840933`) that embedded `index.html`, `panadapter.html` and
+`monitor.html` to keep their global scopes apart. The merge keeps that
+isolation by construction instead of by iframe boundary — `Panadapter`,
+`Panadapter2` and `RigControl` are IIFEs with private `let`s, each owning
+its own `/ws`, `/ws/spectrum` and `/ws/audio` connections and touching
+only its own DOM subtree, and nothing is shared across them except
+`StatusBar` and `showToast()`, which are write-only display helpers with
+no influence on TX. `Panadapter2` is a deliberate near-copy of
+`Panadapter`, not a second instance.
+
+**Before editing this file, read "Runtime rules for editing
+`dashboard/console.html`" below** — it is a short list of properties of
+the no-build-step delivery model that have each already caused an outage
+or a silent regression.
+
+`/monitor`, `/panadapter`, `/propagation`, `/spotseek` and `/advisor`
+remain separate, untouched, fully-functional standalone routes, linked
+from the status bar rather than embedded.
 
 ### `dashboard/index.html` / `dashboard/monitor.html` / `dashboard/panadapter.html`
 No build step — plain HTML/CSS/JS served directly from disk by `server.py`. All three connect to `/ws` for state/commands; `monitor.html` additionally polls `get_trend` to backfill its strip charts on load/reconnect, and `panadapter.html` additionally connects to `/ws/spectrum` and `/ws/audio` for the waterfall display and RX audio playback (via an `AudioWorklet` ring buffer, immune to per-message scheduling jitter). `panadapter.html` defaults to **Audio: Live** on page load (not muted) — band changes with audio off could leave the digital-mode view showing a low-resolution crop of the wideband capture instead of the high-res "fine" spectrum, since that data is only computed server-side once audio has been enabled at least once (a byproduct of the audio demod pipeline, shared across all connected clients — unmuting from any one tab enables it for all of them). Click-to-tune is suppressed while `rigIsDigital` — the narrow 3kHz digital view meant any click landed within a few hundred Hz of the dial and silently retuned the actual rig VFO, which is disruptive to FT8/digital operation (the dial must stay fixed; decoding happens by audio offset, not by chasing signals with the tuning knob). A `pendingRetuneHz` retune-wait now has a 3s timeout so a stuck SDR-capture-window retune self-heals instead of freezing the display indefinitely.
 
 ### `dashboard/propagation.html` / `dashboard/spotseek.html` / `dashboard/advisor.html`
 New pages, same no-build-step vanilla HTML/JS pattern and dark-theme CSS variable palette as the original three. `propagation.html` also owns the QTH toggle UI (POSTs `/api/station-profile`, re-renders from the `station_profile` broadcast rather than guessing the new state locally). `spotseek.html`'s manual-lookup and watch-list sections are plain `fetch()` REST calls; its Live Alerts feed listens for `spot_alert` on the shared `/ws`. `advisor.html` consumes `/api/advisor/stream`'s Server-Sent Events by hand (`fetch()` + a `ReadableStream` reader, since the standard `EventSource` API only supports GET and this endpoint is a POST) — parses `data: ` lines split on blank-line event boundaries, with `[QSY]`/`[ERROR]`/`[DONE]` as in-band markers ahead of the plain-text token stream. The Auto-QSY toggle is intentionally the loudest-styled control in the whole console (red, pulsing, impossible-to-miss when on) and resets to off on every page load — it is never persisted, since it's the one control here that lets an LLM command the radio.
+
+## Runtime rules for editing `dashboard/console.html`
+
+One 7,800-line file, no build step, no module system, no static mount —
+`server.py` reads it from disk and returns it as a single `HTMLResponse`.
+Everything below is a property of *that* delivery model, not a style
+preference. Each rule is here because breaking it has already cost a live
+outage or a silent regression; the parenthetical says which.
+
+### The script blocks are ordered, and the order is load-bearing
+
+Five `<script>` blocks, executed top to bottom:
+
+| # | Lines (2026-09-20) | Contents |
+|---|---|---|
+| 1 | 3776 | `StatusBar` and `showToast()` — the only things shared across modules, both write-only display helpers |
+| 2 | 3859 | the **v2 helper block** (`V2:BEGIN`/`V2:END`): `v2MeterFraction`, `v2MeterAngle`, `v2PeakStep`, `v2AfPosToGain`, `v2AfGainToPos`, `v2TraceColour`, `v2TraceFill`, `v2PaletteGradient`, `v2WheelShouldAdjust`, `v2WheelAllowed`, `v2FreqMarkup` — pure functions, no DOM reads, no state |
+| 3 | 4155 | `Panadapter` (RX1 spectrum, waterfall, audio) |
+| 4 | 5183 | `Panadapter2` (RX2 — a deliberate near-copy, see below) |
+| 5 | 6559 | `RigControl` (rig + amp control plane, RX1 S-meter) and the page-level helpers (`initTray`, `initSectionBoxes`, `initColumnWidths`, …) |
+
+**Function declarations hoist only within their own block.** A helper
+defined in block 5 does not exist while block 3 is executing. So:
+
+> **Any helper called at *init* time must be defined in a block ABOVE the
+> module that calls it.**
+
+That is the entire reason the v2 helper block sits at 3859 rather than
+next to the code that uses it. (Stage 5 outage, 2026-09-20:
+`v2PaletteGradient` was defined at the bottom of the file and called from
+`Panadapter.init()` and `Panadapter2.init()` — `Uncaught ReferenceError`
+on load, both panadapters dead, on a page that rendered perfectly in a
+screenshot.)
+
+### Top-level `const` is **not** on `window`
+
+Each block is a classic script, so `const Panadapter = …` lands in the
+global *lexical* environment, not as a property of `window`.
+
+- Inline `onclick="Panadapter.foo()"` **works** — inline handlers resolve
+  through the scope chain, which includes that environment.
+- `window.Panadapter` is `undefined`, and always has been.
+
+Consequence for anything that inspects the page from outside — a test, a
+probe, a devtools snippet: check with indirect eval
+(`(0,eval)('typeof Panadapter')`), never `window['Panadapter']`. A probe
+that uses `window[...]` reports every module missing and looks exactly
+like a real breakage. (Cost an hour during the stage 5 post-mortem.)
+
+### The two receivers are duplicated on purpose
+
+`Panadapter2` is a near-copy of `Panadapter`, not a second instance, and
+`SPEC_AMENDMENTS.md` E7 says to keep it that way. The trap is the
+opposite of the usual one: because the modules are separate but the
+*backend* profile they drive is partly shared, **a fix scoped to one RX
+channel can change the other's behaviour.** This has happened twice in
+one session via shared digital-mode flags.
+
+> **After any RX-channel change, verify both channels.** Not "read the
+> other copy" — exercise it.
+
+Note the asymmetry that catches people: **RX1's S-meter and S9 CAL live
+in `RigControl`, not in `Panadapter`.** Panadapter owns RX1's spectrum
+only. RX2's meter *is* in `Panadapter2`.
+
+### Some class attributes are rewritten wholesale
+
+A number of elements have their `className` **reassigned** on every state
+push (band buttons, session buttons rebuilt from an `innerHTML` template,
+the dummy-load timer, antenna tiles). Any class you add to such an
+element in the markup is gone after the first state broadcast.
+
+- Prefer `classList.toggle`/`add`/`remove` in new code.
+- Where the rewrite is existing behaviour and must stay, **style by `id`,
+  or by a stable ancestor** (`#session-grid .btn`), never by a class you
+  added to the element itself.
+- Status indicators driven by JS get their own dedicated element and a
+  `data-` attribute (`#tray-dot-abtest[data-running]`), so nothing depends
+  on a class surviving.
+
+### Legacy ID rules outrank your class rules
+
+The v1 stylesheet is full of `#some-input { width: 40px }`. An id
+selector beats any single class selector regardless of source order, so a
+new `.v2-input` or `.v2-select` silently loses. Two real cases:
+`#s9-cal-input` and `select#palette-select`. When a v2 component does not
+take effect, check for an id rule before anything else.
+
+### Dimmed is not disabled
+
+`.rx-inert` is `opacity` plus `pointer-events: none` on the children —
+the controls stay in the DOM, stay clickable where the wrapper allows it,
+and keep their explanatory `title`. Nothing here uses the `disabled`
+attribute for "unavailable", and `SPEC_AMENDMENTS.md` D3/E5 requires that
+to stay true. The amp-bypass logic (`amp_in_path === false` on 2m/70cm)
+toggles this class on `#box-antenna` and `#box-abtest`.
+
+### The canvases must not resize when chrome moves
+
+`.panadapter-box`/`.waterfall-box` take their height from fixed CSS and
+their width from the grid column track. Opening or closing the tools tray
+must not change either (`SPEC_AMENDMENTS.md` D5). Two things guarantee it:
+the tray is its **own full-width grid row**, so it changes row heights
+only; and `html { scrollbar-gutter: stable }` (console.html:83) reserves
+the scrollbar so a page that grows past the viewport cannot steal ~15px
+from every column track. **Do not remove that line** — it is the fix for
+the 2026-09-19 layout-shift bug, and the D5 probe depends on it.
+
+### Lines that tests assert on as source text
+
+Two test files read `console.html` as text and match literal lines.
+Restyling around them is fine; changing the line is a test failure:
+
+- `tests/test_amp_drive_limit.py` — `const driveLimit = s.drive_limit_w ?? 100;`,
+  `slider.max = driveLimit;`, `id="rf-power-slider"`
+- `tests/test_tx_guarded_writes.py` — `if (msg.message) return msg.message;` and
+  `showToast('Error: ' + cmdFailureText(msg), 'error')`
+
+`ui-redesign/run_checks.sh` checks all five directly, so a break shows up
+before pytest does.
+
+### A render is not a test
+
+Screenshots have no clock and no event loop. Three classes of defect that
+only a running page shows, all three found the hard way:
+
+1. **Load-time exceptions** (the stage 5 outage) — a broken page still
+   screenshots as a nice-looking layout with a stale canvas.
+2. **Time-dependent maths** — the S-meter peak-hold decay was compounding
+   at 3 dB/s × frames until `test_meter_math.js` asserted frame-rate
+   independence.
+3. **Attributes**, which `node --check` cannot see at all: it parses
+   script blocks, not HTML, so a truncated `ontouchend="…"` is invisible
+   to it. The inventory scripts in `ui-redesign/` exist for exactly this
+   and caught both `#resize-modedsp` going missing and four slider tags
+   being truncated.
+
+So: **`ui-redesign/run_checks.sh` before every commit that touches this
+file** (`SPEC_AMENDMENTS.md` F15), and probe the real page rather than a
+rebuilt harness (F16). `ui-redesign/smoke_console.js` loads the actual
+file in headless Chrome and asserts no uncaught errors, that all three
+modules exist, that every inline `on*` reference resolves, and that the
+required ids are present.
 
 ## Data flow summary
 
@@ -322,7 +492,6 @@ Reflected power/SWR is deliberately *not* in this table — see the `acom_bridge
 ## Known limitations
 
 - **No direct antenna selection — cycle only.** The 1200S firmware has no "select antenna N" command at all (confirmed against an engineer-supplied v1.3 protocol doc, which superseded an earlier A600S-only v1.1 doc this codebase was originally built against, plus live hardware testing). The console drives antenna changes the same way the front-panel ANT button does — `cmd_next_antenna()`, forward cycling only, no "previous" — and the firmware itself skips antennas not assigned to the current band (e.g. on 40m it only toggles between two of the four). Full byte-level writeup of doc-vs-hardware discrepancies (the antenna number being ignored, the band number working despite being undocumented for this sub-command, the 0-indexed `0x27` antenna field) is in this project's Claude memory (`project_acom_1200s_protocol`), not duplicated here.
-- **No automated test suite.** `tests/` contains only an empty `__init__.py`.
 - **Single hardcoded serial port.** `ACOM_PORT` in `server.py` must be updated by hand when the FTDI adapter's device path changes (it has, at least twice, per git history); `find_acom_port()` exists but is unreliable with multiple FTDI devices attached.
 - **DeepFilterNet adds latency, not used at its full real-time potential.** `AudioDemodulator._apply_nr` runs DeepFilterNet3 on a rolling ~0.4s window rather than true frame-at-a-time streaming, because its public `enhance()` API resets the model's hidden state on every call — calling it per-~8ms-block (this file's normal cadence) would reset that context constantly and degrade quality. The safe fix costs latency (~0.4s when NR is on) instead of the ~10-20ms the model is capable of with proper frame-level streaming against its internal (undocumented) state-carrying API. Revisit if the added latency turns out to be perceptible/annoying in practice.
 - **Raw CAT passthrough (`send_raw_cmd`/DT GAIN) shares a serial link with WSJT-X and can stall for seconds.** Confirmed live: a contended `w EX073;` read blocked the shared poll connection long enough to delay PTT/frequency broadcasts by several seconds, which showed up as real TX leakage briefly rendering in the panadapter before the freeze caught up. `get_dt_gain()` now uses its own short-lived connection and is polled as a detached background task (see `rigctld_client.py`'s `_poll_dt_gain`) so it can no longer block the main poll cycle — any *future* raw-passthrough addition should follow the same pattern rather than awaiting inline.
@@ -332,4 +501,4 @@ Reflected power/SWR is deliberately *not* in this table — see the `acom_bridge
 - **DXSpider cluster spots have no mode field.** `wsjtx/dx_cluster.py`'s `infer_phone_mode()` guesses SSB vs. not from the spot's frequency against a coarse per-band phone-subband table — real band plans have narrower CW/data-only slices within those ranges, and a human-typed spot comment can claim anything regardless of actual frequency.
 - **QRZ XML login currently fails** ("Username/password incorrect") for this station's configured account — most likely because it lacks the paid Logbook Data subscription tier QRZ's XML API requires for full access, not a credential error (the password was verified byte-for-byte against what was provided). Not investigated further since HamQTH alone covers `callsign_lookup.py`'s needs; QRZ is wired in as an optional supplement only.
 - **Browser autoplay policy can silently suspend the panadapter's audio despite `audioMuted === false`.** `panadapter.html` calls `enableAudio()` on page load, but browsers block actual `AudioContext` playback until a real user gesture has occurred somewhere on the page — the button correctly shows "Audio: Live" and the server-side effect (fine-spectrum computation starting) fires regardless, since that's driven by a WebSocket message, not `AudioContext` state, but the operator may hear nothing until the first click anywhere on the page.
-- **The `/console` iframe shell has some redundant WebSocket traffic and no cross-tab JS calls.** Each mounted iframe (Dashboard/Monitor/Propagation/Spot-Seek/AI-Advisor, plus the panadapter pane) opens its own `/ws` connection and receives every broadcast independently — five-plus connections doing overlapping work, acceptable overhead for a single-operator LAN console but a real inefficiency if this pattern were ever scaled to multiple simultaneous operators/browsers. Iframes also can't call each other's JS directly (would need `postMessage`) — not needed yet since no tab currently needs to trigger behavior in another, but a real constraint if that changes.
+- **The console opens four WebSocket connections of its own.** `Panadapter`, `Panadapter2` and `RigControl` each open their own `/ws` (plus `/ws/spectrum` and `/ws/audio` for the two panadapters) and each receives every state broadcast independently — overlapping work, and the price of the module isolation described above. Acceptable for a single-operator LAN console; a real inefficiency if this were ever scaled to several simultaneous browsers. The standalone pages, when opened in their own tabs, add more of the same.

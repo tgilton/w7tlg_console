@@ -119,3 +119,9 @@ F17. --v2-btn-h stays 44. Do not revisit.
 F18. Supersedes F14 and stage 5b item 4. The wheel adjusts EVERY slider
      again with no modifier key, guarded against accidental changes as
      described below.
+F19. Stage 7 does NOT delete any CSS or markup. Dead-CSS removal is
+     explicitly out of scope (risk after the stage 5 outage). Produce a
+     candidate list only.
+F20. dashboard/console.html is not modified in stage 7. If you find you
+     must touch it (for example a comment), run smoke_console.js and
+     the real-page checks first and say so in the report.
