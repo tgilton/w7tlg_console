@@ -4066,6 +4066,54 @@ function v2PaletteGradient(stops) {
 }
 /* V2TRACE:END */
 
+/* ── V2WHEEL:BEGIN — the slider wheel guard ───────────────────────────
+   Amendment F18, superseding F14. The wheel adjusts every slider again
+   with no modifier: Terry uses it for precision and Shift-only made that
+   impossible. The accident it has to prevent is the original one — AVG
+   drifting to 39% because the pointer happened to be over a slider while
+   the page was being scrolled.
+
+   So the gate is REST, not a key. A wheel event only adjusts when the
+   pointer has settled: not during or just after a page scroll, and not in
+   the instant after the pointer arrives on the control. Deliberate use —
+   point at a slider, pause, roll — always passes. Scrolling the page past
+   a slider never does.
+
+   Pure so it can be tested directly; the timestamps are kept by the two
+   listeners installed below. */
+const V2_WHEEL_AFTER_SCROLL_MS = 250;   // page was just scrolling
+const V2_WHEEL_AFTER_ENTER_MS = 120;    // pointer just arrived
+
+function v2WheelShouldAdjust(nowMs, lastPageScrollMs, enteredMs) {
+  if (isFinite(lastPageScrollMs) && nowMs - lastPageScrollMs < V2_WHEEL_AFTER_SCROLL_MS) return false;
+  if (isFinite(enteredMs) && nowMs - enteredMs < V2_WHEEL_AFTER_ENTER_MS) return false;
+  return true;
+}
+
+/* The two clocks the guard reads. Installed once, at load, and they look
+   up no element — which is what lets this whole block sit before the
+   module IIFEs (the placement lesson from stage 5). Capturing scroll
+   listener so it sees scrolls on any container, not just the document. */
+let _v2LastPageScroll = -Infinity;
+let _v2EnteredEl = null;
+let _v2EnteredAt = -Infinity;
+
+document.addEventListener('scroll', () => { _v2LastPageScroll = performance.now(); },
+                          { capture: true, passive: true });
+document.addEventListener('mouseover', (e) => {
+  const el = e.target;
+  if (!el || el.tagName !== 'INPUT' || el.type !== 'range') return;
+  if (el !== _v2EnteredEl) { _v2EnteredEl = el; _v2EnteredAt = performance.now(); }
+}, { capture: true, passive: true });
+
+// What every wheel handler calls. Keeps the two clocks private.
+function v2WheelAllowed(el) {
+  const now = performance.now();
+  const entered = (el === _v2EnteredEl) ? _v2EnteredAt : -Infinity;
+  return v2WheelShouldAdjust(now, _v2LastPageScroll, entered);
+}
+/* V2WHEEL:END */
+
 // Frequency readout markup: the group separators are dim and narrower
 // than a digit (spec §2.2), which needs them wrapped rather than styled
 // as plain text. Pure and stateless. Input is machine-generated digits,
@@ -5068,27 +5116,21 @@ function init() {
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     }, { capture: true }));
 
-  // Amendment F14: these four change ONLY with Shift held. They used to
-  // take a plain wheel and preventDefault it, so scrolling the page with
-  // the pointer anywhere near a spectrum slider silently changed the
-  // display instead of scrolling — which is how AVG ended up at 39% in
-  // Terry's screenshot. Without Shift the event is left entirely alone,
-  // so the page scrolls normally.
-  //
-  // On macOS a Shift+wheel is delivered as HORIZONTAL scroll, so the
-  // delta arrives in deltaX rather than deltaY. Take whichever is
-  // non-zero, preferring deltaY.
+  // Amendment F18 (superseding F14): a plain wheel adjusts these again.
+  // The accident F14 guarded against — AVG drifting to 39% because the
+  // pointer sat over a slider during a page scroll — is handled by
+  // v2WheelAllowed instead, which requires the pointer to have settled.
   ['span-slider', 'floor-slider', 'gain-slider', 'avg-slider'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('wheel', e => {
-      if (!e.shiftKey) return;            // plain scroll belongs to the page
+      // F18: no modifier — the guard is REST, not a key. Bail without
+      // preventDefault so a page scroll keeps scrolling.
+      if (!v2WheelAllowed(el)) return;
       e.preventDefault();
       if (el.disabled) return;
       const step = parseFloat(el.step) || 1;
-      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-      if (delta === 0) return;
-      const dir = delta < 0 ? 1 : -1;
+      const dir = e.deltaY < 0 ? 1 : -1;
       el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
                           parseFloat(el.value) + step * dir));
       el.dispatchEvent(new Event('input'));
@@ -6432,27 +6474,21 @@ function init() {
       if (audioCtx2 && audioCtx2.state === 'suspended') audioCtx2.resume();
     }, { capture: true }));
 
-  // Amendment F14: these four change ONLY with Shift held. They used to
-  // take a plain wheel and preventDefault it, so scrolling the page with
-  // the pointer anywhere near a spectrum slider silently changed the
-  // display instead of scrolling — which is how AVG ended up at 39% in
-  // Terry's screenshot. Without Shift the event is left entirely alone,
-  // so the page scrolls normally.
-  //
-  // On macOS a Shift+wheel is delivered as HORIZONTAL scroll, so the
-  // delta arrives in deltaX rather than deltaY. Take whichever is
-  // non-zero, preferring deltaY.
+  // Amendment F18 (superseding F14): a plain wheel adjusts these again.
+  // The accident F14 guarded against — AVG drifting to 39% because the
+  // pointer sat over a slider during a page scroll — is handled by
+  // v2WheelAllowed instead, which requires the pointer to have settled.
   ['span2-slider', 'floor2-slider', 'gain2-slider', 'avg2-slider'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('wheel', e => {
-      if (!e.shiftKey) return;            // plain scroll belongs to the page
+      // F18: no modifier — the guard is REST, not a key. Bail without
+      // preventDefault so a page scroll keeps scrolling.
+      if (!v2WheelAllowed(el)) return;
       e.preventDefault();
       if (el.disabled) return;
       const step = parseFloat(el.step) || 1;
-      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-      if (delta === 0) return;
-      const dir = delta < 0 ? 1 : -1;
+      const dir = e.deltaY < 0 ? 1 : -1;
       el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
                           parseFloat(el.value) + step * dir));
       el.dispatchEvent(new Event('input'));
@@ -6480,16 +6516,13 @@ function init() {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('wheel', e => {
-      // Shift-only, like the spectrum sliders (Amendment F14, extended to
-      // every slider). Without Shift the event is untouched so the page
-      // scrolls; a stray scroll over a slider must never send anything.
-      if (!e.shiftKey) return;
+      // F18: no modifier — the guard is REST, not a key. Bail without
+      // preventDefault so a page scroll keeps scrolling.
+      if (!v2WheelAllowed(el)) return;
       e.preventDefault();
       if (el.disabled) return;
       const step = parseFloat(el.step) || 1;
-      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;   // macOS sends Shift+wheel as deltaX
-      if (delta === 0) return;
-      const dir = delta < 0 ? 1 : -1;
+      const dir = e.deltaY < 0 ? 1 : -1;
       el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
                           parseFloat(el.value) + step * dir));
       el.dispatchEvent(new Event('input'));
@@ -6561,16 +6594,12 @@ function addWheelToSlider(id, sendFn, key) {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('wheel', e => {
-    // Shift-only — see the spectrum sliders' note (Amendment F14,
-    // extended here to every slider RigControl owns, including
-    // rf-power-slider, where a stray scroll changed transmit power).
-    if (!e.shiftKey) return;
+    // F18: no modifier — the guard is REST, not a key. Bail without
+    // preventDefault so a page scroll keeps scrolling.
+    if (!v2WheelAllowed(el)) return;
     e.preventDefault();
-    if (el.disabled) return;
     const step = parseFloat(el.step) || 1;
-    const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-    if (delta === 0) return;
-    const dir = delta < 0 ? 1 : -1;
+    const dir = e.deltaY < 0 ? 1 : -1;
     el.value = Math.max(parseFloat(el.min), Math.min(parseFloat(el.max),
                         parseFloat(el.value) + step * dir));
     el.dispatchEvent(new Event('input'));

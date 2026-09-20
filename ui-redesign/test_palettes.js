@@ -97,43 +97,33 @@ ok('six choices', Object.keys(V2_TRACE_COLOURS).length === 6);
 ok('unknown name falls back to ice', v2TraceColour('nope') === '#67D0F0');
 ok('gradient uses every stop', v2PaletteGradient(P.viridis).split(',').length >= 10);
 
-console.log('spectrum-slider wheel gate');
-// Extract the handler body and run it against a fake event/element.
-const wSrc = html.slice(html.indexOf("['span-slider', 'floor-slider', 'gain-slider', 'avg-slider'].forEach"));
-const body = wSrc.slice(wSrc.indexOf("el.addEventListener('wheel', e => {") + "el.addEventListener('wheel', e => {".length,
-                        wSrc.indexOf('}, { passive: false });'));
-const handler = new Function('el', 'e', body);
-function trial(evt) {
-  const el = { disabled: false, step: '1', min: '0', max: '100', value: '50',
-               dispatchEvent() { this._fired = true; }, _fired: false };
-  let prevented = false;
-  handler(el, Object.assign({ deltaY: 0, deltaX: 0, shiftKey: false,
-                              preventDefault() { prevented = true; } }, evt));
-  return { value: el.value, prevented, fired: el._fired };
-}
-let r = trial({ deltaY: -100 });
-ok('no shift: value unchanged', r.value === '50');
-ok('no shift: preventDefault NOT called', r.prevented === false);
-r = trial({ deltaY: -100, shiftKey: true });
-ok('shift+deltaY: value changed', Number(r.value) === 51);
-ok('shift+deltaY: preventDefault called', r.prevented === true);
-r = trial({ deltaX: -100, shiftKey: true });
-ok('shift+deltaX (macOS): value changed', Number(r.value) === 51);
-ok('shift+deltaX: preventDefault called', r.prevented === true);
-r = trial({ deltaY: 100, shiftKey: true });
-ok('shift down: value decreases', Number(r.value) === 49);
-r = trial({ shiftKey: true });
-ok('shift with no delta: no change', r.value === '50');
+console.log('wheel guard (pure)');
+const guardSrc = block('/* ── V2WHEEL:BEGIN', '/* V2WHEEL:END */')
+  .replace(/document\.addEventListener[\s\S]*?\}\);\n/g, '')   // listeners need a DOM
+  .replace(/let _v2[\s\S]*?\n/g, '');
+const genv = {};
+new Function('exports', guardSrc
+  + '\nexports.v2WheelShouldAdjust = v2WheelShouldAdjust;')(genv);
+const guard = genv.v2WheelShouldAdjust;
+ok('rested pointer adjusts', guard(10000, 0, 0) === true);
+ok('100ms after a page scroll does NOT adjust', guard(10000, 9900, 0) === false);
+ok('249ms after a page scroll does NOT adjust', guard(10000, 9751, 0) === false);
+ok('251ms after a page scroll adjusts', guard(10000, 9749, 0) === true);
+ok('50ms after entering does NOT adjust', guard(10000, 0, 9950) === false);
+ok('119ms after entering does NOT adjust', guard(10000, 0, 9881) === false);
+ok('121ms after entering adjusts', guard(10000, 0, 9879) === true);
+ok('both windows expired adjusts', guard(10000, 9000, 9000) === true);
+ok('never entered (-Infinity) adjusts', guard(10000, -Infinity, -Infinity) === true);
+ok('both windows active does NOT adjust', guard(10000, 9950, 9950) === false);
 
-console.log('every slider wheel handler is Shift-only');
-// There are three wheel-handler bodies in the file: the spectrum sliders
-// (one copy per receiver), Panadapter2's own slider list, and
-// RigControl's addWheelToSlider. Extract each and put a fake event
-// through it for every slider id that reaches it.
+console.log('the guard is defined before Panadapter.init');
+ok('  ordering', html.indexOf('function v2WheelShouldAdjust') < html.indexOf('Panadapter.init();'));
+
+console.log('every slider wheel handler, all 26 ids');
 function handlerBodyAfter(marker) {
-  const a = html.indexOf(marker);
-  if (a < 0) throw new Error('marker not found: ' + marker);
-  const s2 = html.slice(a);
+  const a2 = html.indexOf(marker);
+  if (a2 < 0) throw new Error('marker not found: ' + marker);
+  const s2 = html.slice(a2);
   const open = s2.indexOf("addEventListener('wheel', e => {");
   const body = s2.slice(open + "addEventListener('wheel', e => {".length);
   return body.slice(0, body.indexOf('}, { passive: false });'));
@@ -143,7 +133,24 @@ const BODIES = {
   'RX2 sliders':      handlerBodyAfter("['width2-slider',    v => setWidth(v)"),
   'addWheelToSlider': handlerBodyAfter('function addWheelToSlider(id, sendFn, key)'),
 };
-const SLIDERS = {
+// step and starting value per slider, as the page actually declares them
+const SL = {
+  'span-slider':[1,'0','1000','500'], 'floor-slider':[1,'-160','0','-90'],
+  'gain-slider':[1,'0','100','50'],   'avg-slider':[1,'0','100','30'],
+  'span2-slider':[1,'0','1000','500'],'floor2-slider':[1,'-160','0','-90'],
+  'gain2-slider':[1,'0','100','50'],  'avg2-slider':[1,'0','100','30'],
+  'width2-slider':[50,'200','3000','3000'], 'nr2-slider':[1,'1','15','1'],
+  'rx-vol2-slider':[1,'0','1000','316'], 'rf-gain2-slider':[1,'0','6','5'],
+  'eq2-bass-slider':[1,'-12','12','0'],'eq2-mid-slider':[1,'-12','12','0'],
+  'eq2-treble-slider':[1,'-12','12','0'],
+  'width-slider':[50,'200','3000','3000'], 'nr-slider':[1,'1','15','1'],
+  'rx-vol-slider':[1,'0','1000','316'], 'rf-gain-slider':[1,'0','6','5'],
+  'eq-bass-slider':[1,'-12','12','0'], 'eq-mid-slider':[1,'-12','12','0'],
+  'eq-treble-slider':[1,'-12','12','0'], 'rf-power-slider':[1,'5','100','50'],
+  'mic-gain-slider':[1,'0','100','50'], 'comp-slider':[1,'0','100','0'],
+  'dt-gain-slider':[1,'0','100','15'],
+};
+const GROUP = {
   'spectrum sliders': ['span-slider','floor-slider','gain-slider','avg-slider',
                        'span2-slider','floor2-slider','gain2-slider','avg2-slider'],
   'RX2 sliders':      ['width2-slider','nr2-slider','rx-vol2-slider','rf-gain2-slider',
@@ -152,27 +159,34 @@ const SLIDERS = {
                        'eq-bass-slider','eq-mid-slider','eq-treble-slider',
                        'rf-power-slider','mic-gain-slider','comp-slider','dt-gain-slider'],
 };
+let nIds = 0;
 for (const [group, body] of Object.entries(BODIES)) {
-  const fn = new Function('el', 'e', 'key', 'sendFn', 'RigControl', 'setDragging',
-                          'clearTimeout', 'setTimeout', body);
-  for (const id of SLIDERS[group]) {
-    const mk = () => ({ id, disabled: false, step: '1', min: '0', max: '100', value: '50',
-                        dispatchEvent() { this._fired = true; }, _fired: false });
-    const sends = [];
-    const stub = { setDragging() {} };
-    const call = (el, evt) => fn(el, evt, 'k', v => sends.push(v), stub,
-                                 () => {}, () => {}, () => 0);
-    let el = mk(); let prevented = false;
-    call(el, { deltaY: -100, deltaX: 0, shiftKey: false, preventDefault() { prevented = true; } });
-    ok(`  ${id}: plain wheel changes nothing`, el.value === '50' && !prevented && sends.length === 0);
-    el = mk(); prevented = false;
-    call(el, { deltaY: -100, deltaX: 0, shiftKey: true, preventDefault() { prevented = true; } });
-    ok(`  ${id}: shift+deltaY acts`, Number(el.value) === 51 && prevented);
-    el = mk(); prevented = false;
-    call(el, { deltaY: 0, deltaX: -100, shiftKey: true, preventDefault() { prevented = true; } });
-    ok(`  ${id}: shift+deltaX acts`, Number(el.value) === 51 && prevented);
+  const fn = new Function('el','e','key','sendFn','RigControl','setDragging',
+                          'clearTimeout','setTimeout','v2WheelAllowed', body);
+  for (const id of GROUP[group]) {
+    nIds++;
+    const [step, min, max, val] = SL[id];
+    const mk = () => ({ id, disabled:false, step:String(step), min, max, value:val,
+                        dispatchEvent(){ this._fired = true; }, _fired:false });
+    const run = (el, allowed, evt) => { let p = false;
+      fn(el, Object.assign({ deltaY:-100, preventDefault(){ p = true; } }, evt),
+         'k', () => {}, { setDragging(){} }, () => {}, () => {}, () => 0, () => allowed);
+      return p; };
+    // width-slider and width2-slider ship at their max (3000), where a
+    // wheel UP correctly clamps and moves nothing — so roll DOWN on any
+    // slider that starts at its ceiling.
+    const atMax = Number(val) >= Number(max);
+    let el = mk();
+    let prevented = run(el, true, { deltaY: atMax ? 100 : -100 });
+    const moved = Math.abs(Number(el.value) - Number(val));
+    ok(`  ${id}: rested wheel moves by its step (${step}${atMax ? ', rolled down' : ''})`,
+       moved === step && prevented);
+    el = mk(); prevented = run(el, false, {});
+    ok(`  ${id}: guarded wheel changes nothing, no preventDefault`,
+       el.value === val && prevented === false);
   }
 }
+ok(`all 26 slider ids covered (saw ${nIds})`, nIds === 26);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

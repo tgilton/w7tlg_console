@@ -116,3 +116,6 @@ F16. From now on, renders and probes use the REAL console.html loaded in
      failures without the server are expected; report what the empty page
      looks like at 1600 and 2400 wide.
 F17. --v2-btn-h stays 44. Do not revisit.
+F18. Supersedes F14 and stage 5b item 4. The wheel adjusts EVERY slider
+     again with no modifier key, guarded against accidental changes as
+     described below.
