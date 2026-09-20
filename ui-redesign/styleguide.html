@@ -1412,34 +1412,65 @@
 /* The old linear bar still exists and is still updated — only hidden. */
 .v2-meter-card .smeter-bar-wrap { display: none; }
 
+/* The readout must never reflow. A reading growing from "S9" to "S9+10"
+   used to wrap the S label onto its own line, which made the meter card
+   taller and pushed the spectrum and waterfall down until the signal
+   dropped again (Terry, stage 4a). So: no wrapping anywhere, width
+   reserved for the longest strings each field can ever hold, and both
+   lines at a fixed height derived from the font rather than the content.
+
+   Longest possible strings, which is what the ch reservations below are
+   sized for: "-160.0 dBFS" (11ch), "S9+60" (5ch), and the peak line
+   "PEAK -160.0 dBFS S9+60". ch is exact here because the readout is
+   JetBrains Mono with tabular figures. */
 .v2-meter-readout {
+  /* One dial for both lines' type and height, so a font change cannot
+     desynchronise the reserved heights from the text. */
+  --v2-dbfs-fs: clamp(16px, 6cqi, 32px);
+  --v2-s-fs: clamp(16px, 4.6cqi, 26px);
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
   gap: 6px 12px;
+  font-variant-numeric: tabular-nums;
 }
-.v2-meter-live { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.v2-meter-live {
+  display: flex; align-items: baseline; gap: 10px;
+  min-width: 0;
+  flex-wrap: nowrap;
+  height: calc(var(--v2-dbfs-fs) * 1.25);
+  overflow: hidden;
+}
 /* Up to 32px (spec §2.2) but never below today's 16px — Amendment A. */
 .v2-meter-live .smeter-dbfs {
-  font-size: clamp(16px, 7cqi, 32px);
+  font-size: var(--v2-dbfs-fs);
   font-weight: 700;
   color: var(--v2-readout);
   margin: 0;
   white-space: nowrap;
+  min-width: 11ch;              /* "-160.0 dBFS" */
+  flex: 0 0 auto;
 }
 .v2-meter-live .val {
-  font-size: clamp(16px, 5.5cqi, 26px);
+  font-size: var(--v2-s-fs);
   font-weight: 700;
   color: var(--v2-readout);
   white-space: nowrap;
+  min-width: 5ch;               /* "S9+60" */
+  flex: 0 0 auto;
 }
 .v2-meter-peakrow {
   grid-column: 1;
   display: flex; align-items: baseline; gap: 7px;
   font-size: var(--v2-font-label);
+  line-height: 1.3;
+  height: calc(var(--v2-font-label) * 1.3);
   color: var(--v2-readout-idle);
   white-space: nowrap;
+  overflow: hidden;
 }
+#smeter-peak-db, #smeter2-peak-db { min-width: 11ch; }
+#smeter-peak-s, #smeter2-peak-s { min-width: 5ch; }
 .v2-meter-peak-icon { color: #1f80c4; font-size: 0.85em; }
 .v2-meter-peak-label {
   letter-spacing: var(--v2-ls-label);
@@ -1449,9 +1480,19 @@
 #smeter-peak-db, #smeter2-peak-db, #smeter-peak-s, #smeter2-peak-s {
   color: var(--v2-readout); font-weight: 700;
 }
+/* S9 CAL takes its own row by default. Beside the readout it needs about
+   135px, and at a 700px panel the card has 260px of which the reserved
+   worst-case readout already wants ~190 — so on a narrow card the two
+   cannot share a row at any font size that respects the 16px floor. Its
+   own row is the same at every reading, which is the point. On a wide
+   card it moves back up beside the readout. */
 .v2-s9cal {
-  grid-row: 1 / span 2; grid-column: 2;
+  grid-column: 1 / -1;
   display: flex; align-items: center; gap: 8px;
+  height: var(--v2-input-h);
+}
+@container (min-width: 430px) {
+  .v2-s9cal { grid-row: 1 / span 2; grid-column: 2; }
 }
 .v2-s9cal .ctl-label {
   font-size: var(--v2-font-label);
@@ -1459,10 +1500,12 @@
   color: var(--v2-label);
   white-space: nowrap;
 }
+#s9-cal-input, #s9-cal2-input,
 .v2-s9cal input[type=number] {
   font-family: inherit;
   font-size: var(--v2-font-label);
-  width: 64px;
+  width: 72px;                  /* fits "-100.0"; #s9-cal-input's legacy
+                                   40px is an ID rule, hence the ID here */
   height: var(--v2-input-h);
   box-sizing: border-box;
   padding: 0 8px;
