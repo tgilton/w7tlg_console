@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>W7TLG Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
 /*
   Unified single-window console (Phase B — replaces the Phase A iframe
@@ -1983,6 +1983,160 @@ select#palette-select {
 }
 #dummy-timer { font-size: var(--v2-font-value); }
 
+/* ── Stage 4a: receiver panel top row ─────────────────────────────────
+   Frequency card left, analog meter card right (spec §2.2). Both
+   receivers, identical rules — the only difference is the chip's label,
+   so a screenshot of either side is identifiable.
+
+   #vfo/#vfo2 and every badge have their class attribute rewritten
+   wholesale by updateUI (freq-readout + ' tx' on transmit;
+   'badge badge-ptt-tx' etc.), so everything here is keyed on the classes
+   the JS writes, never on a class added to the markup. */
+/* container-type goes on the PANEL, not on .v2-rx-top: an element cannot
+   answer a container query about itself, so with it on .v2-rx-top the
+   query silently never matched and the cards stayed side by side at every
+   width. */
+.panel-center, .panel-center2 { container-type: inline-size; }
+.v2-rx-top {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+/* Side by side only while the digits still fit at full size. Below that
+   they stack, rather than the readout shrinking — Amendment A. Threshold
+   measured, see the stage 4a report. */
+/* 660px of PANEL CONTENT (the panel's 16px padding is already excluded).
+   Side by side gives the frequency card (container - 16 gap)/2 - 34 of
+   inner width; the digits measure 281px at their full 56px with the
+   narrow separators, so the cards may only sit side by side from about
+   646px of container. 660 leaves ~7px of margin over that. */
+@container (max-width: 660px) {
+  .v2-rx-top { grid-template-columns: 1fr; }
+}
+
+/* Dim, narrow group separators (spec §2.2). inline-flex in a fixed 0.3em
+   box so the glyph is centred in its own gap whatever the font draws. */
+.v2-freq-sep {
+  font-style: normal;
+  color: var(--v2-notch-fg);
+  display: inline-flex;
+  justify-content: center;
+  width: 0.3em;
+  overflow: hidden;
+}
+.v2-freq-card, .v2-meter-card {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  min-width: 0;
+}
+/* Its own container: the readout's clamp()s are in cqi, and without this
+   they resolve against the PANEL, so at a 700px panel the 32px dBFS text
+   was sized for a 668px box while sitting in a 292px card — and ran
+   straight into the S9 CAL field. */
+.v2-meter-card {
+  display: flex; flex-direction: column; gap: 12px;
+  container-type: inline-size;
+}
+.v2-freq-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px;
+}
+
+/* The readout keeps its own size rules; only its alignment changes. */
+.v2-freq-card .freq-readout { text-align: left; }
+.v2-freq-card .vfo-meta { justify-content: flex-start; gap: 6px; margin-top: 12px; }
+/* Badges restyled through the classes updateUI writes. The SPLIT pulse is
+   untouched: .badge-split keeps its own animation rule above. */
+.v2-freq-card .badge {
+  font-size: var(--v2-font-pill);
+  font-weight: var(--v2-weight-pill);
+  padding: 5px 9px;
+  border-radius: var(--v2-radius-pill);
+  letter-spacing: 0.03em;
+}
+
+/* Meter face. Scales with the card: the SVG is width:100% on a fixed
+   viewBox, so every coordinate in it is resolution-independent. */
+.v2-meter-svg {
+  font-family: 'Barlow Semi Condensed', 'Avenir Next Condensed', 'Helvetica Neue', Arial, sans-serif;
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.v2-meter-needle { transition: transform 0.15s ease-out; }
+.v2-meter-peak   { transition: transform 0.12s linear; }
+@media (prefers-reduced-motion: reduce) {
+  .v2-meter-needle, .v2-meter-peak { transition: none; }
+}
+/* The old linear bar still exists and is still updated — only hidden. */
+.v2-meter-card .smeter-bar-wrap { display: none; }
+
+.v2-meter-readout {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 12px;
+}
+.v2-meter-live { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+/* Up to 32px (spec §2.2) but never below today's 16px — Amendment A. */
+.v2-meter-live .smeter-dbfs {
+  font-size: clamp(16px, 7cqi, 32px);
+  font-weight: 700;
+  color: var(--v2-readout);
+  margin: 0;
+  white-space: nowrap;
+}
+.v2-meter-live .val {
+  font-size: clamp(16px, 5.5cqi, 26px);
+  font-weight: 700;
+  color: var(--v2-readout);
+  white-space: nowrap;
+}
+.v2-meter-peakrow {
+  grid-column: 1;
+  display: flex; align-items: baseline; gap: 7px;
+  font-size: var(--v2-font-label);
+  color: var(--v2-readout-idle);
+  white-space: nowrap;
+}
+.v2-meter-peak-icon { color: #1f80c4; font-size: 0.85em; }
+.v2-meter-peak-label {
+  letter-spacing: var(--v2-ls-label);
+  text-transform: uppercase;
+  color: var(--v2-label);
+}
+#smeter-peak-db, #smeter2-peak-db, #smeter-peak-s, #smeter2-peak-s {
+  color: var(--v2-readout); font-weight: 700;
+}
+.v2-s9cal {
+  grid-row: 1 / span 2; grid-column: 2;
+  display: flex; align-items: center; gap: 8px;
+}
+.v2-s9cal .ctl-label {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+.v2-s9cal input[type=number] {
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  width: 64px;
+  height: var(--v2-input-h);
+  box-sizing: border-box;
+  padding: 0 8px;
+  color: var(--v2-fg);
+  background: var(--v2-bg-inset);
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+}
+.v2-s9cal input:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
 /* V2:END */
 </style>
 </head>
@@ -2159,25 +2313,81 @@ select#palette-select {
 
   <!-- ── 3. VFO / panadapter / waterfall / tune ──────────── -->
   <div class="panel panel-center">
-    <div class="freq-readout" id="vfo">  0.000.000</div>
-    <div class="vfo-meta">
-      <span class="badge badge-band" id="badge-band">??</span>
-      <span class="badge badge-mode" id="badge-mode">—</span>
-      <span class="badge badge-ptt-rx" id="badge-ptt">RX</span>
-      <span class="badge badge-split" id="badge-split" style="display:none">&#9888; SPLIT</span>
-      <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
-      <span class="badge badge-digital-audio-inactive" id="badge-digital-audio" style="display:none">DIGI AUDIO</span>
-      <span class="badge badge-dummy-load" id="badge-dummy-load" style="display:none">DUMMY LOAD</span>
-    </div>
+  <!-- Receiver panel top row (stage 4a, spec §2.2): frequency card left,
+       analog meter card right. The pair sits side by side only while the
+       frequency digits fit at no less than today's size; below that the
+       container query stacks them (see .v2-rx-top in the V2 block).
 
-    <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter-bar"></div></div>
-    <div class="smeter-dbfs" id="smeter-db">— dBFS</div>
-    <div class="smeter-readout">
-      <span class="val" id="smeter-label">S0</span>
-      <span class="field-group">
-        <span class="ctl-label">S9 Cal</span>
-        <input type="number" id="s9-cal-input" value="-75" step="1" oninput="RigControl.onS9CalInput(this.value)">
-      </span>
+       The readout, every badge and the S9 CAL input keep their ids and
+       their JS-written classes — updateUI rewrites the class attribute on
+       #vfo and on every badge, so all of those are restyled through
+       scoped selectors, never by adding a class here. -->
+    <div class="v2-rx-top">
+      <div class="v2-freq-card">
+        <div class="v2-freq-head">
+          <span class="v2-label">Frequency</span>
+          <span class="v2-rx-chip">RX1</span>
+        </div>
+        <div class="freq-readout" id="vfo">  0<i class="v2-freq-sep">.</i>000<i class="v2-freq-sep">.</i>000</div>
+        <div class="vfo-meta">
+          <span class="badge badge-band" id="badge-band">??</span>
+          <span class="badge badge-mode" id="badge-mode">—</span>
+          <span class="badge badge-ptt-rx" id="badge-ptt">RX</span>
+          <span class="badge badge-split" id="badge-split" style="display:none">&#9888; SPLIT</span>
+          <span class="badge badge-digital" id="badge-digital" style="display:none">FT8</span>
+          <span class="badge badge-digital-audio-inactive" id="badge-digital-audio" style="display:none">DIGI AUDIO</span>
+          <span class="badge badge-dummy-load" id="badge-dummy-load" style="display:none">DUMMY LOAD</span>
+        </div>
+      </div>
+
+      <div class="v2-meter-card">
+        <svg class="v2-meter-svg" id="smeter-svg" viewBox="0 0 460 240"
+             role="img" aria-labelledby="smeter-svg-title" preserveAspectRatio="xMidYMid meet">
+          <title id="smeter-svg-title">Signal strength meter</title>
+          <rect x="0" y="0" width="460" height="240" rx="10" fill="#f2efe6"/>
+          <path d="M 63.77 117.24 A 270.00 270.00 0 0 1 258.60 61.52" fill="none" stroke="#15181d" stroke-width="3"/>
+          <path d="M 258.60 61.52 A 270.00 270.00 0 0 1 396.23 117.24" fill="none" stroke="#d0402b" stroke-width="5"/>
+          <path d="M 63.77 117.24 L 74.24 130.63 M 107.51 89.39 L 115.22 104.54 M 155.76 70.41 L 160.43 86.75 M 206.75 61.00 L 208.21 77.94 M 258.60 61.52 L 256.80 78.42" stroke="#15181d" stroke-width="3.5" fill="none"/>
+          <path d="M 84.97 102.26 L 90.34 110.69 M 131.18 78.74 L 134.84 88.04 M 181.03 64.48 L 182.84 74.31 M 232.69 60.01 L 232.59 70.01" stroke="#15181d" stroke-width="2" fill="none"/>
+          <path d="M 283.37 65.33 L 280.01 81.99 M 331.32 79.73 L 324.94 95.49 M 396.23 117.24 L 385.76 130.63" stroke="#d0402b" stroke-width="3.5" fill="none"/>
+          <path d="M 307.68 71.42 L 304.80 80.99 M 354.09 90.20 L 349.49 99.08 M 375.79 102.74 L 370.39 111.16" stroke="#d0402b" stroke-width="2" fill="none"/>
+            <text x="83.47" y="142.45" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">S</text>
+          <text x="122.02" y="117.90" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">3</text>
+          <text x="164.56" y="101.17" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">5</text>
+          <text x="209.51" y="92.88" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">7</text>
+          <text x="255.21" y="93.34" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">9</text>
+          <text x="289.30" y="35.92" font-size="30" font-weight="700" fill="#d0402b" text-anchor="middle" dominant-baseline="middle">+10</text>
+          <text x="342.58" y="51.92" font-size="30" font-weight="700" fill="#d0402b" text-anchor="middle" dominant-baseline="middle">+30</text>
+          <text x="414.70" y="93.60" font-size="30" font-weight="700" fill="#d0402b" text-anchor="middle" dominant-baseline="middle">+60</text>
+          <text x="230" y="205" font-size="34" font-weight="800" letter-spacing="3"
+                fill="#15181d" text-anchor="middle">SIGNAL</text>
+          <polygon id="smeter-peak" class="v2-meter-peak" points="0,-250 -8,-236 8,-236"
+                   fill="#1f80c4" transform="translate(230.0 330.0) rotate(-38.00)"/>
+          <line id="smeter-needle" class="v2-meter-needle"
+                x1="0" y1="0" x2="0" y2="-266" stroke="#15181d" stroke-width="3"
+                stroke-linecap="round" transform="translate(230.0 330.0) rotate(-38.00)"/>
+        </svg>
+        <!-- The old linear bar stays in the DOM and keeps being updated by
+             the same code as before; it is only hidden. Removing it would
+             mean touching an update path this stage has no business in. -->
+        <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter-bar"></div></div>
+        <div class="v2-meter-readout">
+          <div class="v2-meter-live">
+            <span class="smeter-dbfs" id="smeter-db">— dBFS</span>
+            <span class="val" id="smeter-label">S0</span>
+          </div>
+          <div class="v2-meter-peakrow">
+            <span class="v2-meter-peak-icon" aria-hidden="true">&#9650;</span>
+            <span class="v2-meter-peak-label">Peak</span>
+            <span id="smeter-peak-db">—</span>
+            <span id="smeter-peak-s"></span>
+          </div>
+          <span class="field-group v2-s9cal">
+            <span class="ctl-label">S9 Cal</span>
+            <input type="number" id="s9-cal-input" value="-75" step="1" oninput="RigControl.onS9CalInput(this.value)">
+          </span>
+        </div>
+      </div>
     </div>
     <!-- AF Gain sits directly above ALC, column-aligned with it via the same
          3-column grid as #tx-meters (matching width = visually "one loop"),
@@ -2383,16 +2593,66 @@ select#palette-select {
        left column per Terry — "there might be reasons to control
        the radio"). See project memory on the RSPduo migration. -->
   <div class="panel panel-center2">
-    <div class="freq-readout" id="vfo2">  0.000.000</div>
-    <div class="vfo-meta">
-      <span class="badge badge-band" id="badge2-antenna">ANT B</span>
-      <span class="badge badge-mode" id="badge2-mode">USB</span>
-    </div>
+    <div class="v2-rx-top">
+      <div class="v2-freq-card">
+        <div class="v2-freq-head">
+          <span class="v2-label">Frequency</span>
+          <span class="v2-rx-chip">RX2</span>
+        </div>
+        <div class="freq-readout" id="vfo2">  0<i class="v2-freq-sep">.</i>000<i class="v2-freq-sep">.</i>000</div>
+        <div class="vfo-meta">
+          <span class="badge badge-band" id="badge2-antenna">ANT B</span>
+          <span class="badge badge-mode" id="badge2-mode">USB</span>
+        </div>
+      </div>
 
-    <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter2-bar"></div></div>
-    <div class="smeter-dbfs" id="smeter2-db">— dBFS</div>
-    <div class="smeter-readout">
-      <span class="val" id="smeter2-label">S0</span>
+      <div class="v2-meter-card">
+        <svg class="v2-meter-svg" id="smeter2-svg" viewBox="0 0 460 240"
+             role="img" aria-labelledby="smeter2-svg-title" preserveAspectRatio="xMidYMid meet">
+          <title id="smeter2-svg-title">Signal strength meter</title>
+          <rect x="0" y="0" width="460" height="240" rx="10" fill="#f2efe6"/>
+          <path d="M 63.77 117.24 A 270.00 270.00 0 0 1 258.60 61.52" fill="none" stroke="#15181d" stroke-width="3"/>
+          <path d="M 258.60 61.52 A 270.00 270.00 0 0 1 396.23 117.24" fill="none" stroke="#d0402b" stroke-width="5"/>
+          <path d="M 63.77 117.24 L 74.24 130.63 M 107.51 89.39 L 115.22 104.54 M 155.76 70.41 L 160.43 86.75 M 206.75 61.00 L 208.21 77.94 M 258.60 61.52 L 256.80 78.42" stroke="#15181d" stroke-width="3.5" fill="none"/>
+          <path d="M 84.97 102.26 L 90.34 110.69 M 131.18 78.74 L 134.84 88.04 M 181.03 64.48 L 182.84 74.31 M 232.69 60.01 L 232.59 70.01" stroke="#15181d" stroke-width="2" fill="none"/>
+          <path d="M 283.37 65.33 L 280.01 81.99 M 331.32 79.73 L 324.94 95.49 M 396.23 117.24 L 385.76 130.63" stroke="#d0402b" stroke-width="3.5" fill="none"/>
+          <path d="M 307.68 71.42 L 304.80 80.99 M 354.09 90.20 L 349.49 99.08 M 375.79 102.74 L 370.39 111.16" stroke="#d0402b" stroke-width="2" fill="none"/>
+            <text x="83.47" y="142.45" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">S</text>
+          <text x="122.02" y="117.90" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">3</text>
+          <text x="164.56" y="101.17" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">5</text>
+          <text x="209.51" y="92.88" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">7</text>
+          <text x="255.21" y="93.34" font-size="30" font-weight="700" fill="#15181d" text-anchor="middle" dominant-baseline="middle">9</text>
+          <text x="289.30" y="35.92" font-size="30" font-weight="700" fill="#d0402b" text-anchor="middle" dominant-baseline="middle">+10</text>
+          <text x="342.58" y="51.92" font-size="30" font-weight="700" fill="#d0402b" text-anchor="middle" dominant-baseline="middle">+30</text>
+          <text x="414.70" y="93.60" font-size="30" font-weight="700" fill="#d0402b" text-anchor="middle" dominant-baseline="middle">+60</text>
+          <text x="230" y="205" font-size="34" font-weight="800" letter-spacing="3"
+                fill="#15181d" text-anchor="middle">SIGNAL</text>
+          <polygon id="smeter2-peak" class="v2-meter-peak" points="0,-250 -8,-236 8,-236"
+                   fill="#1f80c4" transform="translate(230.0 330.0) rotate(-38.00)"/>
+          <line id="smeter2-needle" class="v2-meter-needle"
+                x1="0" y1="0" x2="0" y2="-266" stroke="#15181d" stroke-width="3"
+                stroke-linecap="round" transform="translate(230.0 330.0) rotate(-38.00)"/>
+        </svg>
+        <div class="smeter-bar-wrap"><div class="smeter-bar" id="smeter2-bar"></div></div>
+        <div class="v2-meter-readout">
+          <div class="v2-meter-live">
+            <span class="smeter-dbfs" id="smeter2-db">— dBFS</span>
+            <span class="val" id="smeter2-label">S0</span>
+          </div>
+          <div class="v2-meter-peakrow">
+            <span class="v2-meter-peak-icon" aria-hidden="true">&#9650;</span>
+            <span class="v2-meter-peak-label">Peak</span>
+            <span id="smeter2-peak-db">—</span>
+            <span id="smeter2-peak-s"></span>
+          </div>
+          <!-- RX2 had no S9 CAL at all: s9CalDb2 was hard-coded -75 with no
+               way to change it (Amendment D2). Same control as RX1 now. -->
+          <span class="field-group v2-s9cal">
+            <span class="ctl-label">S9 Cal</span>
+            <input type="number" id="s9-cal2-input" value="-75" step="1" oninput="Panadapter2.onS9CalInput(this.value)">
+          </span>
+        </div>
+      </div>
     </div>
 
     <div class="vol-alc-group">
@@ -4005,6 +4265,32 @@ function send2(obj) {
 // migration. Duplicated here rather than exposing them from Panadapter/
 // RigControl, to avoid touching that already-proven code.
 let s9CalDb2 = -75;
+// RX2 had no S9 CAL control at all before stage 4a — this was a constant
+// (Amendment D2). Its own state, its own localStorage key; RX1's copy
+// lives in RigControl and the two never touch.
+let _lastSmeterDb2 = NaN;
+let _peak2 = null;
+const SMETER_HOLD_MS2 = 6000;
+const SMETER_DECAY_DB_S2 = 3;
+
+function loadS9Cal2() {
+  let v = null;
+  try { v = localStorage.getItem('s9Cal:rx2'); } catch (e) {}
+  const n = parseFloat(v);
+  if (isFinite(n)) {
+    s9CalDb2 = n;
+    const el = document.getElementById('s9-cal2-input');
+    if (el) el.value = n;
+  }
+}
+function onS9CalInput(v) {
+  const n = parseFloat(v);
+  if (!isFinite(n)) return;
+  s9CalDb2 = n;
+  try { localStorage.setItem('s9Cal:rx2', String(n)); } catch (e) {}
+  if (isFinite(_lastSmeterDb2)) renderSmeter2(_lastSmeterDb2);
+}
+
 function smeterLabel2(strengthDb) {
   if (strengthDb >= 0) {
     const over = Math.round(strengthDb / 10) * 10;
@@ -4016,15 +4302,45 @@ function smeterLabel2(strengthDb) {
 
 function updateSmeter(rig) {
   const dbFs = rig.sdr_strength_db_b;
-  const dbEl = document.getElementById('smeter2-db');
-  if (dbFs === undefined || dbFs === null) { dbEl.textContent = '— dBFS'; return; }
+  if (dbFs === undefined || dbFs === null) {
+    document.getElementById('smeter2-db').textContent = '— dBFS';
+    return;
+  }
+  renderSmeter2(dbFs);
+}
+
+// Mirror of RigControl's renderSmeter, deliberately a separate copy —
+// same reason PALETTES2/smeterLabel2 are (this module cannot see that
+// closure). The only shared code is the stateless v2Meter* helpers.
+function renderSmeter2(dbFs) {
+  _lastSmeterDb2 = dbFs;
   const strengthDb = dbFs - s9CalDb2;
-  const pct = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100));
+
   const bar = document.getElementById('smeter2-bar');
-  bar.style.width = pct + '%';
-  bar.classList.toggle('over-s9', strengthDb >= 0);
+  if (bar) {
+    bar.style.width = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100)) + '%';
+    bar.classList.toggle('over-s9', strengthDb >= 0);
+  }
+
+  const needle = document.getElementById('smeter2-needle');
+  if (needle) {
+    needle.setAttribute('transform',
+      'translate(230 330) rotate(' + v2MeterAngle(v2MeterFraction(dbFs, s9CalDb2)).toFixed(2) + ')');
+  }
+
+  _peak2 = v2PeakStep(_peak2, dbFs, performance.now(), SMETER_HOLD_MS2, SMETER_DECAY_DB_S2);
+  const marker = document.getElementById('smeter2-peak');
+  if (marker && _peak2) {
+    marker.setAttribute('transform',
+      'translate(230 330) rotate(' + v2MeterAngle(v2MeterFraction(_peak2.db, s9CalDb2)).toFixed(2) + ')');
+  }
+
   document.getElementById('smeter2-label').textContent = smeterLabel2(strengthDb);
-  dbEl.textContent = dbFs.toFixed(1) + ' dBFS';
+  document.getElementById('smeter2-db').textContent = dbFs.toFixed(1) + ' dBFS';
+  const pdb = document.getElementById('smeter2-peak-db');
+  const ps = document.getElementById('smeter2-peak-s');
+  if (pdb && _peak2) pdb.textContent = _peak2.db.toFixed(1) + ' dBFS';
+  if (ps && _peak2) ps.textContent = smeterLabel2(_peak2.db - s9CalDb2);
 }
 
 // ── Spectrum /ws/spectrum_b — binary frames ────────────────────────────
@@ -4538,7 +4854,7 @@ function drawSpectrum2() {
 
   if (audioTargetFreqHz !== null) {
     const vfo2El = document.getElementById('vfo2');
-    vfo2El.textContent = formatFreqHz2(audioTargetFreqHz);
+    vfo2El.innerHTML = v2FreqMarkup(formatFreqHz2(audioTargetFreqHz));
     // Mirrors RigControl's own vfoEl className toggle (Terry 2026-09-12:
     // "the frequency indication turns red on the RX1 panel, but the RX2
     // panel does not").
@@ -4917,6 +5233,8 @@ function init() {
   wfOverlayCtx2 = wfOverlayCanvas2.getContext('2d');
   spectrumWrap2 = document.getElementById('spectrum2-wrap');
 
+  loadS9Cal2();
+
   // Narrows width2-slider's min/max off its HTML-default 200-3000 to match
   // mode2's actual WID zone at load, instead of leaving it wrong until the
   // first mode change or Link/Copy — see syncFilterRange2's own comment.
@@ -5056,6 +5374,7 @@ function init() {
 
 return {
   init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1, onRx1ViewChange,
+  onS9CalInput,
   onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect,
   setMode, setAudioTarget, setWidth, setFilterWidthMode, toggleNR, setNR, setAGC, setRxVolume, setRfGain, toggleEQ, setEQ,
   toggleRfNotch, toggleDabNotch,
@@ -5129,9 +5448,69 @@ function addWheelToSlider(id, sendFn, key) {
 }
 
 let s9CalDb = -75;
+// Persisted per receiver (Amendment D2). Before stage 4a this reset to
+// -75 on every reload, so the meter's calibration was lost each time.
+function loadS9Cal() {
+  let v = null;
+  try { v = localStorage.getItem('s9Cal:rx1'); } catch (e) {}
+  const n = parseFloat(v);
+  if (isFinite(n)) {
+    s9CalDb = n;
+    const el = document.getElementById('s9-cal-input');
+    if (el) el.value = n;
+  }
+}
 function onS9CalInput(v) {
   const n = parseFloat(v);
-  if (isFinite(n)) s9CalDb = n;
+  if (!isFinite(n)) return;
+  s9CalDb = n;
+  try { localStorage.setItem('s9Cal:rx1', String(n)); } catch (e) {}
+  // Re-render immediately from the last reading, so the needle and the
+  // labels move as the number is typed rather than on the next push.
+  if (isFinite(_lastSmeterDb)) renderSmeter(_lastSmeterDb);
+}
+
+// ── RX1 meter state. Lives in THIS closure; RX2 keeps its own copy in
+// Panadapter2 (the deliberate duplication this file is built on). The
+// only thing shared is the stateless math in the V2 helper block.
+let _lastSmeterDb = NaN;
+let _peak1 = null;
+const SMETER_HOLD_MS = 6000;     // spec §2.2
+const SMETER_DECAY_DB_S = 3;
+
+function renderSmeter(dbFs) {
+  _lastSmeterDb = dbFs;
+  const strengthDb = dbFs - s9CalDb;
+
+  // Old linear bar: hidden in the v2 layout but still driven, so nothing
+  // depends on this function having replaced it.
+  const bar = document.getElementById('smeter-bar');
+  if (bar) {
+    bar.style.width = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100)) + '%';
+    bar.classList.toggle('over-s9', strengthDb >= 0);
+  }
+
+  const needle = document.getElementById('smeter-needle');
+  if (needle) {
+    needle.setAttribute('transform',
+      'translate(230 330) rotate(' + v2MeterAngle(v2MeterFraction(dbFs, s9CalDb)).toFixed(2) + ')');
+  }
+
+  _peak1 = v2PeakStep(_peak1, dbFs, performance.now(), SMETER_HOLD_MS, SMETER_DECAY_DB_S);
+  const marker = document.getElementById('smeter-peak');
+  if (marker && _peak1) {
+    marker.setAttribute('transform',
+      'translate(230 330) rotate(' + v2MeterAngle(v2MeterFraction(_peak1.db, s9CalDb)).toFixed(2) + ')');
+  }
+
+  // Text keeps TODAY's 10dB rounding above S9 (Amendment D1) — the needle
+  // is continuous, the label is not.
+  document.getElementById('smeter-label').textContent = smeterLabel(strengthDb);
+  document.getElementById('smeter-db').textContent = dbFs.toFixed(1) + ' dBFS';
+  const pdb = document.getElementById('smeter-peak-db');
+  const ps = document.getElementById('smeter-peak-s');
+  if (pdb && _peak1) pdb.textContent = _peak1.db.toFixed(1) + ' dBFS';
+  if (ps && _peak1) ps.textContent = smeterLabel(_peak1.db - s9CalDb);
 }
 
 function smeterLabel(strengthDb) {
@@ -5419,7 +5798,7 @@ function updateUI(s) {
   }
 
   const vfoEl = document.getElementById('vfo');
-  vfoEl.textContent = rig.freq_display || '  0.000.000';
+  vfoEl.innerHTML = v2FreqMarkup(rig.freq_display || '  0.000.000');
   vfoEl.className = 'freq-readout' + (rig.ptt ? ' tx' : '');
 
   document.getElementById('badge-band').textContent = rig.band || '??';
@@ -5469,13 +5848,7 @@ function updateUI(s) {
       _noiseSamples.push(dbFs);
       _noiseBand = rig.band || _noiseBand;
     }
-    const strengthDb = dbFs - s9CalDb;
-    const pct = Math.max(0, Math.min(100, ((strengthDb + 54) / 114) * 100));
-    const smeterBar = document.getElementById('smeter-bar');
-    smeterBar.style.width = pct + '%';
-    smeterBar.classList.toggle('over-s9', strengthDb >= 0);
-    document.getElementById('smeter-label').textContent = smeterLabel(strengthDb);
-    document.getElementById('smeter-db').textContent = dbFs.toFixed(1) + ' dBFS';
+    renderSmeter(dbFs);
   }
 
   if (isTx) {
@@ -6035,6 +6408,7 @@ function init() {
   addWheelToSlider('mic-gain-slider', v => setMicGain(v),    'micGain');
   addWheelToSlider('comp-slider',     v => setComp(v),       'comp');
   addWheelToSlider('dt-gain-slider',  v => setDtGain(v),     'dtGain');
+  loadS9Cal();
 }
 
 return {
@@ -6350,6 +6724,82 @@ initTray();
 
   requestAnimationFrame(tick);
 })();
+/* ── V2METER:BEGIN — pure S-meter math ────────────────────────────────
+   Stateless by construction. Both receivers call these; neither owns
+   them. Every receiver-specific value (calibration, peak, hold clock)
+   stays inside its own module's closure and is passed in and back out,
+   so this file's "no shared mutable state across modules" rule holds —
+   see the header comment on module isolation.
+
+   Extracted and unit-tested by ui-redesign/test_meter_math.js; the
+   V2METER markers are what that script looks for. */
+
+// dBFS -> arc fraction 0..1. Spec §2.2: with calibration `cal` (dBFS at
+// S9), s = 9 + (dBFS - cal)/6. Below S9 the scale is linear in S units
+// over the first 58% of the arc; above it, linear in dB over the last 42%.
+function v2MeterFraction(dbFs, cal) {
+  if (!isFinite(dbFs) || !isFinite(cal)) return 0;
+  const s = 9 + (dbFs - cal) / 6;
+  if (s < 9) {
+    const f = (Math.max(s, 1) - 1) / 8 * 0.58;
+    return Math.max(0, Math.min(1, f));
+  }
+  const over = Math.max(0, dbFs - cal);
+  return Math.max(0, Math.min(1, 0.58 + Math.min(over, 60) / 60 * 0.42));
+}
+
+// Arc fraction -> needle angle in degrees from vertical.
+function v2MeterAngle(frac) {
+  return -38 + 76 * Math.max(0, Math.min(1, frac));
+}
+
+// Peak hold. Pure: takes the previous {db, at} and the live reading, and
+// returns the next one. Timestamps, not frame counts, so the decay rate
+// is the same whatever the frame rate or push cadence.
+//
+// Rules (spec §2.2): a reading at or above the current peak sets the peak
+// and restarts the hold; the peak holds for holdMs; after that it decays
+// at decayDbPerS toward the live level and never falls below it.
+function v2PeakStep(prev, dbFs, nowMs, holdMs, decayDbPerS) {
+  if (!isFinite(dbFs)) return prev;
+  if (holdMs === undefined) holdMs = 6000;
+  if (decayDbPerS === undefined) decayDbPerS = 3;
+  // `at` is when the hold started; `last` is when this was last stepped.
+  if (!prev || !isFinite(prev.db)) return { db: dbFs, at: nowMs, last: nowMs };
+  if (dbFs >= prev.db) return { db: dbFs, at: nowMs, last: nowMs };
+
+  const holdEnd = prev.at + holdMs;
+  if (nowMs <= holdEnd) return { db: prev.db, at: prev.at, last: nowMs };
+
+  // Decay INCREMENTALLY, from the previous step (or the end of the hold,
+  // whichever is later) to now. Decaying prev.db by the whole time since
+  // the hold ended compounds: the value has already fallen once, so a
+  // second call charges it for the same seconds again and the marker
+  // drops at 3 dB/s times the number of calls. Caught by
+  // test_meter_math.js, invisible in a static render.
+  const from = Math.max(prev.last, holdEnd);
+  const decayed = prev.db - decayDbPerS * (Math.max(0, nowMs - from) / 1000);
+  // Never below the live level; once it lands there it tracks it.
+  return { db: Math.max(decayed, dbFs), at: prev.at, last: nowMs };
+}
+/* V2METER:END */
+
+// Frequency readout markup: the group separators are dim and narrower
+// than a digit (spec §2.2), which needs them wrapped rather than styled
+// as plain text. Pure and stateless. Input is machine-generated digits,
+// dots and spaces; anything else is escaped rather than trusted.
+function v2FreqMarkup(str) {
+  let out = '';
+  for (const ch of String(str)) {
+    if (ch === '.') out += '<i class="v2-freq-sep">.</i>';
+    else if (ch >= '0' && ch <= '9') out += ch;
+    else if (ch === ' ') out += ' ';
+    else out += ch.replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  return out;
+}
+
 /* V2:END */
 </script>
 

@@ -97,3 +97,8 @@ F6. Tray: manual open only, no auto-open. First load (no saved state):
 F7. SSB Audio takes the left column's card chrome when it moves (3b).
 F8. The Measure Noise panel carries a small "RX1" label (it samples the
     RX1 feed).
+F9. The one-column session at narrow widths is accepted. RAG-CHEW
+    wrapping onto two lines in the TX BW row is accepted. No fix needed.
+F10. Stage 4 is split. 4a = frequency card, S-meter (needle + peak hold),
+     RX chip, S9 CAL on both receivers. 4b (later) = gains card, AF GAIN
+     default and taper, mode card.
