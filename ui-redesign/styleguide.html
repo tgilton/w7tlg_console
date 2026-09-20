@@ -66,13 +66,24 @@
      the left column carries 11 band buttons plus session, source, preamp
      and ATT rows. Terry 2026-09-20: keep 48 for now, revisit in stage 3
      once the left column's real height is on screen. */
-  --v2-btn-h:        calc(48px * var(--v2-scale));  /* mockup 48 / today ~29 computed  */
+  /* Recipe G, Terry's decision F1 (2026-09-20), measured in the stage 3
+     plan: the spec's 48px put the left column 36% above today's and the
+     page 16% taller, because BAND alone carries five rows of buttons.
+     44 general / 36 for the band grid lands the page at +6%. Band labels
+     are two or three characters, so 36 is where the air was. Revisit
+     --v2-btn-h after stage 5, when the centre column's own height is
+     known — it is one variable. */
+  --v2-btn-h:        calc(44px * var(--v2-scale));  /* recipe G / mockup 48 / today ~29 */
+  --v2-btn-h-band:   calc(36px * var(--v2-scale));  /* recipe G / mockup 48 / today ~29 */
   --v2-btn-h-dense:  calc(44px * var(--v2-scale));  /* mockup 44 / today ~27 (.dsp-toggle) */
   --v2-touch-row:    calc(32px * var(--v2-scale));  /* mockup 32 / today ~22          */
   --v2-input-h:      calc(32px * var(--v2-scale));  /* mockup n/a / today ~22         */
 
   --v2-card-pad:       16px;  /* mockup 20 -> 16, Terry 2026-09-20: 20 is off
                                  DESIGN.md §4's 4/8/16/24/32 scale (today 12 16 16) */
+  --v2-card-gap:       16px;  /* recipe G / today 16 — space between cards   */
+  --v2-grid-gap:        6px;  /* recipe G / today 4 — DESIGN.md §4's within-group step */
+  --v2-title-mb:       12px;  /* recipe G / today 8 — block title to content */
   --v2-card-pad-tight: 16px;  /* mockup 16 / today 8 8 4 (.scope-group)     */
   --v2-radius-card:    14px;  /* mockup 14 / today 7  (.section-box)        */
   --v2-radius-btn:      8px;  /* mockup 8  / today 3  (.btn)                */
@@ -193,7 +204,7 @@
   color: var(--v2-title-fg);
   text-transform: uppercase;
   text-align: center;
-  margin-bottom: 16px;
+  margin-bottom: var(--v2-title-mb);
 }
 .v2-label {
   font-size: var(--v2-font-label);
@@ -492,14 +503,14 @@
   border: 1px solid var(--v2-border);
   border-radius: var(--v2-radius-card);
   padding: var(--v2-card-pad);
-  margin-bottom: 16px;
+  margin-bottom: var(--v2-card-gap);
 }
 #panel-bandamp .section-box h2 {
   font-size: var(--v2-font-title);
   font-weight: var(--v2-weight-title);
   letter-spacing: var(--v2-ls-title);
   color: var(--v2-title-fg);
-  margin-bottom: 16px;
+  margin-bottom: var(--v2-title-mb);
 }
 #box-amp .divider { height: 1px; background: var(--v2-border); }
 
@@ -1015,6 +1026,298 @@
   border-width: var(--v2-border-w);
 }
 #box-noise #noise-floor-val { font-size: var(--v2-font-label); }
+
+/* ── Stage 3b: the left column (operating) ────────────────────────────
+   Recipe G (Amendment F1), measured in the stage 3 plan: --v2-btn-h 44px,
+   band buttons 36px, title margin 12px, grid gap 6px, card padding 16px,
+   card gap 16px.
+
+   Scoped to the five box ids — #box-session, #box-band, #box-digital,
+   #box-ssb-audio, #box-antenna — for the same reason the right column was:
+   updateUI/updateDSP/updateSessionUI rewrite the WHOLE class attribute on
+   the session buttons, every band button, the preamp and ATT buttons and
+   both dummy-timer elements, so a v2 class added to any of those in the
+   markup would be wiped on the next state push. They are restyled through
+   the classes the JS already writes.
+
+   #session-grid is worse still: updateSessionUI regenerates its innerHTML
+   from a template string. Nothing here depends on markup inside it — only
+   on `#session-grid .btn`, which that template always produces. The
+   template itself is untouched. */
+
+#box-session, #box-band, #box-digital, #box-ssb-audio, #box-antenna {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  margin-bottom: var(--v2-card-gap);
+}
+#box-session h2, #box-band h2, #box-digital h2,
+#box-ssb-audio h2, #box-antenna h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  margin-bottom: var(--v2-title-mb);
+}
+#box-band .divider, #box-digital .divider {
+  height: 1px; background: var(--v2-border); margin: 14px 0;
+}
+/* The VHF/UHF sub-heading is a second h2 inside BAND; it is a sub-heading,
+   not a block title, so it stays smaller than the card's own. */
+#box-band h2 + .band-grid + .divider + h2 { font-size: var(--v2-font-label); margin-bottom: 10px; }
+
+/* Buttons. One rule for every .btn in the column, then the band grid's own
+   shorter height. Selected is amber because amber means selected
+   (DESIGN.md §2.2) — .active and .active-amber are both written by the JS
+   and both mean exactly that. */
+#box-session .btn, #box-band .btn, #box-digital .btn, #box-ssb-audio .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 8px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  line-height: 1.25;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+#box-session .btn.active, #box-band .btn.active, #box-digital .btn.active,
+#box-session .btn.active-amber, #box-band .btn.active-amber, #box-digital .btn.active-amber {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+#box-session .btn:focus-visible, #box-band .btn:focus-visible,
+#box-digital .btn:focus-visible, #box-ssb-audio .btn:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+#box-session .mode-grid, #box-band .band-grid { gap: var(--v2-grid-gap); margin-bottom: 0; }
+#box-band .band-grid:first-of-type { margin-bottom: 0; }
+#box-band .btn { min-height: var(--v2-btn-h-band); }
+/* minmax(0, ...) so a track can never be floored at its label's
+   min-content and push the grid out through the side of the card — the
+   same trap the TX BW row fell into. Below the threshold three band
+   buttons genuinely do not fit on a row, so it drops to two (and the
+   VHF pair to one); the inline grid-template-columns on the VHF row is
+   why that one needs !important. */
+#box-band { container-type: inline-size; }
+#box-band .band-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@container (max-width: 150px) {
+  #box-band .band-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  #box-band .band-grid + .divider + h2 + .band-grid { grid-template-columns: 1fr !important; }
+}
+
+/* SESSION. "FT8 (WSJT-X)" must not wrap (it did, at two lines, before
+   this stage). nowrap above; and because two such buttons genuinely do
+   not fit side by side in a narrow column at any padding, the grid drops
+   to one column below the measured threshold rather than clipping.
+   Measured widths are in the stage 3b report. */
+#box-session { container-type: inline-size; }
+@container (max-width: 236px) {
+  #box-session .mode-grid { grid-template-columns: 1fr; }
+}
+#session-step { font-size: var(--v2-font-label); color: var(--v2-label); margin-top: 8px; }
+
+/* Labels and readouts shared by DIGITAL AUDIO and SSB AUDIO. */
+#box-digital .ctl-label, #box-ssb-audio .ctl-label,
+#box-digital .meter-row span:first-child {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;           /* "DT GAIN" must stay on one line */
+}
+#box-digital .power-value, #box-ssb-audio .power-value {
+  font-size: var(--v2-font-value);
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#box-digital .power-slider-wrap, #box-ssb-audio .power-slider-wrap { gap: 10px; }
+/* flex: 0 0 auto, or the label is the thing flex shrinks: "DT GAIN" came
+   out clipped to "DT GAI" with the slider sitting on top of it, because
+   the inline style="min-width:40px" let it shrink to 40px while nowrap
+   kept the text at its full 64px. */
+#box-digital .power-slider-wrap .ctl-label,
+#box-ssb-audio .power-slider-wrap .ctl-label { flex: 0 0 auto; }
+#box-digital .power-value, #box-ssb-audio .power-value { flex: 0 0 auto; }
+
+/* At the narrow end of the drag a label, a slider and a value cannot share
+   a row: at the 200px minimum the card has 112px and the label alone wants
+   64 of it, which pushed SOURCE, PREAMP and ATT out through the side of
+   the card. Below the threshold each label takes its own line and the
+   controls get the full width. Nothing is shrunk — Amendment A. */
+/* 150px, not 230: the default 288px column leaves 200px of card, where a
+   label, slider and value still share a row comfortably (and the mockup
+   shows them inline). Only the 200px minimum, at 112px of card, genuinely
+   cannot hold them — measured, not guessed. */
+#box-digital { container-type: inline-size; }
+@container (max-width: 150px) {
+  #box-digital .power-slider-wrap,
+  #ft991a-rx-group .meter-row {
+    flex-direction: column; align-items: stretch; gap: 6px;
+  }
+  #box-digital .power-slider-wrap .ctl-label { min-width: 0 !important; }
+  #ft991a-rx-group .meter-row > span:last-child { flex-wrap: wrap; }
+}
+#box-digital .power-slider-wrap.v2-slider-row .v2-range,
+#box-ssb-audio .power-slider-wrap.v2-slider-row .v2-range { flex: 1; }
+
+/* SOURCE RX1/RX2 and the FT-991A RX toggles. */
+#box-digital .dsp-agc-btn, #box-digital .dsp-toggle, #box-ssb-audio .dsp-agc-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+#box-digital .dsp-agc-btn.active, #box-digital .dsp-toggle.active,
+#box-ssb-audio .dsp-agc-btn.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+#box-digital .seg-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--v2-grid-gap); flex: 1; }
+#box-digital .dsp-toggle-row { gap: var(--v2-grid-gap); margin-top: 10px; }
+#box-digital .dsp-toggle-row .dsp-toggle { flex: 1; }
+
+/* The single merged FT-991A RX group (F5). .rx-inert keeps doing exactly
+   what it did — opacity only, never disabled, still clickable. */
+#ft991a-rx-group .amp-diag-label {
+  display: inline-block;
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  border-radius: 4px;
+  padding: 2px 7px;
+  margin-bottom: 10px;
+}
+#ft991a-rx-group .meter-row { gap: 10px; padding: 4px 0; }
+#ft991a-rx-group .meter-row > span:last-child {
+  display: flex; gap: var(--v2-grid-gap); flex-wrap: wrap; justify-content: flex-end; min-width: 0;
+}
+#ft991a-rx-group .btn {
+  min-height: var(--v2-touch-row) !important;   /* dense row, not a 44px control */
+  /* 8px, not 10: at the 288px default the card has 200px, and "PREAMP"
+     plus IPO/A1/A2 at 10px padding wanted 207 — so A2 wrapped onto its
+     own line. 8px brings the row to 191 and it sits on one line. Both
+     !important because each button carries an inline style="padding:2px 5px". */
+  padding: 0 8px !important;
+  font-size: var(--v2-font-label);
+}
+#ft991a-rx-group .meter-row > span:last-child { gap: 4px; }
+
+/* SSB AUDIO — TX BW as one row of three EQUAL-width buttons.
+
+   minmax(0, 1fr), not 1fr: a bare 1fr floors each track at its content's
+   min-content width, and "RAG-CHEW" is much wider than "DX", so the three
+   came out 53/89/39 at the default column width — one row, but not equal.
+   minmax(0, ...) lets the tracks divide the space evenly instead.
+
+   The labels then wrap inside their button rather than being shrunk:
+   "RAG-CHEW" breaks at its hyphen. Amendment A forbids making text
+   smaller than today's, and nothing here does — the button grows instead. */
+#box-ssb-audio { container-type: inline-size; }
+#box-ssb-audio .v2-bw-row .seg-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v2-grid-gap);
+  flex: 1;
+}
+#box-ssb-audio .v2-bw-row .dsp-agc-btn {
+  width: 100%;
+  white-space: normal;
+  line-height: 1.15;
+  padding: 4px 6px;
+  text-align: center;
+}
+/* The label sits ABOVE its buttons at every width, which is what
+   left-column.png shows and what gives the three equal buttons the full
+   card to divide — inline, "TX BW" would eat 50px of it and squeeze
+   RAG-CHEW into two lines at the default column width. */
+#box-ssb-audio .v2-bw-row { flex-direction: column; align-items: stretch; gap: 8px; }
+#box-ssb-audio .v2-bw-row .ctl-label { min-width: 0 !important; }
+/* At the 200px minimum the card has 112px, so three equal columns are
+   30px each and "WIDE" is wider than its own button. Below the threshold
+   they stack to full width instead, where every label fits on one line.
+   Above it — including the 288px default — they stay one row of three. */
+@container (max-width: 150px) {
+  #box-ssb-audio .v2-bw-row .seg-row { grid-template-columns: 1fr; }
+}
+
+/* ANTENNA. The tiles are status indicators, never buttons: the ACOM has no
+   remote "select antenna N" at all, so NEXT ANT is the only actuator
+   (Amendment E1). .ant-indicator already carries pointer-events:none, so
+   no hover can even fire; cursor:default and the absence of any :hover
+   rule here make that visible rather than merely true. They are <div>s
+   with no tabindex, so they are out of the tab order — nothing may add
+   one. */
+#box-antenna .ant-grid { gap: var(--v2-grid-gap); margin-bottom: var(--v2-grid-gap); }
+.v2-tile {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 3px;
+  min-height: calc(var(--v2-btn-h) * 1.45);
+  padding: 8px 6px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  line-height: 1.2;
+  text-align: center;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: default;
+}
+.v2-tile.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+.v2-tile.disabled {
+  background: var(--v2-btn-off-bg); border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg); opacity: 1;
+}
+/* 12px, the same size the alias is today — Amendment A's floor. It is the
+   antenna's real name and the thing actually read at a glance. */
+.v2-tile .ant-alias {
+  font-size: var(--v2-font-label);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: inherit;
+  opacity: 0.85;
+  margin-top: 0;
+}
+#box-antenna .btn:not(.ant-indicator) {          /* NEXT ANT — the one actuator */
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%;
+  min-height: var(--v2-btn-h);
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+#box-antenna .btn:not(.ant-indicator):hover { border-color: var(--v2-label-light); color: var(--v2-fg); }
+#box-antenna .btn:not(.ant-indicator):focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* Dummy-load timer. A safety guard (Amendment E2): it stays inside the
+   ANTENNA card, and its .visible / .critical classes and countdown logic
+   are untouched. Styled by ID because updateUI rewrites the class
+   attribute on both elements on every state push. */
+#dummy-timer-wrap { gap: 8px; margin-top: 10px; }
+#dummy-timer-wrap .muted {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+}
+#dummy-timer { font-size: var(--v2-font-value); }
 
 /* V2:END */
 
