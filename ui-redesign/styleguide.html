@@ -1711,6 +1711,178 @@
   .v2-display-grid { grid-template-columns: 1fr; }
 }
 
+/* ── Stage 5: tuning, filter / AGC-NR, audio EQ ───────────────────────
+   Buttons here have their class attribute rewritten wholesale by JS —
+   updateFilterWidth writes `'btn' + (which === 'NAR' ? ' active' : '')`
+   on the NARROW/WIDE pair, and setAGC/toggleNR/toggleRfNotch/
+   toggleDabNotch/toggleEQ drive .active by classList — so all of them are
+   styled through those JS-written classes, never by a class added here. */
+.panel-center .row-tuning, .panel-center2 .row-tuning {
+  display: flex;
+  flex-wrap: wrap;                /* RX2's LNK/CPY are clipped today */
+  align-items: center;
+  gap: var(--v2-grid-gap);
+}
+.panel-center .row-tuning .v2-input, .panel-center2 .row-tuning .v2-input {
+  flex: 1 1 190px;
+  min-width: 150px;
+  font-weight: 700;
+}
+.panel-center .row-tuning .btn, .panel-center2 .row-tuning .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+  min-height: var(--v2-btn-h);
+  padding: 0 14px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.panel-center .row-tuning .btn.active, .panel-center2 .row-tuning .btn.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+/* The existing disabled look is an opacity rule keyed on the ids
+   (#freq2-input:disabled, #tune2-btn:disabled, #span2-slider:disabled) —
+   untouched, so LNK still dims exactly what it dimmed before. */
+.panel-center .row-tuning .btn:focus-visible,
+.panel-center2 .row-tuning .btn:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+
+/* FILTER | AGC / NR — one card, two columns, vertical divider. */
+.panel-center .filter-agc-row, .panel-center2 .filter-agc-row {
+  gap: 0;
+  grid-template-columns: 1fr 1px 1fr;
+}
+/* All three cells placed EXPLICITLY. ::before is the first grid item in
+   source order, so giving it grid-column 2 and letting the two divs
+   auto-place put FILTER in column 3 and AGC/NR on the next row — the
+   columns came out swapped and stacked. */
+.panel-center .filter-agc-row > div:first-child,
+.panel-center2 .filter-agc-row > div:first-child {
+  grid-column: 1; grid-row: 1; padding-right: 20px; min-width: 0;
+}
+.panel-center .filter-agc-row::before, .panel-center2 .filter-agc-row::before {
+  content: ''; grid-column: 2; grid-row: 1; background: var(--v2-border);
+}
+.panel-center .filter-agc-row > div:last-child,
+.panel-center2 .filter-agc-row > div:last-child {
+  grid-column: 3; grid-row: 1; padding-left: 20px; min-width: 0;
+}
+.panel-center .filter-agc-row h2, .panel-center2 .filter-agc-row h2 { text-align: center; }
+
+.panel-center .v2-slider-head .ctl-label, .panel-center2 .v2-slider-head .ctl-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+.panel-center .v2-slider-head .power-value,
+.panel-center .v2-slider-head .dsp-val,
+.panel-center2 .v2-slider-head .power-value,
+.panel-center2 .v2-slider-head .dsp-val {
+  margin-left: auto;
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 0;
+}
+.panel-center .filter-agc-row .v2-range, .panel-center2 .filter-agc-row .v2-range { width: 100%; }
+/* The NR slider was 60px wide (.dsp-slider-mini); full width now that it
+   has a label and its own row. */
+.panel-center .dsp-slider-mini, .panel-center2 .dsp-slider-mini { width: 100%; }
+
+.panel-center .dsp-toggle-row, .panel-center2 .dsp-toggle-row { gap: var(--v2-grid-gap); margin-top: 10px; }
+.panel-center .dsp-toggle, .panel-center2 .dsp-toggle,
+.panel-center .dsp-agc-btn, .panel-center2 .dsp-agc-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 1 1 auto;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.panel-center .dsp-toggle.active, .panel-center2 .dsp-toggle.active,
+.panel-center .dsp-agc-btn.active, .panel-center2 .dsp-agc-btn.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+.panel-center .filter-agc-row .btn, .panel-center2 .filter-agc-row .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+}
+.panel-center .filter-agc-row .btn.active, .panel-center2 .filter-agc-row .btn.active {
+  background: var(--v2-selected-bg); border-color: var(--v2-selected); color: var(--v2-selected);
+}
+.panel-center .slider-label, .panel-center2 .slider-label {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+
+/* AUDIO EQ — centre-notched sliders, dimmed when EQ is off exactly as
+   before (that dimming is .eq-row:has(.eq-square-btn:not(.active)), left
+   alone). */
+.panel-center .eq-row, .panel-center2 .eq-row { gap: 16px; align-items: center; }
+.panel-center .eq-square-btn, .panel-center2 .eq-square-btn {
+  width: auto; min-width: 52px;
+  height: var(--v2-touch-row);
+  flex: 0 0 auto;
+  font-size: var(--v2-font-btn);
+  border-radius: var(--v2-radius-btn);
+}
+.panel-center .eq-bmt-group, .panel-center2 .eq-bmt-group {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; flex: 1;
+}
+.panel-center .eq-bmt-group .field-group, .panel-center2 .eq-bmt-group .field-group {
+  display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0;
+}
+.panel-center .eq-bmt-group .ctl-label, .panel-center2 .eq-bmt-group .ctl-label {
+  font-size: var(--v2-font-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+}
+.panel-center .eq-bmt-group .dsp-val, .panel-center2 .eq-bmt-group .dsp-val {
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* The ±12 sliders are scaleY(1.5)'d today to be grabbable; the v2 track is
+   already 8px, so that transform would just distort it. */
+.panel-center .eq-bmt-group input[type=range], .panel-center2 .eq-bmt-group input[type=range] {
+  transform: none;
+}
+@container (max-width: 660px) {
+  .panel-center .filter-agc-row, .panel-center2 .filter-agc-row { grid-template-columns: 1fr; }
+  .panel-center .filter-agc-row::before, .panel-center2 .filter-agc-row::before { display: none; }
+  .panel-center .filter-agc-row > div, .panel-center2 .filter-agc-row > div {
+    grid-column: 1; grid-row: auto; padding: 0;
+  }
+  .panel-center .filter-agc-row > div:last-child,
+  .panel-center2 .filter-agc-row > div:last-child { margin-top: 16px; }
+  .panel-center .eq-bmt-group, .panel-center2 .eq-bmt-group { grid-template-columns: 1fr; gap: 12px; }
+}
+
 /* V2:END */
 
 /* ── Style-guide page chrome (NOT part of the v2 system) ───────────── */
