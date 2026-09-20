@@ -133,6 +133,7 @@ html, body {
   grid-template-areas:
     "status   status   status   status"
     "modedsp  center   center2  bandamp"
+    "tray     tray     tray     tray"
     "sysmsgs  sysmsgs  sysmsgs  sysmsgs";
   gap: 1px;
   background: var(--border);
@@ -1413,6 +1414,272 @@ select#palette-select {
   font-size: var(--v2-font-btn);
 }
 
+/* ── Stage 3a: the tools tray ─────────────────────────────────────────
+   Follows ui-redesign/tray.png. Lives in its own grid row (see the markup
+   comment on #panel-tray for why that is what keeps the canvases still).
+
+   Collapsed height is the strip alone: 44px tabs + 22px padding top and
+   bottom = 88px, per spec §2.7. */
+.panel-tray {
+  grid-area: tray;
+  background: var(--bg-1);
+  padding: 0;
+  min-width: 0;
+}
+.v2-tray-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 20px;
+  min-height: 88px;
+}
+.v2-tray-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+.v2-tray-tabs { display: flex; gap: 8px; flex: 1 1 auto; flex-wrap: wrap; min-width: 0; }
+
+.v2-tray-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 44px;                      /* spec §2.7 */
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  text-transform: uppercase;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.v2-tray-tab[aria-selected="true"] {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+.v2-tray-tab:hover:not([aria-selected="true"]) { border-color: var(--v2-label-light); color: var(--v2-fg); }
+.v2-tray-tab:focus-visible, .v2-tray-toggle:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+
+/* Status dot. Gray when idle, --v2-ok while that tool is running, so a
+   running test is visible even with the tray shut (spec §2.7). Driven by
+   a data attribute on a DEDICATED element — never by a class on something
+   whose class attribute the update path rewrites wholesale. */
+.v2-tray-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--v2-readout-idle);
+  flex: 0 0 auto;
+  transition: background-color 0.15s;
+}
+.v2-tray-dot[data-running="1"] {
+  background: var(--v2-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v2-ok) 25%, transparent);
+}
+
+.v2-tray-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 44px; padding: 0 14px;
+  flex: 0 0 auto;
+  font-family: inherit;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  text-transform: uppercase;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+}
+.v2-tray-toggle:hover { border-color: var(--v2-label-light); color: var(--v2-fg); }
+/* Chevron drawn in CSS rather than as a glyph, so it can rotate with the
+   expanded state instead of swapping a character. */
+.v2-tray-chev {
+  width: 8px; height: 8px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(135deg);
+  transition: transform 0.15s;
+  position: relative; top: 2px;
+}
+.v2-tray-toggle[aria-expanded="true"] .v2-tray-chev { transform: rotate(-45deg); top: 4px; }
+
+.v2-tray-body { padding: 0 20px 20px; }
+.panel-tray.v2-tray-collapsed .v2-tray-body { display: none; }
+
+/* The two panels are .section-box today and keep that class — nothing is
+   removed. Their card chrome is neutralised here instead, because a card
+   inside the tray's own surface would be a box in a box. */
+#tray-body .section-box {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+}
+#tray-body .section-box + .section-box { margin-top: 0; }
+#tray-body .section-box[hidden] { display: none; }
+#tray-body .section-box h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  text-align: left;
+  margin-bottom: 16px;
+}
+/* "RX1" on Measure Noise (Amendment F8): it samples rig.sdr_strength_db,
+   which is specifically RX1's feed, and as a tray tab it would otherwise
+   read as station-wide. */
+.v2-scope-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 7px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-pill);
+  letter-spacing: 0.06em;
+  color: var(--v2-readout);
+  background: var(--v2-btn-bg);
+  border: 1px solid var(--v2-btn-border);
+  border-radius: 4px;
+  text-transform: none;
+}
+/* A/B controls may wrap over several rows; results and summary sit below.
+   Every element is kept — this only lets the rows flow. */
+#tray-body .abt-row { flex-wrap: wrap; }
+#tray-body #abt-results { max-height: 220px; }
+
+/* A/B test panel contents, to tray.png. Pure CSS — no markup change here,
+   so every id, handler and inline behaviour hook is exactly as it was in
+   the left column. The rows flow into one band of controls at a wide
+   window and wrap at a narrow one. */
+#box-abtest .section-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+#box-abtest .abt-row {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+/* Checkbox chips. The markup is <label><input type=checkbox> A1F</label>,
+   which is already the right shape — this only dresses it. Checked goes
+   amber for the same reason every selected thing does (DESIGN.md §2.2). */
+#box-abtest .abt-row label {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  white-space: nowrap;
+}
+#box-abtest .abt-row label:has(input:checked) {
+  border-color: var(--v2-selected); color: var(--v2-selected);
+}
+#box-abtest .abt-row label:has(input:focus-visible) {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+#box-abtest input[type=checkbox] { accent-color: var(--v2-selected); width: 15px; height: 15px; margin: 0; }
+#box-abtest .abt-row > span {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+#box-abtest input[type=number], #box-abtest input[type=text] {
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  height: var(--v2-input-h);
+  box-sizing: border-box;
+  padding: 0 8px;
+  color: var(--v2-fg);
+  background: var(--v2-bg-inset);
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+}
+#box-abtest input[type=number] { width: 68px; }
+/* !important because both carry an inline style="width:56px" sized for
+   the old narrow left column; at 56px the v2 input clips "14.2000" to
+   "14.". Overridden rather than edited out, so the markup move stays
+   provably behaviour-neutral. Same reason as the Start/Stop flex below. */
+#box-abtest #abt-scan-start, #box-abtest #abt-scan-stop { width: 96px !important; }
+#box-abtest input:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* Start / Stop at natural width. The inline style="flex:1" on both buttons
+   is what stretched them across the old narrow column; in a full-width
+   tray that reads as two enormous bars, so it is overridden here rather
+   than edited out of the markup — leaving the markup untouched keeps the
+   move provably behaviour-neutral. */
+#box-abtest .btn-row {
+  display: flex; gap: 8px; margin: 0; flex: 0 0 auto; flex-wrap: nowrap;
+}
+#box-abtest .btn-row .btn, #box-abtest #abt-confirm-btn {
+  flex: 0 0 auto !important;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--v2-touch-row);
+  padding: 0 16px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  border-radius: var(--v2-radius-btn);
+  border-width: var(--v2-border-w);
+}
+#box-abtest .btn.active-green, #box-abtest #abt-confirm-btn {
+  background: var(--v2-go-bg); border-color: var(--v2-ok-border); color: var(--v2-ok);
+}
+#box-abtest .btn.danger {
+  background: var(--v2-fault-bg); border-color: var(--v2-fault-border); color: var(--v2-fault);
+}
+/* STATUS sits with the controls, labelled, instead of being a bare word
+   on its own line (spec §2.7). */
+#box-abtest #abt-status {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0;
+  font-size: var(--v2-font-label);
+  color: var(--v2-fg);
+}
+#box-abtest #abt-status::before {
+  content: 'Status ';
+  color: var(--v2-label);
+  letter-spacing: var(--v2-ls-label);
+  text-transform: uppercase;
+}
+/* Confirm row, summary and results take the full width below the controls
+   — every element kept, just given its own line. */
+#box-abtest #abt-confirm-wrap { flex: 1 0 100%; gap: 12px; }
+#box-abtest #abt-summary, #box-abtest #abt-results { flex: 1 0 100%; margin: 0; }
+#box-abtest #abt-summary:empty, #box-abtest #abt-results:empty { display: none; }
+#box-abtest #abt-manual-ants { flex: 1 1 260px; }
+
+/* Measure Noise panel. */
+#box-noise .field-group { display: flex; align-items: center; gap: 12px; }
+#box-noise #noise-measure-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  padding: 0 16px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  border-radius: var(--v2-radius-btn);
+  border-width: var(--v2-border-w);
+}
+#box-noise #noise-floor-val { font-size: var(--v2-font-label); }
+
 /* V2:END */
 </style>
 </head>
@@ -1502,45 +1769,6 @@ select#palette-select {
     </div>
     </div>
 
-    <!-- Moved left alongside Antenna in U2 and likewise exempt from the
-         amp-bypass dimmer — see the Antenna box's comment above. -->
-    <div class="section-box collapsible collapsed" id="box-abtest">
-    <h2 onclick="toggleSectionBox('box-abtest')">Antenna A/B Test</h2>
-    <div class="section-body">
-    <div class="abt-row">
-      <label><input type="checkbox" id="abt-manual" onchange="RigControl.toggleAbtManual()"> Manual switching</label>
-    </div>
-    <div class="abt-row" id="abt-auto-ants">
-      <label><input type="checkbox" id="abt-ant-1" checked> A1F</label>
-      <label><input type="checkbox" id="abt-ant-3" checked> A3R</label>
-      <label><input type="checkbox" id="abt-ant-4"> A4R</label>
-    </div>
-    <div class="abt-row" id="abt-manual-ants" style="display:none">
-      <input type="text" id="abt-manual-labels" placeholder="e.g. Vertical, EFHW, Loop"
-        style="width:100%" title="Comma-separated antenna names — you'll be prompted to switch to each one in turn">
-    </div>
-    <div class="abt-row">
-      <span>Rounds</span><input type="number" id="abt-rounds" value="10" min="1" max="100">
-      <span>Dwell s</span><input type="number" id="abt-dwell" value="12" min="5" max="120" step="1">
-    </div>
-    <div class="abt-row">
-      <span>MHz</span><input type="number" id="abt-scan-start" value="14.2000" step="0.0001" style="width:56px">
-      <span>to</span><input type="number" id="abt-scan-stop" value="14.3250" step="0.0001" style="width:56px">
-    </div>
-    <div class="btn-row" style="margin-top:4px">
-      <button class="btn active-green" style="flex:1" onclick="RigControl.startAbTest()">&#9654; Start</button>
-      <button class="btn danger" style="flex:1" onclick="RigControl.stopAbTest()">&#9632; Stop</button>
-    </div>
-    <div class="mono" style="margin-bottom:4px" id="abt-status">idle</div>
-    <div id="abt-confirm-wrap" class="abt-row" style="display:none;align-items:center">
-      <span class="mono" id="abt-confirm-label" style="color:var(--state-selected)"></span>
-      <button class="btn active-green" style="flex:1" id="abt-confirm-btn" onclick="RigControl.confirmAbtSwitch()">&#9166; Confirm switched</button>
-    </div>
-    <div id="abt-summary" class="mono" style="margin-bottom:4px"></div>
-    <div id="abt-results" class="scroll-table"></div>
-    </div>
-    </div>
-
     <div class="section-box">
     <div id="digital-tx-controls">
       <h2>Digital Audio</h2>
@@ -1595,15 +1823,7 @@ select#palette-select {
     </div>
     </div>
 
-    <!-- RX1-only (Terry 2026-09-11: "let it remain only for RX1") — samples
-         rig.sdr_strength_db, which is specifically RX1's S-meter feed. -->
-    <div class="section-box">
-    <h2>Measure Noise</h2>
-    <div class="field-group">
-      <button class="btn" id="noise-measure-btn" onclick="RigControl.measureNoise()">Measure Noise</button>
-      <span class="mono" id="noise-floor-val" style="color:var(--chrome-muted)">—</span>
-    </div>
-    </div>
+    
     </div>
     <div class="panel-resize-handle" id="resize-modedsp" onmousedown="startColumnResize('modedsp', event)" ondblclick="resetColumnWidth('modedsp')" title="Drag to resize, double-click to reset"></div>
     <button class="panel-collapse-tab" id="tab-modedsp" onclick="toggleColumn('modedsp')" title="Collapse DSP panel"></button>
@@ -2191,6 +2411,86 @@ select#palette-select {
       </div>
     </div>
 
+    </div>
+  </div>
+
+  <!-- ── 4b. Tools tray ──────────────────────────────────────
+       Occasional and experimental tools, out of the main workflow (spec
+       §2.7). A grid ROW spanning all four columns, in normal flow — never
+       fixed, sticky or overlaid. That is what satisfies Amendment D5: the
+       spectrum and waterfall canvases take their height from fixed CSS and
+       their width from their column track, and a full-width row changes
+       row heights only, so the column tracks never move. The one thing
+       that could move them is a page scrollbar appearing as the tray
+       opens, and `html { scrollbar-gutter: stable }` (see the top of this
+       file) already reserves that gutter unconditionally. Do not remove
+       it. Proved by the D5 probe in ui-redesign/reports/stage3a.md. -->
+  <div class="panel panel-tray" id="panel-tray">
+    <div class="v2-tray-strip">
+      <span class="v2-tray-label">Tools</span>
+      <div class="v2-tray-tabs" role="tablist" aria-label="Tools">
+        <button type="button" class="v2-tray-tab" id="tray-tab-abtest" role="tab"
+                aria-selected="true" aria-controls="box-abtest"
+                onmousedown="event.preventDefault()" onclick="selectTrayTab('abtest')">
+          <span class="v2-tray-dot" id="tray-dot-abtest"></span>Antenna A/B Test
+        </button>
+        <button type="button" class="v2-tray-tab" id="tray-tab-noise" role="tab"
+                aria-selected="false" aria-controls="box-noise"
+                onmousedown="event.preventDefault()" onclick="selectTrayTab('noise')">
+          <span class="v2-tray-dot" id="tray-dot-noise"></span>Measure Noise
+        </button>
+      </div>
+      <button type="button" class="v2-tray-toggle" id="tray-toggle"
+              aria-expanded="false" aria-controls="tray-body"
+              onmousedown="event.preventDefault()" onclick="toggleTray()">
+        <span class="v2-tray-chev" aria-hidden="true"></span><span id="tray-toggle-label">Show</span>
+      </button>
+    </div>
+    <div class="v2-tray-body" id="tray-body">
+      <div class="v2-divider"></div>
+      <div class="section-box" id="box-abtest" role="tabpanel" aria-labelledby="tray-tab-abtest">
+          <h2>Antenna A/B Test</h2>
+          <div class="section-body">
+          <div class="abt-row">
+            <label><input type="checkbox" id="abt-manual" onchange="RigControl.toggleAbtManual()"> Manual switching</label>
+          </div>
+          <div class="abt-row" id="abt-auto-ants">
+            <label><input type="checkbox" id="abt-ant-1" checked> A1F</label>
+            <label><input type="checkbox" id="abt-ant-3" checked> A3R</label>
+            <label><input type="checkbox" id="abt-ant-4"> A4R</label>
+          </div>
+          <div class="abt-row" id="abt-manual-ants" style="display:none">
+            <input type="text" id="abt-manual-labels" placeholder="e.g. Vertical, EFHW, Loop"
+              style="width:100%" title="Comma-separated antenna names — you'll be prompted to switch to each one in turn">
+          </div>
+          <div class="abt-row">
+            <span>Rounds</span><input type="number" id="abt-rounds" value="10" min="1" max="100">
+            <span>Dwell s</span><input type="number" id="abt-dwell" value="12" min="5" max="120" step="1">
+          </div>
+          <div class="abt-row">
+            <span>MHz</span><input type="number" id="abt-scan-start" value="14.2000" step="0.0001" style="width:56px">
+            <span>to</span><input type="number" id="abt-scan-stop" value="14.3250" step="0.0001" style="width:56px">
+          </div>
+          <div class="btn-row" style="margin-top:4px">
+            <button class="btn active-green" style="flex:1" onclick="RigControl.startAbTest()">&#9654; Start</button>
+            <button class="btn danger" style="flex:1" onclick="RigControl.stopAbTest()">&#9632; Stop</button>
+          </div>
+          <div class="mono" style="margin-bottom:4px" id="abt-status">idle</div>
+          <div id="abt-confirm-wrap" class="abt-row" style="display:none;align-items:center">
+            <span class="mono" id="abt-confirm-label" style="color:var(--state-selected)"></span>
+            <button class="btn active-green" style="flex:1" id="abt-confirm-btn" onclick="RigControl.confirmAbtSwitch()">&#9166; Confirm switched</button>
+          </div>
+          <div id="abt-summary" class="mono" style="margin-bottom:4px"></div>
+          <div id="abt-results" class="scroll-table"></div>
+          </div>
+          </div>
+      <div class="section-box" id="box-noise" role="tabpanel" aria-labelledby="tray-tab-noise">
+          <h2>Measure Noise <span class="v2-scope-tag">RX1</span></h2>
+          <div class="field-group">
+            <button class="btn" id="noise-measure-btn" onclick="RigControl.measureNoise()">Measure Noise</button>
+            <span class="mono" id="noise-floor-val" style="color:var(--chrome-muted)">—</span>
+          </div>
+          </div>
     </div>
   </div>
 
@@ -4572,10 +4872,12 @@ function measureNoise() {
   const btn = document.getElementById('noise-measure-btn');
   const out = document.getElementById('noise-floor-val');
   btn.classList.add('active');
+  setTrayDot('noise', true);        // tools-tray status dot (stage 3a)
   out.textContent = 'measuring…';
   setTimeout(() => {
     _noiseMeasuring = false;
     btn.classList.remove('active');
+    setTrayDot('noise', false);     // tools-tray status dot (stage 3a)
     if (_noiseSamples.length === 0) {
       out.textContent = 'no RX samples — mid-TX or SDR unavailable?';
       return;
@@ -4661,6 +4963,10 @@ function updateAbTestUI(d) {
   }
   if (d.status === 'error') line += ` — ${d.error}`;
   statusEl.textContent = line;
+
+  // Tools-tray status dot (stage 3a). "Running" includes the manual-switch
+  // pause: the run is still in progress, just waiting on the operator.
+  setTrayDot('abtest', d.status === 'running' || !!d.awaiting_antenna);
 
   _abtAwaitingConfirm = !!d.awaiting_antenna;
   const confirmWrap = document.getElementById('abt-confirm-wrap');
@@ -5578,10 +5884,90 @@ function initColumnWidths() {
   });
 }
 
+// ── Tools tray ─────────────────────────────────────────────────────────
+// Plain page-level helpers, same category as toggleSectionBox/
+// initColumnCollapse above: classList, aria attributes and localStorage
+// only, never rig state, so they carry none of the TX-timing isolation
+// concerns that keep Panadapter/RigControl apart.
+//
+// #box-abtest deliberately no longer carries .collapsible or .collapsed.
+// The tab replaces that disclosure, and a stale
+// localStorage['sectionCollapsed:box-abtest'] from before this change
+// CANNOT hide the panel: initSectionBoxes only ever looks at
+// `.section-box.collapsible[id]`, so a box without .collapsible is never
+// selected and its stored value is never read; and .collapsed — the only
+// thing `.section-box.collapsed > .section-body { display: none }`
+// responds to — is now added by nothing, since toggleSectionBox is
+// reached only from the two remaining onclick handlers and neither is
+// this box. The forced-open logic in updateAmp is keyed on
+// 'box-fault-status' by name and never touches this one.
+const TRAY_TABS = ['abtest', 'noise'];
+const TRAY_PANEL_ID = { abtest: 'box-abtest', noise: 'box-noise' };
+
+function selectTrayTab(name, opts) {
+  if (!TRAY_PANEL_ID[name]) return;
+  const panel = document.getElementById('panel-tray');
+  if (!panel) return;
+  const collapsed = panel.classList.contains('v2-tray-collapsed');
+  const already = _trayTab === name;
+
+  // Clicking the ACTIVE tab collapses the tray (spec §2.7). Clicking an
+  // inactive tab always opens it, whatever it was.
+  if (already && !collapsed && !(opts && opts.silent)) { setTrayCollapsed(true); return; }
+
+  _trayTab = name;
+  TRAY_TABS.forEach(t => {
+    const tab = document.getElementById('tray-tab-' + t);
+    const pan = document.getElementById(TRAY_PANEL_ID[t]);
+    if (tab) tab.setAttribute('aria-selected', t === name ? 'true' : 'false');
+    if (pan) pan.hidden = (t !== name);
+  });
+  try { localStorage.setItem('traySelectedTab', name); } catch (e) {}
+  if (collapsed && !(opts && opts.silent)) setTrayCollapsed(false);
+}
+
+function setTrayCollapsed(collapsed) {
+  const panel = document.getElementById('panel-tray');
+  if (!panel) return;
+  panel.classList.toggle('v2-tray-collapsed', collapsed);
+  const btn = document.getElementById('tray-toggle');
+  if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  const label = document.getElementById('tray-toggle-label');
+  if (label) label.textContent = collapsed ? 'Show' : 'Hide';
+  try { localStorage.setItem('trayCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+}
+
+function toggleTray() {
+  const panel = document.getElementById('panel-tray');
+  if (!panel) return;
+  setTrayCollapsed(!panel.classList.contains('v2-tray-collapsed'));
+}
+
+let _trayTab = 'abtest';
+function initTray() {
+  let tab = null, collapsed = null;
+  try { tab = localStorage.getItem('traySelectedTab'); } catch (e) {}
+  try { collapsed = localStorage.getItem('trayCollapsed'); } catch (e) {}
+  // Default tab: the A/B test. Default state when nothing is stored:
+  // collapsed (Amendment F6 — manual open only, the green dot is the cue).
+  selectTrayTab(TRAY_PANEL_ID[tab] ? tab : 'abtest', { silent: true });
+  setTrayCollapsed(collapsed === null ? true : collapsed === '1');
+}
+
+// Status dots. Dedicated elements, toggled by a data attribute, so they
+// are immune to the class-attribute rewrites that updateAmp/updateUI do
+// elsewhere. setTrayDot is global because the two callers live inside
+// RigControl's closure.
+function setTrayDot(name, running) {
+  const dot = document.getElementById('tray-dot-' + name);
+  if (dot) dot.setAttribute('data-running', running ? '1' : '0');
+}
+
 RigControl.init();
 initSectionBoxes();
 initColumnCollapse();
 initColumnWidths();
+initTray();
 </script>
 
 <script>

@@ -79,3 +79,21 @@ E. Must keep
 7. Panadapter and Panadapter2 duplication is deliberate; keep it. Stay in
    the single console.html unless splitting is unavoidable; ask first if a
    static mount or route would be needed.
+
+F. Decisions log (Terry, 2026-09-20, after reviewing stage 2 and the
+   stage 3 plan)
+F1. Button height: recipe G. --v2-btn-h 44px, band-grid buttons 36px,
+    title margin 12px, grid gap 6px, card padding 16px, card gap 16px.
+    Revisit --v2-btn-h after stage 5 (one variable).
+F2. Band buttons at 36px: accepted. Nothing may be smaller than today's.
+F3. Card gap stays 16px (on the DESIGN.md scale). No off-scale values.
+F4. The A/B TEST tab stays clickable when the amp is bypassed (2m/70cm);
+    its panel stays inert via the existing #box-abtest.rx-inert logic and
+    the explanatory tooltip must stay reachable.
+F5. The duplicated "FT-991A RX" chip is merged into one group heading in
+    stage 3b, keeping the divider between the NB/DNF and PREAMP/ATT groups.
+F6. Tray: manual open only, no auto-open. First load (no saved state):
+    collapsed. The green dot is the cue.
+F7. SSB Audio takes the left column's card chrome when it moves (3b).
+F8. The Measure Noise panel carries a small "RX1" label (it samples the
+    RX1 feed).

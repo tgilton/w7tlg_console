@@ -750,6 +750,272 @@
   font-size: var(--v2-font-btn);
 }
 
+/* ── Stage 3a: the tools tray ─────────────────────────────────────────
+   Follows ui-redesign/tray.png. Lives in its own grid row (see the markup
+   comment on #panel-tray for why that is what keeps the canvases still).
+
+   Collapsed height is the strip alone: 44px tabs + 22px padding top and
+   bottom = 88px, per spec §2.7. */
+.panel-tray {
+  grid-area: tray;
+  background: var(--bg-1);
+  padding: 0;
+  min-width: 0;
+}
+.v2-tray-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 20px;
+  min-height: 88px;
+}
+.v2-tray-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+.v2-tray-tabs { display: flex; gap: 8px; flex: 1 1 auto; flex-wrap: wrap; min-width: 0; }
+
+.v2-tray-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 44px;                      /* spec §2.7 */
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  text-transform: uppercase;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.v2-tray-tab[aria-selected="true"] {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+.v2-tray-tab:hover:not([aria-selected="true"]) { border-color: var(--v2-label-light); color: var(--v2-fg); }
+.v2-tray-tab:focus-visible, .v2-tray-toggle:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+
+/* Status dot. Gray when idle, --v2-ok while that tool is running, so a
+   running test is visible even with the tray shut (spec §2.7). Driven by
+   a data attribute on a DEDICATED element — never by a class on something
+   whose class attribute the update path rewrites wholesale. */
+.v2-tray-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--v2-readout-idle);
+  flex: 0 0 auto;
+  transition: background-color 0.15s;
+}
+.v2-tray-dot[data-running="1"] {
+  background: var(--v2-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v2-ok) 25%, transparent);
+}
+
+.v2-tray-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 44px; padding: 0 14px;
+  flex: 0 0 auto;
+  font-family: inherit;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  text-transform: uppercase;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+}
+.v2-tray-toggle:hover { border-color: var(--v2-label-light); color: var(--v2-fg); }
+/* Chevron drawn in CSS rather than as a glyph, so it can rotate with the
+   expanded state instead of swapping a character. */
+.v2-tray-chev {
+  width: 8px; height: 8px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(135deg);
+  transition: transform 0.15s;
+  position: relative; top: 2px;
+}
+.v2-tray-toggle[aria-expanded="true"] .v2-tray-chev { transform: rotate(-45deg); top: 4px; }
+
+.v2-tray-body { padding: 0 20px 20px; }
+.panel-tray.v2-tray-collapsed .v2-tray-body { display: none; }
+
+/* The two panels are .section-box today and keep that class — nothing is
+   removed. Their card chrome is neutralised here instead, because a card
+   inside the tray's own surface would be a box in a box. */
+#tray-body .section-box {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+}
+#tray-body .section-box + .section-box { margin-top: 0; }
+#tray-body .section-box[hidden] { display: none; }
+#tray-body .section-box h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  text-align: left;
+  margin-bottom: 16px;
+}
+/* "RX1" on Measure Noise (Amendment F8): it samples rig.sdr_strength_db,
+   which is specifically RX1's feed, and as a tray tab it would otherwise
+   read as station-wide. */
+.v2-scope-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 7px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-pill);
+  letter-spacing: 0.06em;
+  color: var(--v2-readout);
+  background: var(--v2-btn-bg);
+  border: 1px solid var(--v2-btn-border);
+  border-radius: 4px;
+  text-transform: none;
+}
+/* A/B controls may wrap over several rows; results and summary sit below.
+   Every element is kept — this only lets the rows flow. */
+#tray-body .abt-row { flex-wrap: wrap; }
+#tray-body #abt-results { max-height: 220px; }
+
+/* A/B test panel contents, to tray.png. Pure CSS — no markup change here,
+   so every id, handler and inline behaviour hook is exactly as it was in
+   the left column. The rows flow into one band of controls at a wide
+   window and wrap at a narrow one. */
+#box-abtest .section-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+#box-abtest .abt-row {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+/* Checkbox chips. The markup is <label><input type=checkbox> A1F</label>,
+   which is already the right shape — this only dresses it. Checked goes
+   amber for the same reason every selected thing does (DESIGN.md §2.2). */
+#box-abtest .abt-row label {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  cursor: pointer;
+  white-space: nowrap;
+}
+#box-abtest .abt-row label:has(input:checked) {
+  border-color: var(--v2-selected); color: var(--v2-selected);
+}
+#box-abtest .abt-row label:has(input:focus-visible) {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
+}
+#box-abtest input[type=checkbox] { accent-color: var(--v2-selected); width: 15px; height: 15px; margin: 0; }
+#box-abtest .abt-row > span {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+#box-abtest input[type=number], #box-abtest input[type=text] {
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  height: var(--v2-input-h);
+  box-sizing: border-box;
+  padding: 0 8px;
+  color: var(--v2-fg);
+  background: var(--v2-bg-inset);
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+}
+#box-abtest input[type=number] { width: 68px; }
+/* !important because both carry an inline style="width:56px" sized for
+   the old narrow left column; at 56px the v2 input clips "14.2000" to
+   "14.". Overridden rather than edited out, so the markup move stays
+   provably behaviour-neutral. Same reason as the Start/Stop flex below. */
+#box-abtest #abt-scan-start, #box-abtest #abt-scan-stop { width: 96px !important; }
+#box-abtest input:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
+/* Start / Stop at natural width. The inline style="flex:1" on both buttons
+   is what stretched them across the old narrow column; in a full-width
+   tray that reads as two enormous bars, so it is overridden here rather
+   than edited out of the markup — leaving the markup untouched keeps the
+   move provably behaviour-neutral. */
+#box-abtest .btn-row {
+  display: flex; gap: 8px; margin: 0; flex: 0 0 auto; flex-wrap: nowrap;
+}
+#box-abtest .btn-row .btn, #box-abtest #abt-confirm-btn {
+  flex: 0 0 auto !important;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--v2-touch-row);
+  padding: 0 16px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  border-radius: var(--v2-radius-btn);
+  border-width: var(--v2-border-w);
+}
+#box-abtest .btn.active-green, #box-abtest #abt-confirm-btn {
+  background: var(--v2-go-bg); border-color: var(--v2-ok-border); color: var(--v2-ok);
+}
+#box-abtest .btn.danger {
+  background: var(--v2-fault-bg); border-color: var(--v2-fault-border); color: var(--v2-fault);
+}
+/* STATUS sits with the controls, labelled, instead of being a bare word
+   on its own line (spec §2.7). */
+#box-abtest #abt-status {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0;
+  font-size: var(--v2-font-label);
+  color: var(--v2-fg);
+}
+#box-abtest #abt-status::before {
+  content: 'Status ';
+  color: var(--v2-label);
+  letter-spacing: var(--v2-ls-label);
+  text-transform: uppercase;
+}
+/* Confirm row, summary and results take the full width below the controls
+   — every element kept, just given its own line. */
+#box-abtest #abt-confirm-wrap { flex: 1 0 100%; gap: 12px; }
+#box-abtest #abt-summary, #box-abtest #abt-results { flex: 1 0 100%; margin: 0; }
+#box-abtest #abt-summary:empty, #box-abtest #abt-results:empty { display: none; }
+#box-abtest #abt-manual-ants { flex: 1 1 260px; }
+
+/* Measure Noise panel. */
+#box-noise .field-group { display: flex; align-items: center; gap: 12px; }
+#box-noise #noise-measure-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-touch-row);
+  padding: 0 16px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  border-radius: var(--v2-radius-btn);
+  border-width: var(--v2-border-w);
+}
+#box-noise #noise-floor-val { font-size: var(--v2-font-label); }
+
 /* V2:END */
 
 /* ── Style-guide page chrome (NOT part of the v2 system) ───────────── */
