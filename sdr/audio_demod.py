@@ -191,13 +191,25 @@ class AudioDemodulator:
         # "off" bypasses auto-leveling entirely (manual_gain alone sets the
         # level, same as riding a real radio's AF gain knob with AGC off).
         self.agc_mode = "fast"    # off | fast | slow  (operator default: fast)
-        # Separate, user-facing master volume (RX Volume slider) — kept
+        # Separate, user-facing master volume (AF Gain slider) — kept
         # independent of the AGC's own internal gain so "still too quiet"
         # has a direct, predictable knob instead of more guessing at the
-        # auto-leveling target. Default landed at 4.0 (400%) after live
-        # listening still found 2.0 too quiet — slider goes to 10.0 (1000%)
-        # if more is still needed.
-        self.manual_gain = 4.0
+        # auto-leveling target. Slider goes to 10.0 (1000%).
+        #
+        # 4.0 (400%) until 2026-09-20, chosen back when live listening
+        # found 2.0 too quiet. In practice it clipped constantly: this
+        # value multiplies into the np.clip(..., -0.95, 0.95) limiter a
+        # few lines down in _demodulate, and at 4.0 ordinary signals sat
+        # on that limiter. Terry's explicit decision to make it 1.0 and
+        # raise it by hand when a weak band needs it.
+        #
+        # Worth knowing when changing it: this gain is NOT only the
+        # operator's headphones. _publish() hands the same bytes to every
+        # subscriber, and those include DigitalAudioOutput -> BlackHole ->
+        # WSJT-X (see the TX-gate comment in _publish). So this also sets
+        # what the decoders hear, one for one. Terry operates knowing that
+        # and re-levels WSJT-X to suit.
+        self.manual_gain = 1.0
         # Diversity phase-rotate experiment (2026-09-11) — a static phase
         # shift applied to this channel's baseband right after downmix,
         # before decimation/filtering (commutes with both, so where
