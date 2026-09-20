@@ -2959,10 +2959,12 @@ select#palette-select {
           <span class="ctl-label">Width</span>
           <span class="power-value" id="width-val" style="text-align:right">3000Hz</span>
         </div>
-        <input type="range" min="200" max="3000" step="50" value="3000" class="v2-range" id="width-slider"
+        <input class="v2-range" type="range" min="200" max="3000" step="50" value="3000" id="width-slider"
         oninput="RigControl.onWidthSlider(this.value)"
         onmousedown="RigControl.setDragging('width', true)"
-        onmouseup="RigControl.sliderRelease('width', () =>
+        onmouseup="RigControl.sliderRelease('width', () => RigControl.setWidth(document.getElementById('width-slider').value))"
+        ontouchstart="RigControl.setDragging('width', true)"
+        ontouchend="RigControl.sliderRelease('width', () => RigControl.setWidth(document.getElementById('width-slider').value))">
       </div>
       <div class="btn-row seg-row" style="margin-top:6px">
         <button class="btn" id="filt-NAR" onclick="RigControl.setFilterWidthMode('NAR')" style="flex:1">NARROW</button>
@@ -2979,7 +2981,9 @@ select#palette-select {
         <input type="range" min="1" max="15" step="1" value="1" id="nr-slider" class="dsp-slider-mini v2-range"
           oninput="RigControl.onNRChange(this.value)"
           onmousedown="RigControl.setDragging('nr', true)"
-          onmouseup="RigControl.sliderRelease('nr', () =>
+          onmouseup="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))"
+          ontouchstart="RigControl.setDragging('nr', true)"
+          ontouchend="RigControl.sliderRelease('nr', () => RigControl.setNR(document.getElementById('nr-slider').value))">
       </div>
       <div class="dsp-toggle-row">
         <button class="dsp-toggle" id="nr-btn" onmousedown="event.preventDefault()" onclick="RigControl.toggleNR()">DNR</button>
@@ -3271,10 +3275,12 @@ select#palette-select {
           <span class="ctl-label">Width</span>
           <span class="power-value" id="width2-val" style="text-align:right">3000Hz</span>
         </div>
-        <input type="range" min="200" max="3000" step="50" value="3000" class="v2-range" id="width2-slider"
+        <input class="v2-range" type="range" min="200" max="3000" step="50" value="3000" id="width2-slider"
         oninput="document.getElementById('width2-val').textContent = this.value + 'Hz'"
         onmousedown="RigControl.setDragging('width2', true)"
-        onmouseup="RigControl.sliderRelease('width2', () =>
+        onmouseup="RigControl.sliderRelease('width2', () => Panadapter2.setWidth(document.getElementById('width2-slider').value))"
+        ontouchstart="RigControl.setDragging('width2', true)"
+        ontouchend="RigControl.sliderRelease('width2', () => Panadapter2.setWidth(document.getElementById('width2-slider').value))">
       </div>
       <div class="btn-row seg-row" style="margin-top:6px">
         <button class="btn" id="filt2-NAR" onclick="Panadapter2.setFilterWidthMode('NAR')" style="flex:1">NARROW</button>
@@ -3291,7 +3297,9 @@ select#palette-select {
         <input type="range" min="1" max="15" step="1" value="1" id="nr2-slider" class="dsp-slider-mini v2-range"
           oninput="document.getElementById('nr2-val').textContent = this.value"
           onmousedown="RigControl.setDragging('nr2', true)"
-          onmouseup="RigControl.sliderRelease('nr2', () =>
+          onmouseup="RigControl.sliderRelease('nr2', () => Panadapter2.setNR(document.getElementById('nr2-slider').value))"
+          ontouchstart="RigControl.setDragging('nr2', true)"
+          ontouchend="RigControl.sliderRelease('nr2', () => Panadapter2.setNR(document.getElementById('nr2-slider').value))">
       </div>
       <div class="dsp-toggle-row">
         <button class="dsp-toggle" id="nr2-btn" onmousedown="event.preventDefault()" onclick="Panadapter2.toggleNR()">DNR</button>
