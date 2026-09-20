@@ -4361,6 +4361,7 @@ function connectWs2() {
       // reads can be unreliable mid-TX, don't let a stray one flip this.
       if (!rigPtt) rigIsDigital = !!rig.is_digital;
       updateSmeter(rig);
+      updateAfGain2(rig);
       // "Link to RX1" (Terry 2026-09-11: no way to tune RX2 since the
       // radio's VFO knob only ever drives RX1's CAT frequency) — while
       // enabled, any actual change in RX1's frequency/mode/passband
@@ -4480,6 +4481,21 @@ function smeterLabel2(strengthDb) {
   }
   const s = Math.max(0, Math.min(9, 9 + Math.floor(strengthDb / 6)));
   return `S${s}`;
+}
+
+// The server has always published sdr_rx_volume_b and nothing read it, so
+// RX2's AF Gain slider showed whatever was last set locally rather than
+// what the backend holds — it would sit at its markup default after a
+// reload while the audio ran at something else. Mirror of RigControl's
+// own sync, including the inverse taper.
+function updateAfGain2(rig) {
+  if (rig.sdr_rx_volume_b === undefined || rig.sdr_rx_volume_b === null) return;
+  if (RigControl.isDragging('rxVol2')) return;
+  const pct = Math.round(rig.sdr_rx_volume_b * 100);
+  const slider = document.getElementById('rx-vol2-slider');
+  const val = document.getElementById('rx-vol2-val');
+  if (slider) slider.value = Math.round(v2AfGainToPos(pct));
+  if (val) val.textContent = pct + '%';
 }
 
 function updateSmeter(rig) {
@@ -5273,7 +5289,12 @@ function setAGC(value) {
   document.getElementById('agc2-fast').classList.toggle('active', value === 2);
   document.getElementById('agc2-slow').classList.toggle('active', value === 3);
 }
-function setRxVolume(v) { send2({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 }); }
+// Same taper as RigControl's setRxVolume — applied here because this
+// module has its own send2() (module isolation, see the file header).
+// This was missed when the taper landed in stage 4b: the slider hands
+// over a POSITION, so the old parseFloat(v)/100 sent 3.16 (316%) while
+// the label next to it read 100%.
+function setRxVolume(pos) { send2({ cmd: 'set_rx_volume', gain: v2AfPosToGain(pos) / 100 }); }
 function setRfGain(v) { send2({ cmd: 'set_rf_gain', pct: parseFloat(v) }); }
 
 // See RigControl's own HF_LNA_GR_DB/hfStateToPct/hfPctToState/hfGainLabel
