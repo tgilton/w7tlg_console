@@ -2271,6 +2271,110 @@ select#palette-select {
 }
 .v2-mode-grid .btn:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
 
+/* ── Stage 5: scope card and display controls ─────────────────────────
+   Amendment F13: the scope card keeps its INNER PADDING exactly as it is,
+   so the spectrum and waterfall canvases keep today's size to the pixel.
+   Only the chrome changes — the 2px white border becomes the v2 hairline.
+   The padding values below are today's (8px 8px 4px), restated rather
+   than inherited so nothing can quietly re-tune them later. */
+.panel-center .scope-group, .panel-center2 .scope-group {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  /* 9px horizontal, not today's 8px, ON PURPOSE. What F13 protects is the
+     CANVAS size, and the total inset is border + padding: today that is
+     2px + 8px = 10px a side, and the v2 hairline is 1px, so leaving the
+     padding at 8 made the canvases 2px WIDER (measured). 1 + 9 = 10
+     restores them to the pixel. Vertical padding is unchanged because the
+     canvases take their height from fixed CSS, not from this box. */
+  padding: 8px 9px 4px;
+  margin-bottom: var(--v2-card-gap);
+}
+.panel-center .section-box, .panel-center2 .section-box {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  margin-bottom: var(--v2-card-gap);
+}
+.panel-center .section-box h2, .panel-center2 .section-box h2 {
+  font-size: var(--v2-font-title);
+  font-weight: var(--v2-weight-title);
+  letter-spacing: var(--v2-ls-title);
+  color: var(--v2-title-fg);
+  margin-bottom: var(--v2-title-mb);
+}
+.panel-center .freq-axis, .panel-center2 .freq-axis {
+  font-size: var(--v2-font-label);
+  color: var(--v2-label);
+}
+
+/* Two-column grid of slider fields, then a divider, then the two pickers
+   (spec §2.4). */
+.v2-display-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 20px;
+  align-items: start;
+}
+.v2-display-divider { grid-column: 1 / -1; margin: 2px 0; }
+.v2-display-grid .v2-slider-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 6px;
+}
+.v2-display-grid .ctl-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+/* Readouts keep their exact strings ("15.0 kHz", "-90dB", "50%", "30%");
+   only the type changes. Pushed right, reserved width so a value change
+   cannot shuffle the AUTO checkbox. */
+.v2-display-grid .span-val {
+  margin-left: auto;
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* AUTO sits in GAIN's header (spec §2.4). */
+.v2-auto-check {
+  display: inline-flex; align-items: center; gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.v2-auto-check input[type=checkbox] {
+  accent-color: var(--v2-selected); width: 14px; height: 14px; margin: 0;
+}
+.v2-display-grid .v2-range { width: 100%; }
+/* The existing dim-the-whole-field mechanism is unchanged: the base rule
+   is `.field-group:has(input:disabled) { opacity: .4 }`, and each slider
+   row carries .field-group, so AUTO dimming GAIN/FLOOR and LNK dimming
+   RX2's SPAN keep working exactly as before. */
+
+.v2-picker { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.v2-picker .v2-select { flex: 1 1 auto; min-width: 0; }
+.v2-grad-strip {
+  flex: 0 0 auto;
+  width: 84px; height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--v2-border-inset);
+}
+.v2-trace-swatch {
+  flex: 0 0 auto;
+  width: 40px; height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--v2-border-inset);
+  background: #67D0F0;
+}
+@container (max-width: 660px) {
+  .v2-display-grid { grid-template-columns: 1fr; }
+}
+
 /* V2:END */
 </style>
 </head>
@@ -2607,29 +2711,32 @@ select#palette-select {
 
     <div class="section-box">
     <h2>RX1 Spectrum &amp; Waterfall</h2>
-    <div class="center-controls-row row-display">
-      <span class="field-group">
-        <span class="ctl-label">Span</span>
-        <input type="range" class="display-slider" id="span-slider" min="0" max="1000" value="500" oninput="Panadapter.onSpanSlider(this.value)">
-        <span class="span-val" id="span-val">15.0 kHz</span>
-      </span>
-      <label class="ctl-label field-group"><input type="checkbox" id="auto-scale-cb" checked onchange="Panadapter.onAutoScaleToggle(this.checked)"> Auto</label>
-      <span class="field-group">
-        <span class="ctl-label">Floor</span>
-        <input type="range" class="display-slider" id="floor-slider" min="-160" max="0" value="-90" disabled oninput="Panadapter.onFloorSlider(this.value)">
-        <span class="span-val" id="floor-val">-90dB</span>
-      </span>
-      <span class="field-group">
-        <span class="ctl-label">Gain</span>
-        <input type="range" class="display-slider" id="gain-slider" min="0" max="100" value="50" disabled oninput="Panadapter.onGainSlider(this.value)">
-        <span class="span-val" id="gain-val">50%</span>
-      </span>
-      <span class="field-group">
-        <span class="ctl-label">Avg</span>
-        <input type="range" class="display-slider" id="avg-slider" min="0" max="100" value="30" oninput="Panadapter.onAvgSlider(this.value)">
-        <span class="span-val" id="avg-val">30%</span>
-      </span>
-      <span class="field-group">
+    <div class="v2-display-grid">
+      <div class="v2-slider-row field-group">
+        <div class="v2-slider-head"><span class="ctl-label">Span</span><span class="span-val" id="span-val">15.0 kHz</span></div>
+        <input type="range" class="display-slider v2-range" id="span-slider" min="0" max="1000" value="500" oninput="Panadapter.onSpanSlider(this.value)">
+      </div>
+      <div class="v2-slider-row field-group">
+        <div class="v2-slider-head">
+          <span class="ctl-label">Floor</span>
+          <span class="span-val" id="floor-val">-90dB</span>
+        </div>
+        <input type="range" class="display-slider v2-range" id="floor-slider" min="-160" max="0" value="-90" disabled oninput="Panadapter.onFloorSlider(this.value)">
+      </div>
+      <div class="v2-slider-row field-group">
+        <div class="v2-slider-head">
+          <span class="ctl-label">Gain</span>
+          <label class="ctl-label v2-auto-check"><input type="checkbox" id="auto-scale-cb" checked onchange="Panadapter.onAutoScaleToggle(this.checked)"> Auto</label>
+          <span class="span-val" id="gain-val">50%</span>
+        </div>
+        <input type="range" class="display-slider v2-range" id="gain-slider" min="0" max="100" value="50" disabled oninput="Panadapter.onGainSlider(this.value)">
+      </div>
+      <div class="v2-slider-row field-group">
+        <div class="v2-slider-head"><span class="ctl-label">Avg</span><span class="span-val" id="avg-val">30%</span></div>
+        <input type="range" class="display-slider v2-range" id="avg-slider" min="0" max="100" value="30" oninput="Panadapter.onAvgSlider(this.value)">
+      </div>
+      <div class="v2-divider v2-display-divider"></div>
+      <div class="v2-picker">
         <span class="ctl-label">WF Palette</span>
         <select class="v2-select" id="palette-select" onchange="Panadapter.onPaletteSelect(this.value)">
           <option value="default">Default</option>
@@ -2646,6 +2753,8 @@ select#palette-select {
           <option value="green">Green phosphor</option>
         </select>
         <span class="v2-grad-strip" id="palette-strip" aria-hidden="true"></span>
+      </div>
+      <div class="v2-picker">
         <span class="ctl-label">Trace</span>
         <select class="v2-select" id="trace-select" onchange="Panadapter.onTraceSelect(this.value)">
           <option value="ice">Ice blue</option>
@@ -2656,7 +2765,7 @@ select#palette-select {
           <option value="white">White</option>
         </select>
         <span class="v2-trace-swatch" id="trace-swatch" aria-hidden="true"></span>
-      </span>
+      </div>
     </div>
     <div class="divider"></div>
     <h2>RX1 Tuning</h2>
@@ -2906,29 +3015,32 @@ select#palette-select {
 
     <div class="section-box">
     <h2>RX2 Spectrum &amp; Waterfall</h2>
-    <div class="center-controls-row row-display">
-      <span class="field-group">
-        <span class="ctl-label">Span</span>
-        <input type="range" class="display-slider" id="span2-slider" min="0" max="1000" value="500" oninput="Panadapter2.onSpanSlider(this.value)">
-        <span class="span-val" id="span2-val">15.0 kHz</span>
-      </span>
-      <label class="ctl-label field-group"><input type="checkbox" id="auto-scale2-cb" checked onchange="Panadapter2.onAutoScaleToggle(this.checked)"> Auto</label>
-      <span class="field-group">
-        <span class="ctl-label">Floor</span>
-        <input type="range" class="display-slider" id="floor2-slider" min="-160" max="0" value="-90" disabled oninput="Panadapter2.onFloorSlider(this.value)">
-        <span class="span-val" id="floor2-val">-90dB</span>
-      </span>
-      <span class="field-group">
-        <span class="ctl-label">Gain</span>
-        <input type="range" class="display-slider" id="gain2-slider" min="0" max="100" value="50" disabled oninput="Panadapter2.onGainSlider(this.value)">
-        <span class="span-val" id="gain2-val">50%</span>
-      </span>
-      <span class="field-group">
-        <span class="ctl-label">Avg</span>
-        <input type="range" class="display-slider" id="avg2-slider" min="0" max="100" value="30" oninput="Panadapter2.onAvgSlider(this.value)">
-        <span class="span-val" id="avg2-val">30%</span>
-      </span>
-      <span class="field-group">
+    <div class="v2-display-grid">
+      <div class="v2-slider-row field-group">
+        <div class="v2-slider-head"><span class="ctl-label">Span</span><span class="span-val" id="span2-val">15.0 kHz</span></div>
+        <input type="range" class="display-slider v2-range" id="span2-slider" min="0" max="1000" value="500" oninput="Panadapter2.onSpanSlider(this.value)">
+      </div>
+      <div class="v2-slider-row field-group">
+        <div class="v2-slider-head">
+          <span class="ctl-label">Floor</span>
+          <span class="span-val" id="floor2-val">-90dB</span>
+        </div>
+        <input type="range" class="display-slider v2-range" id="floor2-slider" min="-160" max="0" value="-90" disabled oninput="Panadapter2.onFloorSlider(this.value)">
+      </div>
+      <div class="v2-slider-row field-group">
+        <div class="v2-slider-head">
+          <span class="ctl-label">Gain</span>
+          <label class="ctl-label v2-auto-check"><input type="checkbox" id="auto-scale2-cb" checked onchange="Panadapter2.onAutoScaleToggle(this.checked)"> Auto</label>
+          <span class="span-val" id="gain2-val">50%</span>
+        </div>
+        <input type="range" class="display-slider v2-range" id="gain2-slider" min="0" max="100" value="50" disabled oninput="Panadapter2.onGainSlider(this.value)">
+      </div>
+      <div class="v2-slider-row field-group">
+        <div class="v2-slider-head"><span class="ctl-label">Avg</span><span class="span-val" id="avg2-val">30%</span></div>
+        <input type="range" class="display-slider v2-range" id="avg2-slider" min="0" max="100" value="30" oninput="Panadapter2.onAvgSlider(this.value)">
+      </div>
+      <div class="v2-divider v2-display-divider"></div>
+      <div class="v2-picker">
         <span class="ctl-label">WF Palette</span>
         <select class="v2-select" id="palette2-select" onchange="Panadapter2.onPaletteSelect(this.value)">
           <option value="default">Default</option>
@@ -2945,6 +3057,8 @@ select#palette-select {
           <option value="green">Green phosphor</option>
         </select>
         <span class="v2-grad-strip" id="palette2-strip" aria-hidden="true"></span>
+      </div>
+      <div class="v2-picker">
         <span class="ctl-label">Trace</span>
         <select class="v2-select" id="trace2-select" onchange="Panadapter2.onTraceSelect(this.value)">
           <option value="ice">Ice blue</option>
@@ -2955,7 +3069,7 @@ select#palette-select {
           <option value="white">White</option>
         </select>
         <span class="v2-trace-swatch" id="trace2-swatch" aria-hidden="true"></span>
-      </span>
+      </div>
     </div>
     <div class="divider"></div>
     <h2>RX2 Tuning</h2>
