@@ -3643,6 +3643,250 @@ const WsjtxLink = (function () {
 
 </script>
 
+<!-- The v2 helper block runs BEFORE the three module IIFEs, not after
+     them, and must stay there.
+
+     It is pure, stateless helper code — the slider-fill loop, the S-meter
+     math, the AF Gain taper, the trace colours and the palette gradient —
+     and the modules now call some of it from inside their own init():
+     Panadapter.init() paints its palette preview strip. Those init calls
+     fire immediately after each module's IIFE, so while this block sat at
+     the end of the file, v2PaletteGradient did not exist yet and init
+     threw a ReferenceError — which aborted the rest of init and left the
+     console with no audio, no spectrum, no waterfall and dead controls
+     (stage 5, caught by ui-redesign/smoke_console.js).
+
+     Nothing in here touches the DOM at definition time, so running it
+     early is free. -->
+<script>
+'use strict';
+/* V2:BEGIN — shared v2 slider fill helper.
+
+   Stage 1. Nothing on the page carries .v2-range yet, so this loop finds
+   zero elements and does nothing until a later stage opts a slider in.
+
+   WHY A POLL AND NOT AN EVENT. The v2 slider draws its own fill, so it
+   needs the live fraction (value - min) / (max - min). Every other way of
+   learning that fraction was rejected:
+
+     - an `input`/`change` listener only fires on HUMAN interaction. Half
+       the value changes here come from code — updateUI() writes .value
+       from every state push (AF Gain, RF Gain, DT Gain, exciter drive),
+       and syncFilterRange rewrites .min/.max on every mode change. A
+       listener would leave the fill stale exactly when the radio, not the
+       operator, moved the control.
+     - a MutationObserver on the value/min/max ATTRIBUTES misses the same
+       cases: `el.value = x` sets the IDL property and never touches the
+       attribute, so the observer would not fire at all.
+     - redefining the `value` property on HTMLInputElement.prototype would
+       catch everything, but it is a global monkey-patch of a DOM
+       prototype shared with every other module on this page. This file's
+       whole architecture is "no shared mutable state across modules"; a
+       patched prototype is the worst possible version of that.
+
+   Which leaves reading the DOM. The brief's own suggestion, and the only
+   option that needs no cooperation from the existing setters — the hard
+   requirement, since those setters are load-bearing (two test files
+   assert on their source text verbatim) and are not to be edited.
+
+   Cost is a querySelectorAll over one class plus a string compare per
+   slider per frame, and an early-out when nothing moved, so a frame where
+   no slider changed writes no style and triggers no layout. The page
+   already runs two rAF loops (drawSpectrum, drawSpectrum2); rAF also
+   parks itself when the tab is hidden, which a setInterval would not. */
+(function V2Sliders() {
+
+  // Last-written signature per element, so an unchanged slider costs one
+  // string compare and no style write. WeakMap, not a dataset field:
+  // nothing here should be visible in the DOM or keep a detached node
+  // alive after a later stage re-renders a block.
+  const lastSig = new WeakMap();
+
+  function fractionOf(el) {
+    const min = parseFloat(el.min);
+    const max = parseFloat(el.max);
+    const val = parseFloat(el.value);
+    // syncFilterRange can leave min === max transiently (FM has no filter
+    // range at all), and a bare <input type=range> with no min/max parses
+    // as NaN. Both mean "no meaningful position" — 0, not NaN, which
+    // would poison the calc() and blank the track.
+    if (!isFinite(min) || !isFinite(max) || !isFinite(val) || max <= min) return 0;
+    return Math.min(1, Math.max(0, (val - min) / (max - min)));
+  }
+
+  function tick() {
+    const els = document.querySelectorAll('.v2-range');
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      const frac = fractionOf(el);
+      const notch = el.dataset.v2Notch;
+      // 4 decimals is ~1/3 of a pixel on a 900px track — finer than the
+      // fill can render, coarse enough that float noise doesn't churn.
+      const sig = frac.toFixed(4) + '|' + (notch === undefined ? '' : notch);
+      if (lastSig.get(el) === sig) continue;
+      lastSig.set(el, sig);
+
+      el.style.setProperty('--v2-fill', String(frac));
+
+      // The notch renders on the ROW, not the input — see the CSS comment
+      // on .v2-slider-row.v2-has-notch::after for why it cannot live on
+      // the input itself.
+      const row = el.closest('.v2-slider-row');
+      if (!row) continue;
+      const n = parseFloat(notch);
+      if (isFinite(n)) {
+        row.style.setProperty('--v2-notch', String(Math.min(1, Math.max(0, n))));
+        row.classList.add('v2-has-notch');
+      } else {
+        row.style.removeProperty('--v2-notch');
+        row.classList.remove('v2-has-notch');
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  requestAnimationFrame(tick);
+})();
+/* ── V2METER:BEGIN — pure S-meter math ────────────────────────────────
+   Stateless by construction. Both receivers call these; neither owns
+   them. Every receiver-specific value (calibration, peak, hold clock)
+   stays inside its own module's closure and is passed in and back out,
+   so this file's "no shared mutable state across modules" rule holds —
+   see the header comment on module isolation.
+
+   Extracted and unit-tested by ui-redesign/test_meter_math.js; the
+   V2METER markers are what that script looks for. */
+
+// dBFS -> arc fraction 0..1. Spec §2.2: with calibration `cal` (dBFS at
+// S9), s = 9 + (dBFS - cal)/6. Below S9 the scale is linear in S units
+// over the first 58% of the arc; above it, linear in dB over the last 42%.
+function v2MeterFraction(dbFs, cal) {
+  if (!isFinite(dbFs) || !isFinite(cal)) return 0;
+  const s = 9 + (dbFs - cal) / 6;
+  if (s < 9) {
+    const f = (Math.max(s, 1) - 1) / 8 * 0.58;
+    return Math.max(0, Math.min(1, f));
+  }
+  const over = Math.max(0, dbFs - cal);
+  return Math.max(0, Math.min(1, 0.58 + Math.min(over, 60) / 60 * 0.42));
+}
+
+// Arc fraction -> needle angle in degrees from vertical.
+function v2MeterAngle(frac) {
+  return -38 + 76 * Math.max(0, Math.min(1, frac));
+}
+
+// Peak hold. Pure: takes the previous {db, at} and the live reading, and
+// returns the next one. Timestamps, not frame counts, so the decay rate
+// is the same whatever the frame rate or push cadence.
+//
+// Rules (spec §2.2): a reading at or above the current peak sets the peak
+// and restarts the hold; the peak holds for holdMs; after that it decays
+// at decayDbPerS toward the live level and never falls below it.
+function v2PeakStep(prev, dbFs, nowMs, holdMs, decayDbPerS) {
+  if (!isFinite(dbFs)) return prev;
+  if (holdMs === undefined) holdMs = 6000;
+  if (decayDbPerS === undefined) decayDbPerS = 3;
+  // `at` is when the hold started; `last` is when this was last stepped.
+  if (!prev || !isFinite(prev.db)) return { db: dbFs, at: nowMs, last: nowMs };
+  if (dbFs >= prev.db) return { db: dbFs, at: nowMs, last: nowMs };
+
+  const holdEnd = prev.at + holdMs;
+  if (nowMs <= holdEnd) return { db: prev.db, at: prev.at, last: nowMs };
+
+  // Decay INCREMENTALLY, from the previous step (or the end of the hold,
+  // whichever is later) to now. Decaying prev.db by the whole time since
+  // the hold ended compounds: the value has already fallen once, so a
+  // second call charges it for the same seconds again and the marker
+  // drops at 3 dB/s times the number of calls. Caught by
+  // test_meter_math.js, invisible in a static render.
+  const from = Math.max(prev.last, holdEnd);
+  const decayed = prev.db - decayDbPerS * (Math.max(0, nowMs - from) / 1000);
+  // Never below the live level; once it lands there it tracks it.
+  return { db: Math.max(decayed, dbFs), at: prev.at, last: nowMs };
+}
+/* V2METER:END */
+
+/* ── V2AF:BEGIN — pure AF GAIN taper ──────────────────────────────────
+   The slider is a POSITION 0..1000, not a percentage. A linear 0-1000%
+   slider puts the useful range in its first tenth; a square taper puts
+   100% about a third of the way along, which is where the notch is.
+   Stateless; unit-tested by ui-redesign/test_af_taper.js. */
+const V2_AF_POS_MAX = 1000;
+const V2_AF_GAIN_MAX = 1000;   // percent
+
+function v2AfPosToGain(pos) {
+  const x = Math.max(0, Math.min(1, parseFloat(pos) / V2_AF_POS_MAX));
+  return V2_AF_GAIN_MAX * x * x;
+}
+function v2AfGainToPos(gainPct) {
+  const g = Math.max(0, Math.min(V2_AF_GAIN_MAX, parseFloat(gainPct)));
+  return V2_AF_POS_MAX * Math.sqrt(g / V2_AF_GAIN_MAX);
+}
+/* V2AF:END */
+
+/* ── V2TRACE:BEGIN — spectrum trace colours and palette previews ──────
+   Pure and stateless; each receiver holds its own selection in its own
+   closure. Amendment F12: "ice" is today's exact look and is the default,
+   NOT the mockup's lighter "Ice blue".
+
+   DESIGN.md §2.2 tension, recorded not resolved: amber here is a TRACE
+   colour the operator picked for a measured waterfall, while §2.2 gives
+   amber one meaning, "this option is the selected choice in its group".
+   Nothing on this palette is a control, so nothing can be misread as
+   selected — but it is a second use of the hue and stage 7 should say so
+   explicitly rather than leave it implied. Not changed. */
+const V2_TRACE_COLOURS = {
+  ice:     '#67D0F0',   // today's --data-trace, the default (F12)
+  cyan:    '#4fd8e8',
+  green:   '#6fe08a',
+  amber:   '#f0b04a',
+  magenta: '#e06fd0',
+  white:   '#e8edf5',
+};
+const V2_TRACE_FILL_ALPHA = 0.25;   // today's fill alpha, unchanged
+
+function v2TraceColour(name) {
+  return V2_TRACE_COLOURS[name] || V2_TRACE_COLOURS.ice;
+}
+function v2TraceFill(name) {
+  const hex = v2TraceColour(name);
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + V2_TRACE_FILL_ALPHA + ')';
+}
+
+// A CSS linear-gradient built from a palette's own [pos,r,g,b] stops, so
+// the preview strip cannot drift from what the waterfall actually paints.
+function v2PaletteGradient(stops) {
+  if (!stops || !stops.length) return 'none';
+  const parts = stops.map(st =>
+    'rgb(' + Math.round(st[1]) + ',' + Math.round(st[2]) + ',' + Math.round(st[3]) + ') '
+    + (st[0] * 100).toFixed(2) + '%');
+  return 'linear-gradient(to right, ' + parts.join(', ') + ')';
+}
+/* V2TRACE:END */
+
+// Frequency readout markup: the group separators are dim and narrower
+// than a digit (spec §2.2), which needs them wrapped rather than styled
+// as plain text. Pure and stateless. Input is machine-generated digits,
+// dots and spaces; anything else is escaped rather than trusted.
+function v2FreqMarkup(str) {
+  let out = '';
+  for (const ch of String(str)) {
+    if (ch === '.') out += '<i class="v2-freq-sep">.</i>';
+    else if (ch >= '0' && ch <= '9') out += ch;
+    else if (ch === ' ') out += ' ';
+    else out += ch.replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  return out;
+}
+
+/* V2:END */
+</script>
+
 <!-- ══════════════════════════════════════════════════════════════════════
      Panadapter module — spectrum, waterfall, TX audio mute, feedback-loop
      prevention, digital-mode view lock.
@@ -7321,235 +7565,6 @@ initSectionBoxes();
 initColumnCollapse();
 initColumnWidths();
 initTray();
-</script>
-
-<script>
-'use strict';
-/* V2:BEGIN — shared v2 slider fill helper.
-
-   Stage 1. Nothing on the page carries .v2-range yet, so this loop finds
-   zero elements and does nothing until a later stage opts a slider in.
-
-   WHY A POLL AND NOT AN EVENT. The v2 slider draws its own fill, so it
-   needs the live fraction (value - min) / (max - min). Every other way of
-   learning that fraction was rejected:
-
-     - an `input`/`change` listener only fires on HUMAN interaction. Half
-       the value changes here come from code — updateUI() writes .value
-       from every state push (AF Gain, RF Gain, DT Gain, exciter drive),
-       and syncFilterRange rewrites .min/.max on every mode change. A
-       listener would leave the fill stale exactly when the radio, not the
-       operator, moved the control.
-     - a MutationObserver on the value/min/max ATTRIBUTES misses the same
-       cases: `el.value = x` sets the IDL property and never touches the
-       attribute, so the observer would not fire at all.
-     - redefining the `value` property on HTMLInputElement.prototype would
-       catch everything, but it is a global monkey-patch of a DOM
-       prototype shared with every other module on this page. This file's
-       whole architecture is "no shared mutable state across modules"; a
-       patched prototype is the worst possible version of that.
-
-   Which leaves reading the DOM. The brief's own suggestion, and the only
-   option that needs no cooperation from the existing setters — the hard
-   requirement, since those setters are load-bearing (two test files
-   assert on their source text verbatim) and are not to be edited.
-
-   Cost is a querySelectorAll over one class plus a string compare per
-   slider per frame, and an early-out when nothing moved, so a frame where
-   no slider changed writes no style and triggers no layout. The page
-   already runs two rAF loops (drawSpectrum, drawSpectrum2); rAF also
-   parks itself when the tab is hidden, which a setInterval would not. */
-(function V2Sliders() {
-
-  // Last-written signature per element, so an unchanged slider costs one
-  // string compare and no style write. WeakMap, not a dataset field:
-  // nothing here should be visible in the DOM or keep a detached node
-  // alive after a later stage re-renders a block.
-  const lastSig = new WeakMap();
-
-  function fractionOf(el) {
-    const min = parseFloat(el.min);
-    const max = parseFloat(el.max);
-    const val = parseFloat(el.value);
-    // syncFilterRange can leave min === max transiently (FM has no filter
-    // range at all), and a bare <input type=range> with no min/max parses
-    // as NaN. Both mean "no meaningful position" — 0, not NaN, which
-    // would poison the calc() and blank the track.
-    if (!isFinite(min) || !isFinite(max) || !isFinite(val) || max <= min) return 0;
-    return Math.min(1, Math.max(0, (val - min) / (max - min)));
-  }
-
-  function tick() {
-    const els = document.querySelectorAll('.v2-range');
-    for (let i = 0; i < els.length; i++) {
-      const el = els[i];
-      const frac = fractionOf(el);
-      const notch = el.dataset.v2Notch;
-      // 4 decimals is ~1/3 of a pixel on a 900px track — finer than the
-      // fill can render, coarse enough that float noise doesn't churn.
-      const sig = frac.toFixed(4) + '|' + (notch === undefined ? '' : notch);
-      if (lastSig.get(el) === sig) continue;
-      lastSig.set(el, sig);
-
-      el.style.setProperty('--v2-fill', String(frac));
-
-      // The notch renders on the ROW, not the input — see the CSS comment
-      // on .v2-slider-row.v2-has-notch::after for why it cannot live on
-      // the input itself.
-      const row = el.closest('.v2-slider-row');
-      if (!row) continue;
-      const n = parseFloat(notch);
-      if (isFinite(n)) {
-        row.style.setProperty('--v2-notch', String(Math.min(1, Math.max(0, n))));
-        row.classList.add('v2-has-notch');
-      } else {
-        row.style.removeProperty('--v2-notch');
-        row.classList.remove('v2-has-notch');
-      }
-    }
-    requestAnimationFrame(tick);
-  }
-
-  requestAnimationFrame(tick);
-})();
-/* ── V2METER:BEGIN — pure S-meter math ────────────────────────────────
-   Stateless by construction. Both receivers call these; neither owns
-   them. Every receiver-specific value (calibration, peak, hold clock)
-   stays inside its own module's closure and is passed in and back out,
-   so this file's "no shared mutable state across modules" rule holds —
-   see the header comment on module isolation.
-
-   Extracted and unit-tested by ui-redesign/test_meter_math.js; the
-   V2METER markers are what that script looks for. */
-
-// dBFS -> arc fraction 0..1. Spec §2.2: with calibration `cal` (dBFS at
-// S9), s = 9 + (dBFS - cal)/6. Below S9 the scale is linear in S units
-// over the first 58% of the arc; above it, linear in dB over the last 42%.
-function v2MeterFraction(dbFs, cal) {
-  if (!isFinite(dbFs) || !isFinite(cal)) return 0;
-  const s = 9 + (dbFs - cal) / 6;
-  if (s < 9) {
-    const f = (Math.max(s, 1) - 1) / 8 * 0.58;
-    return Math.max(0, Math.min(1, f));
-  }
-  const over = Math.max(0, dbFs - cal);
-  return Math.max(0, Math.min(1, 0.58 + Math.min(over, 60) / 60 * 0.42));
-}
-
-// Arc fraction -> needle angle in degrees from vertical.
-function v2MeterAngle(frac) {
-  return -38 + 76 * Math.max(0, Math.min(1, frac));
-}
-
-// Peak hold. Pure: takes the previous {db, at} and the live reading, and
-// returns the next one. Timestamps, not frame counts, so the decay rate
-// is the same whatever the frame rate or push cadence.
-//
-// Rules (spec §2.2): a reading at or above the current peak sets the peak
-// and restarts the hold; the peak holds for holdMs; after that it decays
-// at decayDbPerS toward the live level and never falls below it.
-function v2PeakStep(prev, dbFs, nowMs, holdMs, decayDbPerS) {
-  if (!isFinite(dbFs)) return prev;
-  if (holdMs === undefined) holdMs = 6000;
-  if (decayDbPerS === undefined) decayDbPerS = 3;
-  // `at` is when the hold started; `last` is when this was last stepped.
-  if (!prev || !isFinite(prev.db)) return { db: dbFs, at: nowMs, last: nowMs };
-  if (dbFs >= prev.db) return { db: dbFs, at: nowMs, last: nowMs };
-
-  const holdEnd = prev.at + holdMs;
-  if (nowMs <= holdEnd) return { db: prev.db, at: prev.at, last: nowMs };
-
-  // Decay INCREMENTALLY, from the previous step (or the end of the hold,
-  // whichever is later) to now. Decaying prev.db by the whole time since
-  // the hold ended compounds: the value has already fallen once, so a
-  // second call charges it for the same seconds again and the marker
-  // drops at 3 dB/s times the number of calls. Caught by
-  // test_meter_math.js, invisible in a static render.
-  const from = Math.max(prev.last, holdEnd);
-  const decayed = prev.db - decayDbPerS * (Math.max(0, nowMs - from) / 1000);
-  // Never below the live level; once it lands there it tracks it.
-  return { db: Math.max(decayed, dbFs), at: prev.at, last: nowMs };
-}
-/* V2METER:END */
-
-/* ── V2AF:BEGIN — pure AF GAIN taper ──────────────────────────────────
-   The slider is a POSITION 0..1000, not a percentage. A linear 0-1000%
-   slider puts the useful range in its first tenth; a square taper puts
-   100% about a third of the way along, which is where the notch is.
-   Stateless; unit-tested by ui-redesign/test_af_taper.js. */
-const V2_AF_POS_MAX = 1000;
-const V2_AF_GAIN_MAX = 1000;   // percent
-
-function v2AfPosToGain(pos) {
-  const x = Math.max(0, Math.min(1, parseFloat(pos) / V2_AF_POS_MAX));
-  return V2_AF_GAIN_MAX * x * x;
-}
-function v2AfGainToPos(gainPct) {
-  const g = Math.max(0, Math.min(V2_AF_GAIN_MAX, parseFloat(gainPct)));
-  return V2_AF_POS_MAX * Math.sqrt(g / V2_AF_GAIN_MAX);
-}
-/* V2AF:END */
-
-/* ── V2TRACE:BEGIN — spectrum trace colours and palette previews ──────
-   Pure and stateless; each receiver holds its own selection in its own
-   closure. Amendment F12: "ice" is today's exact look and is the default,
-   NOT the mockup's lighter "Ice blue".
-
-   DESIGN.md §2.2 tension, recorded not resolved: amber here is a TRACE
-   colour the operator picked for a measured waterfall, while §2.2 gives
-   amber one meaning, "this option is the selected choice in its group".
-   Nothing on this palette is a control, so nothing can be misread as
-   selected — but it is a second use of the hue and stage 7 should say so
-   explicitly rather than leave it implied. Not changed. */
-const V2_TRACE_COLOURS = {
-  ice:     '#67D0F0',   // today's --data-trace, the default (F12)
-  cyan:    '#4fd8e8',
-  green:   '#6fe08a',
-  amber:   '#f0b04a',
-  magenta: '#e06fd0',
-  white:   '#e8edf5',
-};
-const V2_TRACE_FILL_ALPHA = 0.25;   // today's fill alpha, unchanged
-
-function v2TraceColour(name) {
-  return V2_TRACE_COLOURS[name] || V2_TRACE_COLOURS.ice;
-}
-function v2TraceFill(name) {
-  const hex = v2TraceColour(name);
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + V2_TRACE_FILL_ALPHA + ')';
-}
-
-// A CSS linear-gradient built from a palette's own [pos,r,g,b] stops, so
-// the preview strip cannot drift from what the waterfall actually paints.
-function v2PaletteGradient(stops) {
-  if (!stops || !stops.length) return 'none';
-  const parts = stops.map(st =>
-    'rgb(' + Math.round(st[1]) + ',' + Math.round(st[2]) + ',' + Math.round(st[3]) + ') '
-    + (st[0] * 100).toFixed(2) + '%');
-  return 'linear-gradient(to right, ' + parts.join(', ') + ')';
-}
-/* V2TRACE:END */
-
-// Frequency readout markup: the group separators are dim and narrower
-// than a digit (spec §2.2), which needs them wrapped rather than styled
-// as plain text. Pure and stateless. Input is machine-generated digits,
-// dots and spaces; anything else is escaped rather than trusted.
-function v2FreqMarkup(str) {
-  let out = '';
-  for (const ch of String(str)) {
-    if (ch === '.') out += '<i class="v2-freq-sep">.</i>';
-    else if (ch >= '0' && ch <= '9') out += ch;
-    else if (ch === ' ') out += ' ';
-    else out += ch.replace(/[&<>"']/g, c => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-  return out;
-}
-
-/* V2:END */
 </script>
 
 </body>
