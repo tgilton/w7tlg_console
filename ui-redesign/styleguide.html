@@ -1516,6 +1516,97 @@
 }
 .v2-s9cal input:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
 
+/* ── Stage 4b: receiver panel bottom row ──────────────────────────────
+   Gains card left, mode card right (spec §2.2), stacking on a narrow
+   panel exactly like the top row. Both receivers.
+
+   RX1's mode buttons have their whole class attribute reassigned by
+   updateUI's document.querySelectorAll('[data-mode]') sweep, so they are
+   styled through .btn/.active, never by a class added to the markup. */
+.v2-rx-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@container (max-width: 660px) {
+  .v2-rx-bottom { grid-template-columns: 1fr; }
+}
+.v2-gains-card, .v2-mode-card {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  min-width: 0;
+}
+.v2-gains-card {
+  display: flex; flex-direction: column; justify-content: center; gap: 18px;
+}
+.v2-gains-card .v2-slider-head { margin-bottom: 8px; }
+.v2-gains-card .tx-meter-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+/* Value right, blue (spec §2.2). Reserved width so a change from "6 dB
+   atten" to "61 dB atten", or 100% to 1000%, cannot move the label. */
+.v2-gains-card .tx-meter-value {
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+/* The v2 slider needs the native appearance reset; .vol-slider-full stays
+   on these inputs (nothing removed) and would otherwise re-assert
+   accent-color and a margin on top of it. */
+.v2-gains-card .v2-range.vol-slider-full { margin: 0; accent-color: auto; }
+
+.v2-mode-card { display: flex; flex-direction: column; }
+.v2-mode-card .v2-title { margin-bottom: var(--v2-title-mb); }
+.v2-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v2-grid-gap);
+  flex: 1;
+  align-content: center;
+}
+/* Overrides .mode-mini-grid .btn's 10px — that is the smallest text in
+   the console today and Amendment A's floor is "no smaller than today",
+   not "keep today's smallest". 13px here. */
+.v2-mode-grid .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 6px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.v2-mode-grid .btn.active, .v2-mode-grid .btn.active-amber {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+/* RX2's unwired modes: dim, not hidden, so the two grids align. */
+.v2-mode-grid .btn:disabled {
+  background: var(--v2-btn-off-bg);
+  border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg);
+  cursor: not-allowed;
+}
+.v2-mode-grid .btn:hover:not(:disabled):not(.active) {
+  border-color: var(--v2-label-light); color: var(--v2-fg);
+}
+.v2-mode-grid .btn:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
 /* V2:END */
 
 /* ── Style-guide page chrome (NOT part of the v2 system) ───────────── */
@@ -1893,6 +1984,24 @@ function v2PeakStep(prev, dbFs, nowMs, holdMs, decayDbPerS) {
   return { db: Math.max(decayed, dbFs), at: prev.at, last: nowMs };
 }
 /* V2METER:END */
+
+/* ── V2AF:BEGIN — pure AF GAIN taper ──────────────────────────────────
+   The slider is a POSITION 0..1000, not a percentage. A linear 0-1000%
+   slider puts the useful range in its first tenth; a square taper puts
+   100% about a third of the way along, which is where the notch is.
+   Stateless; unit-tested by ui-redesign/test_af_taper.js. */
+const V2_AF_POS_MAX = 1000;
+const V2_AF_GAIN_MAX = 1000;   // percent
+
+function v2AfPosToGain(pos) {
+  const x = Math.max(0, Math.min(1, parseFloat(pos) / V2_AF_POS_MAX));
+  return V2_AF_GAIN_MAX * x * x;
+}
+function v2AfGainToPos(gainPct) {
+  const g = Math.max(0, Math.min(V2_AF_GAIN_MAX, parseFloat(gainPct)));
+  return V2_AF_POS_MAX * Math.sqrt(g / V2_AF_GAIN_MAX);
+}
+/* V2AF:END */
 
 // Frequency readout markup: the group separators are dim and narrower
 // than a digit (spec §2.2), which needs them wrapped rather than styled

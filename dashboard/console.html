@@ -2180,6 +2180,97 @@ select#palette-select {
 }
 .v2-s9cal input:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
 
+/* ── Stage 4b: receiver panel bottom row ──────────────────────────────
+   Gains card left, mode card right (spec §2.2), stacking on a narrow
+   panel exactly like the top row. Both receivers.
+
+   RX1's mode buttons have their whole class attribute reassigned by
+   updateUI's document.querySelectorAll('[data-mode]') sweep, so they are
+   styled through .btn/.active, never by a class added to the markup. */
+.v2-rx-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@container (max-width: 660px) {
+  .v2-rx-bottom { grid-template-columns: 1fr; }
+}
+.v2-gains-card, .v2-mode-card {
+  background: var(--v2-bg-card);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v2-radius-card);
+  padding: var(--v2-card-pad);
+  min-width: 0;
+}
+.v2-gains-card {
+  display: flex; flex-direction: column; justify-content: center; gap: 18px;
+}
+.v2-gains-card .v2-slider-head { margin-bottom: 8px; }
+.v2-gains-card .tx-meter-label {
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-label);
+  letter-spacing: var(--v2-ls-label);
+  color: var(--v2-label);
+  white-space: nowrap;
+}
+/* Value right, blue (spec §2.2). Reserved width so a change from "6 dB
+   atten" to "61 dB atten", or 100% to 1000%, cannot move the label. */
+.v2-gains-card .tx-meter-value {
+  font-size: var(--v2-font-value);
+  font-weight: 700;
+  color: var(--v2-readout);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+/* The v2 slider needs the native appearance reset; .vol-slider-full stays
+   on these inputs (nothing removed) and would otherwise re-assert
+   accent-color and a margin on top of it. */
+.v2-gains-card .v2-range.vol-slider-full { margin: 0; accent-color: auto; }
+
+.v2-mode-card { display: flex; flex-direction: column; }
+.v2-mode-card .v2-title { margin-bottom: var(--v2-title-mb); }
+.v2-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v2-grid-gap);
+  flex: 1;
+  align-content: center;
+}
+/* Overrides .mode-mini-grid .btn's 10px — that is the smallest text in
+   the console today and Amendment A's floor is "no smaller than today",
+   not "keep today's smallest". 13px here. */
+.v2-mode-grid .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--v2-btn-h);
+  padding: 0 6px;
+  font-size: var(--v2-font-btn);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-btn);
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
+  white-space: nowrap;
+}
+.v2-mode-grid .btn.active, .v2-mode-grid .btn.active-amber {
+  background: var(--v2-selected-bg);
+  border-color: var(--v2-selected);
+  color: var(--v2-selected);
+}
+/* RX2's unwired modes: dim, not hidden, so the two grids align. */
+.v2-mode-grid .btn:disabled {
+  background: var(--v2-btn-off-bg);
+  border-color: var(--v2-btn-off-border);
+  color: var(--v2-btn-off-fg);
+  cursor: not-allowed;
+}
+.v2-mode-grid .btn:hover:not(:disabled):not(.active) {
+  border-color: var(--v2-label-light); color: var(--v2-fg);
+}
+.v2-mode-grid .btn:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+
 /* V2:END */
 </style>
 </head>
@@ -2441,30 +2532,50 @@ select#palette-select {
          opposite sides of the screen. RF Gain (SDR front-end gain) sits next
          to it in the same row — moved from the left DSP panel so the two
          gain controls operators reach for together are side by side. -->
-    <div class="vol-alc-group">
-      <div class="vol-control">
-        <div class="tx-meter-label">AF GAIN</div>
-        <input type="range" min="0" max="1000" step="10" value="400" id="rx-vol-slider" class="vol-slider-full"
-          oninput="document.getElementById('rx-vol-val').textContent = this.value + '%'"
-          onmousedown="RigControl.setDragging('rxVol', true)"
-          onmouseup="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))"
-          ontouchstart="RigControl.setDragging('rxVol', true)"
-          ontouchend="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))">
-        <div class="tx-meter-value" id="rx-vol-val">400%</div>
+        <!-- Receiver panel bottom row (stage 4b, spec §2.2): gains card left,
+         mode card right, stacking on a narrow panel like the top row.
+         RX1's mode buttons have their class attribute rewritten by
+         updateUI's [data-mode] sweep, so they are styled through the
+         classes that sweep writes. -->
+    <div class="v2-rx-bottom">
+      <div class="v2-gains-card">
+        <div class="v2-slider-row">
+          <div class="v2-slider-head">
+            <span class="tx-meter-label">AF GAIN</span>
+            <span class="tx-meter-value" id="rx-vol-val">100%</span>
+          </div>
+          <!-- Audio taper (Amendment C1): the slider is a POSITION 0-1000,
+               not a percentage. gain% = 1000 * (pos/1000)^2, so 100% sits
+               about a third along instead of a tenth. The notch marks that
+               default. Conversion is in v2AfPosToGain/v2AfGainToPos. -->
+          <input type="range" min="0" max="1000" step="1" value="316" id="rx-vol-slider"
+            class="vol-slider-full v2-range" data-v2-notch="0.3162"
+            oninput="document.getElementById('rx-vol-val').textContent = RigControl.afGainLabel(this.value)"
+            onmousedown="RigControl.setDragging('rxVol', true)"
+            onmouseup="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))"
+            ontouchstart="RigControl.setDragging('rxVol', true)"
+            ontouchend="RigControl.sliderRelease('rxVol', () => RigControl.setRxVolume(document.getElementById('rx-vol-slider').value))">
+        </div>
+        <div class="v2-slider-row">
+          <div class="v2-slider-head">
+            <span class="tx-meter-label">RF GAIN</span>
+            <span class="tx-meter-value" id="rf-gain-val">6 dB atten</span>
+          </div>
+          <!-- Unchanged 7-state discrete control (Amendment B1): runs
+               backwards, labelled "N dB atten". Restyle only. -->
+          <input type="range" min="0" max="6" step="1" value="5" id="rf-gain-slider"
+            class="vol-slider-full v2-range"
+            oninput="document.getElementById('rf-gain-val').textContent = RigControl.hfGainLabel(this.value)"
+            onmousedown="RigControl.setDragging('rfGain', true)"
+            onmouseup="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(RigControl.hfStateToPct(document.getElementById('rf-gain-slider').value)))"
+            ontouchstart="RigControl.setDragging('rfGain', true)"
+            ontouchend="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(RigControl.hfStateToPct(document.getElementById('rf-gain-slider').value)))">
+        </div>
       </div>
-      <div class="vol-control">
-        <div class="tx-meter-label">RF GAIN</div>
-        <input type="range" min="0" max="6" step="1" value="5" id="rf-gain-slider" class="vol-slider-full"
-          oninput="document.getElementById('rf-gain-val').textContent = RigControl.hfGainLabel(this.value)"
-          onmousedown="RigControl.setDragging('rfGain', true)"
-          onmouseup="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(RigControl.hfStateToPct(document.getElementById('rf-gain-slider').value)))"
-          ontouchstart="RigControl.setDragging('rfGain', true)"
-          ontouchend="RigControl.sliderRelease('rfGain', () => RigControl.setRfGain(RigControl.hfStateToPct(document.getElementById('rf-gain-slider').value)))">
-        <div class="tx-meter-value" id="rf-gain-val">6 dB atten</div>
-      </div>
-      <div class="vol-control">
-        <div class="tx-meter-label">MODE</div>
-        <div class="mode-mini-grid">
+
+      <div class="v2-mode-card">
+        <div class="v2-title">Mode</div>
+        <div class="mode-mini-grid v2-mode-grid">
           <button class="btn" data-mode="USB"    onclick="RigControl.setMode(this)">USB</button>
           <button class="btn" data-mode="LSB"    onclick="RigControl.setMode(this)">LSB</button>
           <button class="btn" data-mode="CW"     onclick="RigControl.setMode(this)">CW</button>
@@ -2698,38 +2809,66 @@ select#palette-select {
       </div>
     </div>
 
-    <div class="vol-alc-group">
-      <div class="vol-control">
-        <div class="tx-meter-label">AF GAIN</div>
-        <input type="range" min="0" max="1000" step="10" value="400" id="rx-vol2-slider" class="vol-slider-full"
-          oninput="document.getElementById('rx-vol2-val').textContent = this.value + '%'"
-          onmousedown="RigControl.setDragging('rxVol2', true)"
-          onmouseup="RigControl.sliderRelease('rxVol2', () => Panadapter2.setRxVolume(document.getElementById('rx-vol2-slider').value))"
-          ontouchstart="RigControl.setDragging('rxVol2', true)"
-          ontouchend="RigControl.sliderRelease('rxVol2', () => Panadapter2.setRxVolume(document.getElementById('rx-vol2-slider').value))">
-        <div class="tx-meter-value" id="rx-vol2-val">400%</div>
+        <!-- Receiver panel bottom row (stage 4b, spec §2.2): gains card left,
+         mode card right, stacking on a narrow panel like the top row.
+         RX1's mode buttons have their class attribute rewritten by
+         updateUI's [data-mode] sweep, so they are styled through the
+         classes that sweep writes. -->
+    <div class="v2-rx-bottom">
+      <div class="v2-gains-card">
+        <div class="v2-slider-row">
+          <div class="v2-slider-head">
+            <span class="tx-meter-label">AF GAIN</span>
+            <span class="tx-meter-value" id="rx-vol2-val">100%</span>
+          </div>
+          <!-- Audio taper (Amendment C1): the slider is a POSITION 0-1000,
+               not a percentage. gain% = 1000 * (pos/1000)^2, so 100% sits
+               about a third along instead of a tenth. The notch marks that
+               default. Conversion is in v2AfPosToGain/v2AfGainToPos. -->
+          <input type="range" min="0" max="1000" step="1" value="316" id="rx-vol2-slider"
+            class="vol-slider-full v2-range" data-v2-notch="0.3162"
+            oninput="document.getElementById('rx-vol2-val').textContent = RigControl.afGainLabel(this.value)"
+            onmousedown="RigControl.setDragging('rxVol2', true)"
+            onmouseup="RigControl.sliderRelease('rxVol2', () => Panadapter2.setRxVolume(document.getElementById('rx-vol2-slider').value))"
+            ontouchstart="RigControl.setDragging('rxVol2', true)"
+            ontouchend="RigControl.sliderRelease('rxVol2', () => Panadapter2.setRxVolume(document.getElementById('rx-vol2-slider').value))">
+        </div>
+        <div class="v2-slider-row">
+          <div class="v2-slider-head">
+            <span class="tx-meter-label">RF GAIN</span>
+            <span class="tx-meter-value" id="rf-gain2-val">6 dB atten</span>
+          </div>
+          <!-- Unchanged 7-state discrete control (Amendment B1): runs
+               backwards, labelled "N dB atten". Restyle only. -->
+          <input type="range" min="0" max="6" step="1" value="5" id="rf-gain2-slider"
+            class="vol-slider-full v2-range"
+            oninput="document.getElementById('rf-gain2-val').textContent = Panadapter2.hfGainLabel2(this.value)"
+            onmousedown="RigControl.setDragging('rfGain2', true)"
+            onmouseup="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(Panadapter2.hfStateToPct2(document.getElementById('rf-gain2-slider').value)))"
+            ontouchstart="RigControl.setDragging('rfGain2', true)"
+            ontouchend="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(Panadapter2.hfStateToPct2(document.getElementById('rf-gain2-slider').value)))">
+        </div>
       </div>
-      <div class="vol-control">
-        <div class="tx-meter-label">RF GAIN</div>
-        <input type="range" min="0" max="6" step="1" value="5" id="rf-gain2-slider" class="vol-slider-full"
-          oninput="document.getElementById('rf-gain2-val').textContent = Panadapter2.hfGainLabel2(this.value)"
-          onmousedown="RigControl.setDragging('rfGain2', true)"
-          onmouseup="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(Panadapter2.hfStateToPct2(document.getElementById('rf-gain2-slider').value)))"
-          ontouchstart="RigControl.setDragging('rfGain2', true)"
-          ontouchend="RigControl.sliderRelease('rfGain2', () => Panadapter2.setRfGain(Panadapter2.hfStateToPct2(document.getElementById('rf-gain2-slider').value)))">
-        <div class="tx-meter-value" id="rf-gain2-val">6 dB atten</div>
-      </div>
-      <div class="vol-control">
-        <div class="tx-meter-label">MODE</div>
-        <!-- USB/LSB are real (AudioDemodulator's actual sideband
-             selection). CW/AM/FM are NOT wired here yet — pending
-             Terry's answer on whether to build real SDR demod for them
-             or leave them dimmed as a placeholder (asked 2026-09-11) — a
-             blank 3rd/4th/5th/6th slot rather than fake buttons in the
-             meantime. -->
-        <div class="mode-mini-grid">
+
+      <div class="v2-mode-card">
+        <div class="v2-title">Mode</div>
+        <!-- USB/LSB are real (AudioDemodulator's actual sideband selection).
+             CW/AM/FM/DATA-U are rendered disabled so the two receivers'
+             grids align (spec §2.2) — they are NOT wired.
+
+             Deliberately WITHOUT data-mode: updateUI does
+             `document.querySelectorAll('[data-mode]')` across the whole
+             page and reassigns className on every match, so a data-mode
+             here would have its disabled styling wiped and would light up
+             amber whenever the RIG's mode matched — which has nothing to
+             do with RX2's own sideband. No id and no handler either. -->
+        <div class="mode-mini-grid v2-mode-grid">
           <button class="btn active" id="mode2-USB" onclick="Panadapter2.setMode('USB')">USB</button>
           <button class="btn" id="mode2-LSB" onclick="Panadapter2.setMode('LSB')">LSB</button>
+          <button class="btn" type="button" disabled title="RX2 demodulates SSB only — CW is not wired on this receiver yet.">CW</button>
+          <button class="btn" type="button" disabled title="RX2 demodulates SSB only — AM is not wired on this receiver yet.">AM</button>
+          <button class="btn" type="button" disabled title="RX2 demodulates SSB only — FM is not wired on this receiver yet.">FM</button>
+          <button class="btn" type="button" disabled title="RX2 demodulates SSB only — DATA-U is not wired on this receiver yet.">DATA-U</button>
         </div>
       </div>
     </div>
@@ -5965,7 +6104,9 @@ function updateUI(s) {
   }
   if (!isDragging('rxVol') && rig.sdr_rx_volume !== undefined) {
     const volPct = Math.round(rig.sdr_rx_volume * 100);
-    document.getElementById('rx-vol-slider').value = volPct;
+    // Inverse of the taper — the server reports a gain, the slider is a
+    // position.
+    document.getElementById('rx-vol-slider').value = Math.round(v2AfGainToPos(volPct));
     document.getElementById('rx-vol-val').textContent = volPct + '%';
   }
   if (!isDragging('rfGain') && rig.sdr_rf_gain_pct !== undefined) {
@@ -6312,7 +6453,12 @@ function _applyDNF(on) {
 }
 
 function setAGC(value) { send({ cmd: 'set_agc', value }); }
-function setRxVolume(v) { send({ cmd: 'set_rx_volume', gain: parseFloat(v) / 100 }); }
+// The slider hands over a POSITION; the wire still carries a linear gain
+// (server clamps 0.0-10.0), so the taper is applied here, once.
+function afGainLabel(pos) { return Math.round(v2AfPosToGain(pos)) + '%'; }
+function setRxVolume(pos) {
+  send({ cmd: 'set_rx_volume', gain: v2AfPosToGain(pos) / 100 });
+}
 function setRfGain(v) { send({ cmd: 'set_rf_gain', pct: parseFloat(v) }); }
 
 // RF Gain is really a 7-position discrete control at HF (0-60MHz — every
@@ -6455,7 +6601,7 @@ function init() {
 }
 
 return {
-  init, setDragging, sliderRelease, isDragging, onS9CalInput, measureNoise,
+  init, setDragging, sliderRelease, isDragging, onS9CalInput, measureNoise, afGainLabel,
   hfStateToPct, hfPctToState, hfGainLabel,
   setBand, setMode, setFilterWidthMode, onWidthSlider, setWidth,
   setPower, setPreamp, setAtt, setOpMode, setMicGain, setComp,
@@ -6826,6 +6972,24 @@ function v2PeakStep(prev, dbFs, nowMs, holdMs, decayDbPerS) {
   return { db: Math.max(decayed, dbFs), at: prev.at, last: nowMs };
 }
 /* V2METER:END */
+
+/* ── V2AF:BEGIN — pure AF GAIN taper ──────────────────────────────────
+   The slider is a POSITION 0..1000, not a percentage. A linear 0-1000%
+   slider puts the useful range in its first tenth; a square taper puts
+   100% about a third of the way along, which is where the notch is.
+   Stateless; unit-tested by ui-redesign/test_af_taper.js. */
+const V2_AF_POS_MAX = 1000;
+const V2_AF_GAIN_MAX = 1000;   // percent
+
+function v2AfPosToGain(pos) {
+  const x = Math.max(0, Math.min(1, parseFloat(pos) / V2_AF_POS_MAX));
+  return V2_AF_GAIN_MAX * x * x;
+}
+function v2AfGainToPos(gainPct) {
+  const g = Math.max(0, Math.min(V2_AF_GAIN_MAX, parseFloat(gainPct)));
+  return V2_AF_POS_MAX * Math.sqrt(g / V2_AF_GAIN_MAX);
+}
+/* V2AF:END */
 
 // Frequency readout markup: the group separators are dim and narrower
 // than a digit (spec §2.2), which needs them wrapped rather than styled
