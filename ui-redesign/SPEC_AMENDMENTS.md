@@ -110,3 +110,9 @@ F13. The scope card (spectrum + waterfall) keeps its inner padding so the
      they do now, only the card chrome changes to the v2 hairline.
 F14. Mouse wheel on the four spectrum sliders (span, floor, gain, avg)
      changes them only while Shift is held.
+F15. smoke_console.js must pass before EVERY commit touching console.html.
+F16. From now on, renders and probes use the REAL console.html loaded in
+     headless Chrome (no rebuilt harnesses that skip init). WebSocket
+     failures without the server are expected; report what the empty page
+     looks like at 1600 and 2400 wide.
+F17. --v2-btn-h stays 44. Do not revisit.

@@ -125,5 +125,54 @@ ok('shift down: value decreases', Number(r.value) === 49);
 r = trial({ shiftKey: true });
 ok('shift with no delta: no change', r.value === '50');
 
+console.log('every slider wheel handler is Shift-only');
+// There are three wheel-handler bodies in the file: the spectrum sliders
+// (one copy per receiver), Panadapter2's own slider list, and
+// RigControl's addWheelToSlider. Extract each and put a fake event
+// through it for every slider id that reaches it.
+function handlerBodyAfter(marker) {
+  const a = html.indexOf(marker);
+  if (a < 0) throw new Error('marker not found: ' + marker);
+  const s2 = html.slice(a);
+  const open = s2.indexOf("addEventListener('wheel', e => {");
+  const body = s2.slice(open + "addEventListener('wheel', e => {".length);
+  return body.slice(0, body.indexOf('}, { passive: false });'));
+}
+const BODIES = {
+  'spectrum sliders': handlerBodyAfter("['span-slider', 'floor-slider', 'gain-slider', 'avg-slider']"),
+  'RX2 sliders':      handlerBodyAfter("['width2-slider',    v => setWidth(v)"),
+  'addWheelToSlider': handlerBodyAfter('function addWheelToSlider(id, sendFn, key)'),
+};
+const SLIDERS = {
+  'spectrum sliders': ['span-slider','floor-slider','gain-slider','avg-slider',
+                       'span2-slider','floor2-slider','gain2-slider','avg2-slider'],
+  'RX2 sliders':      ['width2-slider','nr2-slider','rx-vol2-slider','rf-gain2-slider',
+                       'eq2-bass-slider','eq2-mid-slider','eq2-treble-slider'],
+  'addWheelToSlider': ['width-slider','nr-slider','rx-vol-slider','rf-gain-slider',
+                       'eq-bass-slider','eq-mid-slider','eq-treble-slider',
+                       'rf-power-slider','mic-gain-slider','comp-slider','dt-gain-slider'],
+};
+for (const [group, body] of Object.entries(BODIES)) {
+  const fn = new Function('el', 'e', 'key', 'sendFn', 'RigControl', 'setDragging',
+                          'clearTimeout', 'setTimeout', body);
+  for (const id of SLIDERS[group]) {
+    const mk = () => ({ id, disabled: false, step: '1', min: '0', max: '100', value: '50',
+                        dispatchEvent() { this._fired = true; }, _fired: false });
+    const sends = [];
+    const stub = { setDragging() {} };
+    const call = (el, evt) => fn(el, evt, 'k', v => sends.push(v), stub,
+                                 () => {}, () => {}, () => 0);
+    let el = mk(); let prevented = false;
+    call(el, { deltaY: -100, deltaX: 0, shiftKey: false, preventDefault() { prevented = true; } });
+    ok(`  ${id}: plain wheel changes nothing`, el.value === '50' && !prevented && sends.length === 0);
+    el = mk(); prevented = false;
+    call(el, { deltaY: -100, deltaX: 0, shiftKey: true, preventDefault() { prevented = true; } });
+    ok(`  ${id}: shift+deltaY acts`, Number(el.value) === 51 && prevented);
+    el = mk(); prevented = false;
+    call(el, { deltaY: 0, deltaX: -100, shiftKey: true, preventDefault() { prevented = true; } });
+    ok(`  ${id}: shift+deltaX acts`, Number(el.value) === 51 && prevented);
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

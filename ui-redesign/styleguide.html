@@ -1678,13 +1678,68 @@
   min-width: 0;
 }
 /* AUTO sits in GAIN's header (spec §2.4). */
-.v2-auto-check {
-  display: inline-flex; align-items: center; gap: 6px;
+/* Title row: the block title stays centred in the FULL width (so it does
+   not shift when the chip is there), with AUTO pinned to the right. The
+   chip is allowed to wrap below at narrow widths — flex-wrap plus the
+   title taking the whole line — but can never overlap it. */
+.v2-title-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-bottom: var(--v2-title-mb);
+}
+.v2-title-row h2 { flex: 1 1 auto; margin-bottom: 0 !important; text-align: center; }
+.v2-auto-chip {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: var(--v2-touch-row);
+  padding: 0 10px;
+  font-size: var(--v2-font-label);
+  font-weight: var(--v2-weight-btn);
+  letter-spacing: var(--v2-ls-label);
+  text-transform: uppercase;
+  color: var(--v2-btn-fg);
+  background: var(--v2-btn-bg);
+  border: var(--v2-border-w) solid var(--v2-btn-border);
+  border-radius: var(--v2-radius-btn);
   cursor: pointer;
   white-space: nowrap;
 }
-.v2-auto-check input[type=checkbox] {
-  accent-color: var(--v2-selected); width: 14px; height: 14px; margin: 0;
+.v2-auto-chip:has(input:checked) { border-color: var(--v2-selected); color: var(--v2-selected); }
+.v2-auto-chip:has(input:focus-visible) { outline: 2px solid var(--v2-focus); outline-offset: 2px; }
+.v2-auto-chip input[type=checkbox] {
+  accent-color: var(--v2-selected); width: 15px; height: 15px; margin: 0; cursor: pointer;
+}
+/* At the narrow end the chip takes its own line under a full-width title
+   rather than squeezing beside it. */
+@container (max-width: 420px) {
+  .v2-title-row h2 { flex: 1 1 100%; }
+  .v2-auto-chip { margin-left: auto; }
+}
+
+/* All four display selects identical, keyed by ID so the legacy
+   `select#palette-select` rule cannot win — the same trap that left RX1's
+   S9 CAL input clipping "-75". RX1's palette select had no arrow and was
+   narrower than RX2's for exactly this reason. */
+#palette-select, #palette2-select, #trace-select, #trace2-select {
+  -webkit-appearance: none; appearance: none;
+  font-family: inherit;
+  font-size: var(--v2-font-label);
+  height: var(--v2-input-h);
+  box-sizing: border-box;
+  padding: 0 26px 0 8px;
+  color: var(--v2-fg);
+  background-color: var(--v2-btn-bg);
+  background-image: linear-gradient(45deg, transparent 50%, var(--v2-label-light) 50%),
+                    linear-gradient(135deg, var(--v2-label-light) 50%, transparent 50%);
+  background-size: 5px 5px, 5px 5px;
+  background-position: calc(100% - 13px) calc(50% + 1px), calc(100% - 8px) calc(50% + 1px);
+  background-repeat: no-repeat;
+  border: 1px solid var(--v2-border-inset);
+  border-radius: var(--v2-radius-inset);
+  cursor: pointer;
+}
+#palette-select:focus-visible, #palette2-select:focus-visible,
+#trace-select:focus-visible, #trace2-select:focus-visible {
+  outline: 2px solid var(--v2-focus); outline-offset: 2px;
 }
 .v2-display-grid .v2-range { width: 100%; }
 /* The existing dim-the-whole-field mechanism is unchanged: the base rule
