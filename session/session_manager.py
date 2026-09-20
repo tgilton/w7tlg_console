@@ -114,7 +114,19 @@ class SessionManager:
         if self.status == "switching":
             return False, "A session switch is already in progress"
         if target_id == self.current_session_id:
-            return False, f"Already in {PROFILES[target_id].name} session"
+            # "Already in this session" is only true if the app that OWNS
+            # the session is still running. current_session_id is set on a
+            # successful switch and nothing ever clears it — quit WSJT-X
+            # with Cmd-Q and this guard would keep rejecting the relaunch
+            # forever, with the button still lit, while launching WSJT-X by
+            # hand worked fine (Terry, 2026-09-20). Re-ask the profile's own
+            # liveness probe instead of trusting the stored id.
+            if await self._app_is_live(PROFILES[target_id]):
+                return False, f"Already in {PROFILES[target_id].name} session"
+            logger.info(
+                f"Session {target_id!r} is marked current but "
+                f"{PROFILES[target_id].app_display_name or 'its app'} is no "
+                f"longer live — re-running the switch to relaunch it")
         ok, reason = self._ptt_ok()
         if not ok:
             return False, reason
@@ -139,6 +151,25 @@ class SessionManager:
             self._wsjtx_last_seen is not None
             and (time.monotonic() - self._wsjtx_last_seen) < _WSJTX_STALE_S
         )
+
+    async def _app_is_live(self, profile: SessionProfile) -> bool:
+        """Is the external app that owns this session still running?
+
+        One shot, no waiting — the opposite end of the same question
+        _wait_for_wsjtx_liveness/_wait_for_js8call_liveness ask during a
+        launch ("has it come up yet?"). Same probes, so there is only one
+        definition of live per profile.
+
+        A profile with liveness "none" (SSB) owns no app, so there is
+        nothing that can die behind the console's back: it reports live
+        unconditionally, which keeps today's "Already in SSB session"
+        behavior exactly as it was.
+        """
+        if profile.liveness == "wsjtx_udp":
+            return self.wsjtx_is_live()
+        if profile.liveness == "js8call_tcp":
+            return await self._js8call_api_is_open()
+        return True
 
     async def on_wsjtx_status(self, status: WsjtxStatus):
         """Registered on wsjtx_listener.on_status() in addition to the
@@ -303,22 +334,32 @@ class SessionManager:
             await asyncio.sleep(_LIVENESS_POLL_S)
         return self.wsjtx_is_live()
 
-    async def _wait_for_js8call_liveness(self) -> bool:
-        """Poll JS8Call's own JSON API TCP port with a bare connect — no
+    async def _js8call_api_is_open(self) -> bool:
+        """One connect attempt against JS8Call's own JSON API TCP port — no
         need to speak the JSON protocol just to confirm the app is up and
-        its API server is accepting connections. Each attempt opens and
-        immediately closes its own short-lived socket rather than holding
-        one open, mirroring the wsjtx path's stateless poll loop."""
+        its API server is accepting connections. Opens and immediately
+        closes its own short-lived socket rather than holding one open.
+
+        Factored out of _wait_for_js8call_liveness so _app_is_live can ask
+        the same question once without inheriting that method's 20s launch
+        deadline."""
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(_JS8CALL_TCP_HOST, _JS8CALL_TCP_PORT),
+                timeout=1.0)
+        except (OSError, asyncio.TimeoutError):
+            return False
+        writer.close()
+        return True
+
+    async def _wait_for_js8call_liveness(self) -> bool:
+        """Poll _js8call_api_is_open until the app comes up or the launch
+        deadline passes, mirroring the wsjtx path's stateless poll loop."""
         deadline = time.monotonic() + _LIVENESS_TIMEOUT_S
         while time.monotonic() < deadline:
-            try:
-                _, writer = await asyncio.wait_for(
-                    asyncio.open_connection(_JS8CALL_TCP_HOST, _JS8CALL_TCP_PORT),
-                    timeout=1.0)
-                writer.close()
+            if await self._js8call_api_is_open():
                 return True
-            except (OSError, asyncio.TimeoutError):
-                await asyncio.sleep(_LIVENESS_POLL_S)
+            await asyncio.sleep(_LIVENESS_POLL_S)
         return False
 
     # ------------------------------------------------------------------
