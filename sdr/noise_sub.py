@@ -109,6 +109,7 @@ class NoiseSubCore:
     def reset_history(self):
         self._line_hist = deque(maxlen=PERSIST_FRAMES)
         self._marker_hist = deque(maxlen=PERSIST_FRAMES)
+        self._hist_len = None
 
     @staticmethod
     def _persistent(hist) -> np.ndarray:
@@ -120,8 +121,14 @@ class NoiseSubCore:
         """mask: the held line mask from BlockMaskTracker (the live path). When
         None, the EMA-frame 3-of-5 detection runs instead: the reference path the
         unit tests use, not the live one, because EMA outputs are correlated."""
+        if self._hist_len != len(p1):
+            # A different frame length: the histories hold arrays of the old length.
+            self.reset_history()
+            self._hist_len = len(p1)
         f1, s1 = local_floor(p1)
         f2, s2 = local_floor(p2)
+        if mask is not None and len(mask) != len(p2):
+            mask = np.zeros(len(p2), dtype=bool)      # a mask from another grid is no mask
         if mask is None:
             above2 = p2 > f2 + self.n * s2
             self._line_hist.append(above2)
@@ -218,6 +225,7 @@ class NoiseSubProcessor:
     def __init__(self, scale_db: float = -10.0, n: float = 2.0, clamp: bool = False,
                  beta_db: float = -20.0):
         self.core = NoiseSubCore(scale_db, n, clamp, beta_db)
+        self._grid: Optional[tuple] = None
         self.tracker = BlockMaskTracker(n)
 
     def set_thresh(self, n: float):
@@ -242,6 +250,13 @@ class NoiseSubProcessor:
         """a, b: console spectrum frames ({'data' (dB), 'center_freq_hz',
         'span_hz', 'ts'}). Returns {'status', 'frame', 'lines', ...}; frame is
         None unless status == 'active'."""
+        grid = (len(a["data"]), float(a["center_freq_hz"]), float(a["span_hz"]))
+        if self._grid is not None and (grid[0] != self._grid[0] or abs(grid[1] - self._grid[1]) > 1.0
+                                       or abs(grid[2] - self._grid[2]) > 1.0):
+            # RX1's frame length, centre or span changed: nothing from the old grid applies.
+            self.core.reset_history()
+            self.tracker.reset()
+        self._grid = grid
         if b is None:
             return self._refuse("no_rx2")
         if now - float(b["ts"]) > RX2_MAX_AGE_S:
@@ -269,6 +284,10 @@ class NoiseSubProcessor:
         return {"status": "active", "frame": frame, "lines": r["lines"],
                 "ratio": r["ratio"], "mask": r["mask"],
                 "floor1_db": r["floor1_db"], "floor2_db": r["floor2_db"]}
+
+    def refuse(self, status: str) -> dict:
+        """Public form of _refuse, for the caller's own failure path ('error')."""
+        return self._refuse(status)
 
     def _refuse(self, status: str) -> dict:
         self.core.reset_history()

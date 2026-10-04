@@ -273,3 +273,142 @@ def test_groups_are_contiguous_runs_over_the_whole_frame():
     # A run that reaches the end of the frame still closes.
     s2, e2 = ns.runs(np.array([True, True, False, True]))
     assert list(zip(s2.tolist(), e2.tolist())) == [(0, 2), (3, 4)]
+
+
+# ----------------------------------------------------------------------
+# Wideband only, grid changes, and the error status
+# ----------------------------------------------------------------------
+def _wide(rng, n=65536, kind=None, ts=None, floor_db=-100.0):
+    f = {"data": (10 * np.log10(rng.exponential(1.0, n)) + floor_db).astype(np.float32),
+         "center_freq_hz": 14.074e6, "span_hz": 2e6, "sample_rate_hz": 2e6,
+         "ts": server.time.time() if ts is None else ts}
+    if kind:
+        f["kind"] = kind
+    return f
+
+
+def _fine(rng):
+    return {"data": (10 * np.log10(rng.exponential(1.0, 4096)) - 109.0).astype(np.float32),
+            "center_freq_hz": 14.0755e6, "span_hz": 16000.0, "sample_rate_hz": 16000.0,
+            "kind": "fine", "ts": server.time.time()}
+
+
+class _Spy:
+    def __init__(self):
+        self.frames = []
+
+    async def broadcast_frame(self, frame):
+        self.frames.append(frame)
+
+
+def _noise_setup(fake_sdr, monkeypatch):
+    _rx2_fake(fake_sdr)
+    monkeypatch.setattr(server, "sdr", fake_sdr)
+    monkeypatch.setattr(server, "_cancel_snapshot", None)
+    monkeypatch.setattr(server, "_latest_b_frame", None)
+    monkeypatch.setattr(server, "noise_proc", ns.NoiseSubProcessor())
+    ghost, proc = _Spy(), _Spy()
+    monkeypatch.setattr(server, "spectrum_manager_ghost", ghost)
+    monkeypatch.setattr(server, "spectrum_manager_proc", proc)
+    _mode(server, "noise")
+    asyncio.run(server._handle_cancel_command("set_cancel_ghost", {"ghost": True}))
+    return ghost, proc
+
+
+def test_interleaved_wide_and_fine_frames_never_reach_the_processor_or_the_ghost(fake_sdr, monkeypatch):
+    """A digital session: both receivers publish wide and fine frames on the same callbacks."""
+    ghost, proc = _noise_setup(fake_sdr, monkeypatch)
+    seen = []
+    real = server.noise_proc.process_pair
+
+    def spy(a, b, now):
+        seen.append((len(a["data"]), None if b is None else len(b["data"])))
+        return real(a, b, now)
+    monkeypatch.setattr(server.noise_proc, "process_pair", spy)
+    rng = np.random.default_rng(51)
+    statuses = set()
+    for k in range(12):
+        for frame, is_b in ((_wide(rng), True), (_fine(rng), True), (_wide(rng), False), (_fine(rng), False)):
+            if is_b:
+                asyncio.run(server.on_spectrum_frame_b_store(frame))
+            else:
+                asyncio.run(server.on_spectrum_frame_noise(frame))
+                statuses.add(fake_sdr.canceller.noise_status)
+    print(f"\n    24 wide + 24 fine frames: processor saw {len(seen)} pairs {set(seen)}; "
+          f"ghost got {len(ghost.frames)} frames of {set(len(f['data']) for f in ghost.frames)} bins; "
+          f"statuses {statuses}")
+    assert seen and set(seen) == {(65536, 65536)}
+    assert len(ghost.frames) == 12 and all(len(f["data"]) == 65536 for f in ghost.frames)
+    assert len(proc.frames) == 12 and statuses == {"active"}
+    assert len(server._latest_b_frame["data"]) == 65536
+    _mode(server, "off")
+
+
+def test_a_frame_length_change_resets_history_without_an_exception():
+    rng = np.random.default_rng(52)
+    proc = ns.NoiseSubProcessor()
+    now = 100.0
+    big = {"data": 10 * np.log10(rng.exponential(1.0, 8192)), "center_freq_hz": 14.074e6,
+           "span_hz": 2e6, "ts": now}
+    small = dict(big, data=10 * np.log10(rng.exponential(1.0, 4096)))
+    for _ in range(3):
+        assert proc.process_pair(big, dict(big), now)["status"] == "active"
+    proc.tracker.mask = np.ones(8192, bool)               # a held mask from the old grid
+    proc.tracker.grid = (8192, 14.074e6, 2e6)
+    for _ in range(4):
+        r = proc.process_pair(small, dict(small), now)    # used to raise: histories of two lengths
+        assert r["status"] == "active" and len(r["frame"]["data"]) == 4096
+    assert all(len(h) == 4096 for h in proc.core._marker_hist)
+    moved = dict(small, center_freq_hz=14.2e6)
+    proc.core._line_hist.append(np.ones(4096, bool))
+    proc.process_pair(moved, dict(moved), now)            # centre change: clean start
+    assert proc.tracker.blocks == 0 and len(proc.core._marker_hist) == 1
+
+
+def test_a_processing_exception_sets_the_error_status_and_recovers(fake_sdr, monkeypatch, caplog):
+    ghost, proc = _noise_setup(fake_sdr, monkeypatch)
+    rng = np.random.default_rng(53)
+    asyncio.run(server.on_spectrum_frame_b_store(_wide(rng)))
+    asyncio.run(server.on_spectrum_frame_noise(_wide(rng)))
+    assert fake_sdr.canceller.noise_status == "active"
+    real = server.noise_proc.process_pair
+
+    def boom(a, b, now):
+        raise ValueError("synthetic failure")
+    monkeypatch.setattr(server.noise_proc, "process_pair", boom)
+    monkeypatch.setattr(server, "_noise_error_logged_at", 0.0)
+    caplog.set_level("ERROR")
+    for _ in range(5):
+        asyncio.run(server.on_spectrum_frame_noise(_wide(rng)))     # must not raise
+    assert fake_sdr.canceller.noise_status == "error"
+    assert fake_sdr.noise_mask.get() is None and server._noise_busy is False
+    assert sum("NOISE SUB processing failed" in r.message for r in caplog.records) == 1
+    monkeypatch.setattr(server.noise_proc, "process_pair", real)
+    asyncio.run(server.on_spectrum_frame_b_store(_wide(rng)))
+    asyncio.run(server.on_spectrum_frame_noise(_wide(rng)))
+    assert fake_sdr.canceller.noise_status == "active"
+    _mode(server, "off")
+
+
+def test_false_share_in_a_digital_session_comes_from_wideband_blocks_only(fake_sdr, monkeypatch):
+    """Flat RX2 noise, wide and fine frames interleaved, and the 11-frame blocks the SDR
+    publishes. The estimate should sit near the 0.05% of flat noise, not at several percent."""
+    ghost, proc = _noise_setup(fake_sdr, monkeypatch)
+    rng = np.random.default_rng(54)
+    for k in range(30):
+        block = {"data": (10 * np.log10(rng.gamma(11, 1 / 11, 65536)) - 100.0).astype(np.float32),
+                 "center_freq_hz": 14.074e6, "span_hz": 2e6, "kind": "block", "n": 11,
+                 "ts": server.time.time()}
+        asyncio.run(server.on_block_frame_b(block))
+        asyncio.run(server.on_spectrum_frame_b_store(_wide(rng)))
+        asyncio.run(server.on_spectrum_frame_b_store(_fine(rng)))
+        asyncio.run(server.on_spectrum_frame_noise(_fine(rng)))
+        asyncio.run(server.on_spectrum_frame_noise(_wide(rng)))
+    fp = fake_sdr.canceller.noise_false_pct
+    single = server.noise_proc.tracker.single_rate
+    print(f"\n    digital session, flat RX2 noise, n=2: single-look rate {single * 100:.2f}%, "
+          f"expected false share {fp:.3f}% (blocks seen {server.noise_proc.tracker.blocks})")
+    assert fake_sdr.canceller.noise_status == "active"
+    assert server.noise_proc.tracker.blocks == 30          # no resets from fine frames
+    assert fp is not None and fp < 0.5
+    _mode(server, "off")

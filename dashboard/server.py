@@ -492,10 +492,22 @@ async def on_spectrum_frame_ghost(frame: dict):
     await spectrum_manager_ghost.broadcast_frame(frame)
 
 
+def _is_wideband(frame: dict) -> bool:
+    """NOISE SUB works on the wideband spectrum only (65536 bins, 30.5 Hz). The fine
+    16 kHz spectrum shares the same callbacks in digital sessions and on the Diversity
+    page (kind 'fine'), and must never reach the processor or the ghost."""
+    return frame.get("kind", "wide") == "wide"
+
+
+_noise_error_logged_at = 0.0
+
+
 async def on_spectrum_frame_b_store(frame: dict):
     # Latest RX2 frame for NOISE SUB. Frames are not queued: the processor
     # refuses a frame older than 250 ms rather than working on a backlog.
     global _latest_b_frame
+    if not _is_wideband(frame):
+        return
     _latest_b_frame = frame
 
 
@@ -511,8 +523,10 @@ async def on_block_frame_b(frame: dict):
 async def on_spectrum_frame_noise(frame: dict):
     """RX1 frame -> NOISE SUB. Runs off the event loop, one at a time: a
     frame that arrives while one is in flight is dropped, not queued."""
-    global _noise_busy
+    global _noise_busy, _noise_error_logged_at
     if sdr is None or not sdr.canceller.noise_enabled:
+        return
+    if not _is_wideband(frame):
         return
     c = sdr.canceller
     if c.ghost:
@@ -529,6 +543,13 @@ async def on_spectrum_frame_noise(frame: dict):
         loop = asyncio.get_running_loop()
         res = await loop.run_in_executor(None, noise_proc.process_pair,
                                          frame, _latest_b_frame, time.time())
+    except Exception:
+        # Never leave the last status standing: say so, and start clean.
+        now = time.monotonic()
+        if now - _noise_error_logged_at >= 5.0:
+            _noise_error_logged_at = now
+            logger.exception("NOISE SUB processing failed — bypassed (logged at most every 5 s)")
+        res = noise_proc.refuse("error")
     finally:
         _noise_busy = False
     c.noise_status = res["status"]
