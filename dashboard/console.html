@@ -5589,6 +5589,11 @@ const CancelUI = (function () {
       setField('cancel-gain-num', c.noise_scale_db.toFixed(1));
       setField('cancel-phase-slider', Math.round(c.noise_n * 10));
       setField('cancel-phase-num', c.noise_n.toFixed(1));
+      // The live expected false share at this THRESH, in the unit slot (no new row).
+      const fp = c.noise_false_pct;
+      $('cancel-phase-unit').textContent = 'σ' + (fp === null || fp === undefined
+        ? '' : ' ~' + (fp < 1 ? fp.toFixed(2) : fp.toFixed(1)) + '%');
+      $('cancel-phase-unit').title = 'THRESH in sigma. The % is the expected share of bins that are false at this threshold, measured live.';
       const inView = Panadapter.linesInView();
       const status = c.noise_status && c.noise_status !== 'active' ? c.noise_status
                    : (inView === null ? '—' : String(inView));
