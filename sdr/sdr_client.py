@@ -35,6 +35,7 @@ on this hardware.
 import asyncio
 import ctypes as C
 import logging
+import os
 import queue
 import threading
 import time
@@ -46,6 +47,7 @@ import numpy as np
 from . import sdrplay_capi as capi
 from .audio_demod import AudioDemodulator
 from .combiner import Combiner
+from .pairing_debug import PairingDebug
 from .virtual_audio_output import DigitalAudioOutput
 
 logger = logging.getLogger(__name__)
@@ -269,8 +271,18 @@ class SdrClient:
         # reading comes out as an unfamiliar large positive number instead
         # of the conventional dBFS sign (real signals negative, 0 = full scale).
         self._fullscale_ref = 32767.0 * float(np.sum(self._window))
-        self._cb_stream = capi.StreamCallback_t(self._on_stream_data)
-        self._cb_stream_b = capi.StreamCallback_t(self._on_stream_data_b)
+        # DEBUG_SAMPLE_PAIRING=1 wraps both stream callbacks with timing and
+        # pairing capture (sdr/pairing_debug.py). Unset, the plain callbacks
+        # are registered and nothing else changes.
+        self._pairing_dbg: Optional[PairingDebug] = None
+        stream_cb = self._on_stream_data
+        stream_cb_b = self._on_stream_data_b
+        if os.environ.get("DEBUG_SAMPLE_PAIRING") == "1":
+            self._pairing_dbg = PairingDebug(self)
+            stream_cb = self._pairing_dbg.wrap(self._on_stream_data, 0)
+            stream_cb_b = self._pairing_dbg.wrap(self._on_stream_data_b, 1)
+        self._cb_stream = capi.StreamCallback_t(stream_cb)
+        self._cb_stream_b = capi.StreamCallback_t(stream_cb_b)
         self._cb_event = capi.EventCallback_t(self._on_event)
         # Playback now runs through an AudioWorklet ring buffer (panadapter.html),
         # which is immune to per-message scheduling jitter — so batch size is
@@ -415,6 +427,8 @@ class SdrClient:
         self.audio_b.start(self._loop)
         self.combiner.start(self._loop)
         self.digital_audio.start()
+        if self._pairing_dbg is not None:
+            self._pairing_dbg.start()
         # Fresh baseline so the watchdog doesn't trip on the gap before the
         # first callback arrives.
         self._last_sample_at = time.monotonic()
@@ -437,6 +451,8 @@ class SdrClient:
         self._consumer_thread_b = None
 
         def _blocking_teardown():
+            if self._pairing_dbg is not None:
+                self._pairing_dbg.stop()
             self.audio.stop()
             self.audio_b.stop()
             self.combiner.stop()

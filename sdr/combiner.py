@@ -250,6 +250,14 @@ class Combiner:
         # a single combined counter can't show that).
         self.dropped_count_a = 0
         self.dropped_count_b = 0
+        # DEBUG_SAMPLE_PAIRING only (sdr/pairing_debug.py). Per-batch power
+        # sums for RX1, RX2 and RX0, read and reset once a second by the
+        # diagnostics writer. Off by default, so the normal path is unchanged.
+        self.debug_levels = False
+        self.dbg_pow_a = 0.0
+        self.dbg_pow_b = 0.0
+        self.dbg_pow_out = 0.0
+        self.dbg_n = 0
 
         self._stage_a = _ChannelStage(input_rate_hz)
         self._stage_b = _ChannelStage(input_rate_hz)
@@ -553,6 +561,11 @@ class Combiner:
 
                     z = self.gain * np.exp(1j * np.radians(self.phase_deg))
                     combined = dec_a_aligned - z * dec_b_aligned
+                    if self.debug_levels:
+                        self.dbg_pow_a += float(np.mean(np.abs(dec_a_aligned) ** 2))
+                        self.dbg_pow_b += float(np.mean(np.abs(dec_b_aligned) ** 2))
+                        self.dbg_pow_out += float(np.mean(np.abs(combined) ** 2))
+                        self.dbg_n += 1
                     self._update_fine_spectrum(combined)
 
                     ext = np.concatenate([self._ssb_overlap, combined])
