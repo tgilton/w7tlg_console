@@ -97,6 +97,17 @@ class Canceller:
         self.phase_deg = 0.0
         self.ghost = False
         self.follow_gain = True
+        # NOISE SUB (sdr/noise_sub.py): display-only, its own mode flag. It never
+        # turns on the coherent IQ path (self.enabled), so that path is untouched.
+        self.noise_enabled = False
+        self.noise_scale_db = -10.0
+        self.noise_n = 2.0
+        self.noise_clamp = False
+        self.last_mode = "coherent"      # the mode ON and MODE go back to
+        self.noise_status: Optional[str] = None
+        self.noise_lines = 0
+        self.noise_floor1_db: Optional[float] = None
+        self.noise_floor2_db: Optional[float] = None
         self._load_settings()
 
         # Written only by the worker thread, read by state publishing.
@@ -163,6 +174,36 @@ class Canceller:
         self.follow_gain = bool(on)
         self._save_settings()
 
+    def set_noise_scale_db(self, v: float):
+        v = float(v)
+        if not np.isfinite(v):
+            raise ValueError("scale_db must be a finite number")
+        self.noise_scale_db = round(min(40.0, max(-40.0, _quantize(v, 0.1))), 1)
+        self._save_settings()
+
+    def set_noise_n(self, v: float):
+        v = float(v)
+        if not np.isfinite(v):
+            raise ValueError("n must be a finite number")
+        self.noise_n = round(min(6.0, max(1.0, _quantize(v, 0.1))), 1)
+        self._save_settings()
+
+    def set_noise_clamp(self, on: bool):
+        self.noise_clamp = bool(on)
+        self._save_settings()
+
+    def set_last_mode(self, mode: str):
+        if mode not in ("coherent", "noise"):
+            raise ValueError("mode must be coherent or noise")
+        self.last_mode = mode
+        self._save_settings()
+
+    @property
+    def mode(self) -> str:
+        if self.noise_enabled:
+            return "noise"
+        return "coherent" if self.enabled else "off"
+
     def reset_weight(self):
         self.gain_db = 0.0
         self.phase_deg = 0.0
@@ -178,6 +219,11 @@ class Canceller:
             self.phase_deg = float(d.get("phase_deg", 0.0)) % 360.0
             self.ghost = bool(d.get("ghost", False))
             self.follow_gain = bool(d.get("follow_gain", True))
+            self.noise_scale_db = round(min(40.0, max(-40.0, float(d.get("noise_scale_db", -10.0)))), 1)
+            self.noise_n = round(min(6.0, max(1.0, float(d.get("noise_n", 2.0)))), 1)
+            self.noise_clamp = bool(d.get("noise_clamp", False))
+            lm = d.get("last_mode", "coherent")
+            self.last_mode = lm if lm in ("coherent", "noise") else "coherent"
         except Exception:
             logger.exception("cancel settings unreadable — using defaults")
 
@@ -189,7 +235,9 @@ class Canceller:
             tmp = self.settings_path + ".tmp"
             with open(tmp, "w") as fh:
                 json.dump({"gain_db": self.gain_db, "phase_deg": self.phase_deg,
-                           "ghost": self.ghost, "follow_gain": self.follow_gain}, fh)
+                           "ghost": self.ghost, "follow_gain": self.follow_gain,
+                           "noise_scale_db": self.noise_scale_db, "noise_n": self.noise_n,
+                           "noise_clamp": self.noise_clamp, "last_mode": self.last_mode}, fh)
             os.replace(tmp, self.settings_path)
         except Exception:
             logger.exception("cancel settings not saved")
@@ -497,6 +545,15 @@ class Canceller:
     def state(self) -> dict:
         return {
             "enabled": self.enabled,
+            "mode": self.mode,
+            "last_mode": self.last_mode,
+            "noise_scale_db": self.noise_scale_db,
+            "noise_n": self.noise_n,
+            "noise_clamp": self.noise_clamp,
+            "noise_status": self.noise_status,
+            "noise_lines": self.noise_lines,
+            "noise_floor1_db": _round_or_none(self.noise_floor1_db),
+            "noise_floor2_db": _round_or_none(self.noise_floor2_db),
             "gain_db": self.gain_db,
             "phase_deg": self.phase_deg,
             "ghost": self.ghost,
@@ -572,4 +629,5 @@ def restore_rx2(sdr, snap: dict):
 
 
 def rx2_locked(sdr) -> bool:
-    return bool(sdr is not None and sdr.canceller.enabled)
+    """RX2 follows RX1 while either CANCEL mode is on."""
+    return bool(sdr is not None and (sdr.canceller.enabled or sdr.canceller.noise_enabled))

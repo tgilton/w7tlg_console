@@ -36,6 +36,7 @@ from rig.rigctld_client import (
     RigctldClient, is_valid_hw_frequency, is_valid_hw_mode,
     note_ptt_reply_value)
 from sdr.canceller import apply_rx2_follow, restore_rx2, rx2_locked, snapshot_rx2
+from sdr.noise_sub import NoiseSubProcessor
 from sdr.sdr_client import SdrClient
 from session.session_manager import SessionManager
 from session.session_profiles import PROFILES
@@ -129,7 +130,7 @@ class SpectrumConnectionManager:
     async def broadcast_frame(self, frame: dict):
         if not self.active:
             return
-        header = json.dumps({
+        header_dict = {
             "type": "spectrum",
             "kind": frame.get("kind", "wide"),
             "ts": frame["ts"],
@@ -137,7 +138,10 @@ class SpectrumConnectionManager:
             "span_hz": frame["span_hz"],
             "sample_rate_hz": frame["sample_rate_hz"],
             "bin_count": len(frame["data"]),
-        })
+        }
+        if "markers" in frame:
+            header_dict["markers"] = frame["markers"]
+        header = json.dumps(header_dict)
         payload = frame["data"].astype("float32").tobytes()
         dead = []
         for ws in self.active:
@@ -198,6 +202,11 @@ audio_manager_0 = AudioConnectionManager()
 spectrum_manager_0 = SpectrumConnectionManager()
 # RX1 CANCEL ghost trace (raw RX1 FFT) — see sdr/canceller.py.
 spectrum_manager_ghost = SpectrumConnectionManager()
+# NOISE SUB processed RX1 trace (sdr/noise_sub.py) — display only.
+spectrum_manager_proc = SpectrumConnectionManager()
+noise_proc = NoiseSubProcessor()
+_noise_busy = False
+_latest_b_frame: Optional[dict] = None
 # RX2's settings captured when CANCEL turns on, restored when it turns off.
 _cancel_snapshot: Optional[dict] = None
 # See subscribe_fine_spectrum/unsubscribe_fine_spectrum in handle_ws_command —
@@ -404,7 +413,7 @@ async def on_station_state(state: StationState):
             sdr.audio_b.tx_active = False
             sdr.combiner.tx_active = False
             sdr.canceller.clear_tx()
-        if sdr.canceller.enabled:
+        if rx2_locked(sdr):
             # RX2 follows RX1 while CANCEL is on (see sdr/canceller.py).
             apply_rx2_follow(sdr)
     await manager.broadcast({"type": "state", "data": build_state_payload(state)})
@@ -477,6 +486,43 @@ async def on_spectrum_frame_0(frame: dict):
 
 async def on_spectrum_frame_ghost(frame: dict):
     await spectrum_manager_ghost.broadcast_frame(frame)
+
+
+async def on_spectrum_frame_b_store(frame: dict):
+    # Latest RX2 frame for NOISE SUB. Frames are not queued: the processor
+    # refuses a frame older than 250 ms rather than working on a backlog.
+    global _latest_b_frame
+    _latest_b_frame = frame
+
+
+async def on_spectrum_frame_noise(frame: dict):
+    """RX1 frame -> NOISE SUB. Runs off the event loop, one at a time: a
+    frame that arrives while one is in flight is dropped, not queued."""
+    global _noise_busy
+    if sdr is None or not sdr.canceller.noise_enabled:
+        return
+    c = sdr.canceller
+    if c.ghost:
+        # The ghost is the raw RX1 trace; in this mode that is the frame itself.
+        await spectrum_manager_ghost.broadcast_frame(frame)
+    if _noise_busy:
+        return
+    _noise_busy = True
+    try:
+        noise_proc.core.scale_db = c.noise_scale_db
+        noise_proc.core.n = c.noise_n
+        noise_proc.core.clamp = c.noise_clamp
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(None, noise_proc.process_pair,
+                                         frame, _latest_b_frame, time.time())
+    finally:
+        _noise_busy = False
+    c.noise_status = res["status"]
+    c.noise_lines = res["lines"]
+    c.noise_floor1_db = res["floor1_db"]
+    c.noise_floor2_db = res["floor2_db"]
+    if res["frame"] is not None:
+        await spectrum_manager_proc.broadcast_frame(res["frame"])
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -775,6 +821,8 @@ async def lifespan(app: FastAPI):
     sdr.canceller.settings_path = str(Path(__file__).parent.parent / "data" / "cancel_settings.json")
     sdr.canceller._load_settings()
     sdr.on_spectrum_ghost(on_spectrum_frame_ghost)
+    sdr.on_spectrum(on_spectrum_frame_noise)
+    sdr.on_spectrum_b(on_spectrum_frame_b_store)
     await sdr.start()
     if not sdr.available:
         logger.warning("SDR unavailable — panadapter features disabled.")
@@ -1135,25 +1183,54 @@ def _rx2_lock_message(cmd, msg) -> Optional[str]:
             f"turn CANCEL off to tune RX2 independently")
 
 
-async def _handle_cancel_command(cmd, msg) -> tuple:
-    """Returns (ok, error). Enable/disable run the RX2 lock transition; the
-    worker join on disable runs in the executor so the loop never waits on it."""
+async def _set_cancel_mode(mode: str):
+    """off / coherent / noise. The coherent IQ path is turned on and off only
+    here, and only for the coherent mode; NOISE SUB is display-only and never
+    touches the canceller's worker or queues. RX2's prior state is captured on
+    the way in from off and restored on the way back to off. A switch between
+    the two modes keeps the RX2 lock in place."""
     global _cancel_snapshot
+    c = sdr.canceller
+    cur = c.mode
+    if mode == cur:
+        return
+    loop = asyncio.get_running_loop()
+    if cur == "off":
+        _cancel_snapshot = snapshot_rx2(sdr)
+    if cur == "coherent" and mode != "coherent":
+        await loop.run_in_executor(None, c.set_enabled, False)
+    if cur == "noise" and mode != "noise":
+        c.noise_enabled = False
+        noise_proc.core.reset_history()
+        c.noise_status = None
+    if mode == "coherent" and cur != "coherent":
+        c.set_enabled(True)
+    if mode == "noise":
+        c.noise_enabled = True
+    if mode != "off":
+        c.set_last_mode(mode)
+    if mode == "off" and _cancel_snapshot is not None:
+        restore_rx2(sdr, _cancel_snapshot)
+        _cancel_snapshot = None
+    if mode != "off":
+        apply_rx2_follow(sdr)
+
+
+async def _handle_cancel_command(cmd, msg) -> tuple:
+    """Returns (ok, error). A bad value is refused with a reason."""
     if sdr is None or not sdr.available:
         return False, "SDR not available"
     c = sdr.canceller
     try:
         if cmd == "set_cancel_enabled":
-            on = bool(msg["enabled"])
-            if on and not c.enabled:
-                _cancel_snapshot = snapshot_rx2(sdr)
-                c.set_enabled(True)
-                apply_rx2_follow(sdr)
-            elif not on and c.enabled:
-                await asyncio.get_running_loop().run_in_executor(None, c.set_enabled, False)
-                if _cancel_snapshot is not None:
-                    restore_rx2(sdr, _cancel_snapshot)
-                    _cancel_snapshot = None
+            await _set_cancel_mode("coherent" if bool(msg["enabled"]) else "off")
+        elif cmd == "set_cancel_mode":
+            mode = msg["mode"]
+            if mode not in ("off", "coherent", "noise"):
+                return False, f"unknown CANCEL mode {mode!r}"
+            await _set_cancel_mode(mode)
+        elif cmd == "set_cancel_last_mode":
+            c.set_last_mode(msg["mode"])
         elif cmd == "set_cancel_gain_db":
             c.set_gain_db(float(msg["gain_db"]))
         elif cmd == "set_cancel_phase_deg":
@@ -1162,14 +1239,19 @@ async def _handle_cancel_command(cmd, msg) -> tuple:
             c.set_ghost(bool(msg["ghost"]))
         elif cmd == "set_cancel_follow_gain":
             c.set_follow_gain(bool(msg["follow_gain"]))
-            if c.enabled:
+            if c.enabled or c.noise_enabled:
                 apply_rx2_follow(sdr)
+        elif cmd == "set_noise_scale_db":
+            c.set_noise_scale_db(float(msg["scale_db"]))
+        elif cmd == "set_noise_n":
+            c.set_noise_n(float(msg["n"]))
+        elif cmd == "set_noise_clamp":
+            c.set_noise_clamp(bool(msg["clamp"]))
         elif cmd == "cancel_reset":
             c.reset_weight()
         return True, None
     except (KeyError, ValueError, TypeError) as e:
         return False, f"bad CANCEL command: {e}"
-
 
 async def handle_ws_command(text: str, ws: WebSocket):
     if bridge is None:
@@ -1324,8 +1406,10 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 "type": "cmd_response", "cmd": cmd, "ok": delay is not None,
                 "sample_delay": delay}))
 
-        elif cmd in ("set_cancel_enabled", "set_cancel_gain_db", "set_cancel_phase_deg",
-                     "set_cancel_ghost", "set_cancel_follow_gain", "cancel_reset"):
+        elif cmd in ("set_cancel_enabled", "set_cancel_mode", "set_cancel_last_mode",
+                     "set_cancel_gain_db", "set_cancel_phase_deg", "set_cancel_ghost",
+                     "set_cancel_follow_gain", "set_noise_scale_db", "set_noise_n",
+                     "set_noise_clamp", "cancel_reset"):
             ok, error = await _handle_cancel_command(cmd, msg)
             response = {"type": "cmd_response", "cmd": cmd, "ok": ok}
             if error:
@@ -1752,6 +1836,16 @@ async def spectrum_websocket_b(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         spectrum_manager_b.disconnect(websocket)
+
+
+@app.websocket("/ws/spectrum_proc")
+async def spectrum_websocket_proc(websocket: WebSocket):
+    await spectrum_manager_proc.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        spectrum_manager_proc.disconnect(websocket)
 
 
 @app.websocket("/ws/spectrum_ghost")
