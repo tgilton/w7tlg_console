@@ -2728,6 +2728,20 @@ html, body { background: var(--v2-bg-page); }
 .panel-resize-handle:hover, .panel-resize-handle.dragging { background: var(--v2-btn-bg); }
 
 /* V2:END */
+/* RX1 CANCEL block (sdr/canceller.py). Reuses the panel's button, slider
+   and label classes; this block adds layout, the chip, and the RX2 lock. */
+.v2-cancel-card { margin-top: 10px; }
+.cancel-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.cancel-row .display-slider { flex: 1 1 120px; min-width: 100px; }
+.cancel-num { width: 64px; font: inherit; color: inherit; background: var(--bg-2); border: 1px solid var(--border); padding: 2px 4px; text-align: right; }
+.cancel-unit { color: var(--chrome-label); }
+.cancel-readout { display: flex; gap: 16px; margin-top: 6px; color: var(--chrome-label); font-size: 0.8rem; }
+.cancel-readout b { color: inherit; font-weight: 600; }
+.cancel-chip { margin-left: 8px; color: var(--state-selected); background: var(--state-selected-bg); border: 1px solid currentColor; }
+body.rx2-cancel-locked #freq2-input, body.rx2-cancel-locked #tune2-btn, body.rx2-cancel-locked #span2-slider,
+body.rx2-cancel-locked #mode2-USB, body.rx2-cancel-locked #mode2-LSB, body.rx2-cancel-locked #width2-slider,
+body.rx2-cancel-locked #rf-notch2-btn, body.rx2-cancel-locked #dab-notch2-btn { opacity: 0.4; pointer-events: none; }
+body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -2917,6 +2931,7 @@ html, body { background: var(--v2-bg-page); }
         <div class="v2-freq-head">
           <span class="v2-label">Frequency</span>
           <span class="v2-rx-chip">RX1</span>
+          <span class="badge cancel-chip" id="cancel-chip" style="display:none">CANCEL</span>
         </div>
         <div class="freq-readout" id="vfo">  0<i class="v2-freq-sep">.</i>000<i class="v2-freq-sep">.</i>000</div>
         <div class="vfo-meta">
@@ -3029,6 +3044,33 @@ html, body { background: var(--v2-bg-page); }
         </div>
       </div>
 
+      <div class="v2-cancel-card" id="cancel-card">
+        <div class="v2-title">Cancel &middot; y = RX1 &minus; w&middot;RX2</div>
+        <div class="cancel-row">
+          <button class="dsp-agc-btn" id="cancel-on" onclick="CancelUI.setEnabled(true)">ON</button>
+          <button class="dsp-agc-btn active" id="cancel-off" onclick="CancelUI.setEnabled(false)">OFF</button>
+          <button class="dsp-agc-btn" id="cancel-ghost" onclick="CancelUI.toggleGhost()" title="Show the raw RX1 spectrum as a dashed ghost trace">GHOST</button>
+          <button class="dsp-agc-btn active" id="cancel-follow" onclick="CancelUI.toggleFollow()" title="While CANCEL is on, RX2's RF gain follows RX1">RX2 GAIN FOLLOWS RX1</button>
+          <button class="dsp-agc-btn" id="cancel-reset" onclick="CancelUI.reset()" title="Gain 0 dB, phase 0">RESET</button>
+        </div>
+        <div class="cancel-row">
+          <span class="ctl-label">Gain</span>
+          <input type="range" class="display-slider v2-range" id="cancel-gain-slider" min="-400" max="800" step="1" value="0" data-v2-notch="0.3333" aria-label="Cancel gain">
+          <input type="text" class="cancel-num" id="cancel-gain-num" inputmode="decimal" value="0.0" aria-label="Cancel gain in dB" title="Type a value, or use arrow keys (0.1 dB; Shift for 1 dB)">
+          <span class="cancel-unit">dB</span>
+        </div>
+        <div class="cancel-row">
+          <span class="ctl-label">Phase</span>
+          <input type="range" class="display-slider v2-range" id="cancel-phase-slider" min="0" max="3599" step="1" value="0" data-v2-notch="0" aria-label="Cancel phase">
+          <input type="text" class="cancel-num" id="cancel-phase-num" inputmode="decimal" value="0.0" aria-label="Cancel phase in degrees" title="Type a value, or use arrow keys (0.1 deg; Shift for 1 deg)">
+          <span class="cancel-unit">&deg;</span>
+          <button class="dsp-agc-btn" id="cancel-invert" onclick="CancelUI.invert()" title="Add 180 degrees to the phase">+180&deg;</button>
+        </div>
+        <div class="cancel-readout">
+          <span>Residual span <b id="cancel-resid-span">&mdash;</b></span>
+          <span>Residual audio <b id="cancel-resid-pb">&mdash;</b></span>
+        </div>
+      </div>
       <div class="v2-mode-card">
         <div class="v2-title">Mode</div>
         <div class="mode-mini-grid v2-mode-grid">
@@ -4227,6 +4269,7 @@ function connectWs() {
   ws.onclose = () => setTimeout(connectWs, 2000);
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
+    if (msg.type === 'cmd_response' && !msg.ok && msg.error) showToast(msg.error, 'error');
     if (msg.type === 'tx_mute') {
       // Fast PTT gate fired on the server. Call txSilenceStart() (not just a
       // ring flush) so audioWs is closed — that drops the pending binary audio
@@ -4242,6 +4285,7 @@ function connectWs() {
       rigPtt = !!rig.ptt;
       if (rigPtt) txSilenceStart(); else txSilenceEnd();
       rigFreqHz = rig.freq_hz ?? rigFreqHz;
+      if (msg.data.cancel) CancelUI.onState(msg.data.cancel);
       const prevRigBand = rigBand;
       rigBand = rig.band ?? rigBand;
       // A real band change (not just a repeated state broadcast) invalidates
@@ -4348,6 +4392,39 @@ function clearStalePendingRetune() {
     console.log('[panadapter] pendingRetuneHz timed out waiting for the SDR to confirm — clearing');
     pendingRetuneHz = null;
   }
+}
+
+// RX1 ghost trace (raw RX1 while CANCEL is on). Same frame protocol as
+// /ws/spectrum: a JSON header then a Float32 payload. Open only while the
+// ghost is wanted, so the socket costs nothing otherwise.
+let latestGhostFrame = null;
+let ghostWanted = false;
+let ghostWs = null;
+function setGhostVisible(on) {
+  ghostWanted = !!on;
+  if (!ghostWanted) {
+    if (ghostWs) { const w = ghostWs; ghostWs = null; w.close(); }
+    latestGhostFrame = null;
+    return;
+  }
+  if (ghostWs && ghostWs.readyState <= WebSocket.OPEN) return;
+  const w = new WebSocket(`ws://${location.host}/ws/spectrum_ghost`);
+  w.binaryType = 'arraybuffer';
+  let pendingGhostHeader = null;
+  w.onmessage = evt => {
+    if (typeof evt.data === 'string') { pendingGhostHeader = JSON.parse(evt.data); return; }
+    if (!pendingGhostHeader) return;
+    latestGhostFrame = {
+      centerFreqHz: pendingGhostHeader.center_freq_hz,
+      spanHz: pendingGhostHeader.span_hz,
+      data: new Float32Array(evt.data),
+    };
+  };
+  w.onclose = () => {
+    if (ghostWs === w) ghostWs = null;
+    if (ghostWanted) setTimeout(() => setGhostVisible(true), 1000);
+  };
+  ghostWs = w;
 }
 
 function connectSpectrumWs() {
@@ -4752,6 +4829,22 @@ function drawSpectrum() {
     ctx.lineWidth = 1.5 * dpr;
     ctx.stroke();
 
+    if (ghostWanted && latestGhostFrame) {
+      // Ghost = raw RX1, same view and dB scale as the trace above it.
+      const gp = applySpectrumSmoothing(cropToView(latestGhostFrame, Math.round(w)));
+      ctx.beginPath();
+      for (let i = 0; i < gp.length; i++) {
+        const x = (i / (gp.length - 1)) * w;
+        const pct = Math.max(0, Math.min(1, (gp[i] - floor) / (ceil - floor)));
+        const y = h - pct * h;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.setLineDash([4 * dpr, 3 * dpr]);
+      ctx.strokeStyle = 'rgba(230,230,230,0.6)';
+      ctx.lineWidth = 1 * dpr;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     drawRigMarker(ctx, w, h, dpr);
     drawCursorCrosshair(ctx, w, h, dpr);
   }
@@ -5153,6 +5246,8 @@ return {
   // from the dial frequency reproduced the wrong window (Terry
   // 2026-09-11: got 13.9947-14.3487 instead of RX1's clean
   // 14.000-14.350).
+  cancelSend: obj => send(obj),
+  setGhostVisible,
   getViewSpanHz: () => viewSpanHz,
   getViewCenterHz: () => viewCenterHz,
 };
@@ -5180,6 +5275,107 @@ Panadapter.init();
      playing through speakers during TX is the same mic-feedback risk as
      RX1's. See project memory on the RSPduo migration.
      ══════════════════════════════════════════════════════════════════════ -->
+<script>
+// RX1 CANCEL controls. Reads state.cancel from RX1's /ws state push (the
+// Panadapter handler calls onState) and sends commands through
+// Panadapter.cancelSend, so it shares RX1's socket. Also owns the RX2 lock
+// styling (body classes), since RX2 is locked while CANCEL is on.
+const CancelUI = (function () {
+  const $ = id => document.getElementById(id);
+  const send = obj => Panadapter.cancelSend(obj);
+  // Inputs the operator is dragging or typing in. State pushes skip these,
+  // so a 100 ms sync never fights the hand on the control.
+  const editing = new Set();
+  let st = { enabled: false, gain_db: 0, phase_deg: 0, ghost: false, follow_gain: true };
+
+  function fmtDb(v) { return (v === null || v === undefined) ? '—' : `${v.toFixed(1)} dB`; }
+
+  function setField(id, value) {
+    const el = $(id);
+    if (el && !editing.has(id)) el.value = value;
+  }
+
+  function render(c) {
+    st = c;
+    $('cancel-on').classList.toggle('active', !!c.enabled);
+    $('cancel-off').classList.toggle('active', !c.enabled);
+    $('cancel-ghost').classList.toggle('active', !!c.ghost);
+    $('cancel-follow').classList.toggle('active', !!c.follow_gain);
+    $('cancel-chip').style.display = c.enabled ? '' : 'none';
+    setField('cancel-gain-slider', Math.round(c.gain_db * 10));
+    setField('cancel-gain-num', c.gain_db.toFixed(1));
+    setField('cancel-phase-slider', Math.round(c.phase_deg * 10));
+    setField('cancel-phase-num', c.phase_deg.toFixed(1));
+    $('cancel-resid-span').textContent = fmtDb(c.residual_span_db);
+    $('cancel-resid-pb').textContent = fmtDb(c.residual_passband_db);
+    document.body.classList.toggle('rx2-cancel-locked', !!c.rx2_locked);
+    document.body.classList.toggle('rx2-cancel-gain', !!c.rx2_locked && !!c.follow_gain);
+    Panadapter.setGhostVisible(!!(c.enabled && c.ghost));
+  }
+
+  function setGainDb(v) { if (isFinite(v)) send({ cmd: 'set_cancel_gain_db', gain_db: v }); }
+  function setPhaseDeg(v) { if (isFinite(v)) send({ cmd: 'set_cancel_phase_deg', phase_deg: ((v % 360) + 360) % 360 }); }
+
+  function bindSlider(id, onValue) {
+    const el = $(id);
+    const begin = () => editing.add(id);
+    const end = () => editing.delete(id);
+    el.addEventListener('pointerdown', begin);
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('blur', end);
+    el.addEventListener('input', () => onValue(parseFloat(el.value)));
+  }
+
+  function bindNumeric(id, onCommit) {
+    const el = $(id);
+    el.addEventListener('focus', () => editing.add(id));
+    el.addEventListener('blur', () => {
+      editing.delete(id);
+      const v = parseFloat(el.value);
+      if (isFinite(v)) onCommit(v);
+      else el.value = id.includes('gain') ? st.gain_db.toFixed(1) : st.phase_deg.toFixed(1);
+    });
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { el.blur(); return; }
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const cur = parseFloat(el.value);
+      const base = isFinite(cur) ? cur : 0;
+      const step = e.shiftKey ? 1 : 0.1;
+      const dir = e.key === 'ArrowUp' ? 1 : -1;
+      const next = Math.round((base + dir * step) * 10) / 10;
+      el.value = next.toFixed(1);
+      onCommit(next);
+    });
+  }
+
+  function init() {
+    bindSlider('cancel-gain-slider', v => {
+      const db = v / 10;
+      $('cancel-gain-num').value = db.toFixed(1);
+      setGainDb(db);
+    });
+    bindSlider('cancel-phase-slider', v => {
+      const deg = v / 10;
+      $('cancel-phase-num').value = deg.toFixed(1);
+      setPhaseDeg(deg);
+    });
+    bindNumeric('cancel-gain-num', setGainDb);
+    bindNumeric('cancel-phase-num', setPhaseDeg);
+  }
+
+  function setEnabled(on) { send({ cmd: 'set_cancel_enabled', enabled: !!on }); }
+  function reset() { send({ cmd: 'cancel_reset' }); }
+  function toggleGhost() { send({ cmd: 'set_cancel_ghost', ghost: !st.ghost }); }
+  function toggleFollow() { send({ cmd: 'set_cancel_follow_gain', follow_gain: !st.follow_gain }); }
+  function invert() { setPhaseDeg((st.phase_deg || 0) + 180); }
+
+  init();
+  return { onState: render, setEnabled, reset, toggleGhost, toggleFollow, invert };
+})();
+</script>
+
 <script>
 const Panadapter2 = (function () {
 
@@ -5246,6 +5442,7 @@ function connectWs2() {
   ws2.onmessage = evt => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'tx_mute') { txSilenceStart(); return; }
+    if (msg.type === 'cmd_response' && !msg.ok && msg.error) showToast(msg.error, 'error');
     if (msg.type === 'state') {
       const rig = msg.data.rig || {};
       rigPtt = !!rig.ptt;
