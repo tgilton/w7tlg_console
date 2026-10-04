@@ -2738,7 +2738,8 @@ html, body { background: var(--v2-bg-page); }
 .cancel-readout { display: flex; gap: 12px; margin-top: 6px; min-height: 27px; align-items: center; }
 .cancel-res { flex: 1 1 0; min-width: 0; display: flex; justify-content: space-between; align-items: baseline; color: var(--chrome-label); font-size: 0.75rem; }
 .cancel-res b { color: inherit; font-size: 1rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
-.cancel-step { display: inline-flex; gap: 4px; }
+.cancel-step { display: inline-flex; gap: 4px; margin-top: 6px; }
+.cancel-row-tight { gap: 4px; }
 .cancel-step .dsp-agc-btn { min-width: 52px; }
 .cancel-note { margin-top: 6px; font-size: 0.75rem; color: var(--state-selected); }
 .cancel-row .dsp-agc-btn { flex: 0 0 auto; }
@@ -2905,11 +2906,15 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
     <div class="section-box" id="box-cancel">
     <h2 title="y = RX1 &minus; w&middot;RX2 — RX1 with RX2 subtracted at weight w">Cancel</h2>
         <div class="cancel-row">
-          <button class="dsp-agc-btn" id="cancel-on" onclick="CancelUI.setEnabled(true)">ON</button>
+          <button class="dsp-agc-btn" id="cancel-on" onclick="CancelUI.setEnabled(true)" title="Turn on the selected mode">ON</button>
           <button class="dsp-agc-btn active" id="cancel-off" onclick="CancelUI.setEnabled(false)">OFF</button>
-          <button class="dsp-agc-btn" id="cancel-ghost" onclick="CancelUI.toggleGhost()" title="Show the raw RX1 spectrum as a dashed ghost trace">GHOST</button>
+          <button class="dsp-agc-btn" id="cancel-mode" onclick="CancelUI.cycleMode()" title="Switch between COHERENT (cancels RX2 from RX1 in the IQ) and NOISE SUB (display only)">COHERENT</button>
           <button class="dsp-agc-btn active" id="cancel-follow" onclick="CancelUI.toggleFollow()" title="While CANCEL is on, RX2's RF gain follows RX1">RX2 GAIN FOLLOWS RX1</button>
-          <button class="dsp-agc-btn" id="cancel-reset" onclick="CancelUI.reset()" title="Gain 0 dB, phase 0">RESET</button>
+        </div>
+        <div class="cancel-row cancel-row-tight">
+          <button class="dsp-agc-btn" id="cancel-reset" onclick="CancelUI.reset()" title="Coherent: gain 0 dB, phase 0. Noise sub: scale -10 dB, thresh 2.0">RESET</button>
+          <button class="dsp-agc-btn" id="cancel-ghost" onclick="CancelUI.toggleGhost()" title="Show the raw RX1 spectrum as a dashed ghost trace">GHOST</button>
+          <button class="dsp-agc-btn" id="cancel-clamp" onclick="CancelUI.toggleClamp()" title="NOISE SUB only: bins below the threshold drawn at the floor">CLAMP</button>
           <span class="cancel-step" role="group" aria-label="Step size for wheel and arrow keys">
             <button class="dsp-agc-btn" id="cancel-step-fine" type="button" title="Step 0.1 (dB or degrees); Shift = 5x">FINE</button>
             <button class="dsp-agc-btn" id="cancel-step-med" type="button" title="Step 0.5 (dB or degrees); Shift = 5x">MED</button>
@@ -2917,22 +2922,22 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
           </span>
         </div>
         <div class="cancel-row">
-          <span class="ctl-label">Gain</span>
+          <span class="ctl-label" id="cancel-gain-label">Gain</span>
           <input type="range" class="display-slider v2-range" id="cancel-gain-slider" min="-400" max="800" step="1" value="0" data-v2-notch="0.3333" aria-label="Cancel gain">
-          <input type="text" class="cancel-num" id="cancel-gain-num" inputmode="decimal" value="0.0" aria-label="Cancel gain in dB" title="Type a value, or use arrow keys (0.1 dB; Shift for 1 dB)">
-          <span class="cancel-unit">dB</span>
+          <input type="text" class="cancel-num" id="cancel-gain-num" inputmode="decimal" value="0.0" aria-label="Cancel gain in dB" title="Type a value, or use arrow keys (step from STEP; Shift x5)">
+          <span class="cancel-unit" id="cancel-gain-unit">dB</span>
         </div>
         <div class="cancel-row">
-          <span class="ctl-label">Phase</span>
+          <span class="ctl-label" id="cancel-phase-label">Phase</span>
           <input type="range" class="display-slider v2-range" id="cancel-phase-slider" min="0" max="3599" step="1" value="0" data-v2-notch="0" aria-label="Cancel phase">
-          <input type="text" class="cancel-num" id="cancel-phase-num" inputmode="decimal" value="0.0" aria-label="Cancel phase in degrees" title="Type a value, or use arrow keys (0.1 deg; Shift for 1 deg)">
-          <span class="cancel-unit">&deg;</span>
+          <input type="text" class="cancel-num" id="cancel-phase-num" inputmode="decimal" value="0.0" aria-label="Cancel phase in degrees" title="Type a value, or use arrow keys (step from STEP; Shift x5)">
+          <span class="cancel-unit" id="cancel-phase-unit">&deg;</span>
           <button class="dsp-agc-btn" id="cancel-invert" onclick="CancelUI.invert()" title="Add 180 degrees to the phase">+180&deg;</button>
         </div>
         <div class="cancel-note" id="cancel-auto-note" style="display:none">AUTO is on. Fixed scale is what keeps the two traces comparable while CANCEL is on.</div>
         <div class="cancel-readout">
-          <span class="cancel-res"><span>span</span><b id="cancel-resid-span">&mdash;</b></span>
-          <span class="cancel-res"><span>audio</span><b id="cancel-resid-pb">&mdash;</b></span>
+          <span class="cancel-res"><span id="cancel-res-label1">span</span><b id="cancel-resid-span">&mdash;</b></span>
+          <span class="cancel-res"><span id="cancel-res-label2">audio</span><b id="cancel-resid-pb">&mdash;</b></span>
         </div>
     </div>
     <div class="section-box" id="box-antenna">
@@ -4417,6 +4422,40 @@ function clearStalePendingRetune() {
 let latestGhostFrame = null;
 let ghostWanted = false;
 let ghostWs = null;
+// NOISE SUB processed RX1 trace (/ws/spectrum_proc). Used only while it is
+// fresh; older than 1 s, the raw trace shows and the block says why.
+let latestProcFrame = null;
+let latestProcAt = -Infinity;
+let procWanted = false;
+let procWs = null;
+function setProcVisible(on) {
+  procWanted = !!on;
+  if (!procWanted) {
+    if (procWs) { const w = procWs; procWs = null; w.close(); }
+    latestProcFrame = null;
+    return;
+  }
+  if (procWs && procWs.readyState <= WebSocket.OPEN) return;
+  const w = new WebSocket(`ws://${location.host}/ws/spectrum_proc`);
+  w.binaryType = 'arraybuffer';
+  let pendingProcHeader = null;
+  w.onmessage = evt => {
+    if (typeof evt.data === 'string') { pendingProcHeader = JSON.parse(evt.data); return; }
+    if (!pendingProcHeader) return;
+    latestProcFrame = {
+      centerFreqHz: pendingProcHeader.center_freq_hz,
+      spanHz: pendingProcHeader.span_hz,
+      data: new Float32Array(evt.data),
+      markers: pendingProcHeader.markers || [],
+    };
+    latestProcAt = performance.now();
+  };
+  w.onclose = () => {
+    if (procWs === w) procWs = null;
+    if (procWanted) setTimeout(() => setProcVisible(true), 1000);
+  };
+  procWs = w;
+}
 function setGhostVisible(on) {
   ghostWanted = !!on;
   if (!ghostWanted) {
@@ -4835,7 +4874,9 @@ function drawSpectrum() {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
 
-  const frame = (rigIsDigital && latestFineFrame) ? latestFineFrame : latestFrame;
+  const procFresh = procWanted && latestProcFrame && (performance.now() - latestProcAt) < 1000;
+  const frame = (rigIsDigital && latestFineFrame) ? latestFineFrame
+              : procFresh ? latestProcFrame : latestFrame;
 
   if (frame && viewCenterHz !== null) {
     document.getElementById('axis-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);
@@ -4871,6 +4912,17 @@ function drawSpectrum() {
     ctx.lineWidth = 1.5 * dpr;
     ctx.stroke();
 
+    if (procFresh && frame === latestProcFrame && frame.markers.length) {
+      // Lines still above the threshold after subtraction: small ticks on the trace.
+      const n = frame.data.length, binHz = frame.spanHz / n, fullLo = frame.centerFreqHz - frame.spanHz / 2;
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      for (const m of frame.markers) {
+        const x = (((fullLo + m * binHz) - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+        if (x < 0 || x > w) continue;
+        const pct = Math.max(0, Math.min(1, (frame.data[m] - floor) / (ceil - floor)));
+        ctx.fillRect(x - dpr, h - pct * h - 6 * dpr, 2 * dpr, 4 * dpr);
+      }
+    }
     if (ghostWanted && latestGhostFrame) {
       // Ghost = raw RX1, same view and dB scale as the trace above it.
       const gp = applySpectrumSmoothing(cropToView(latestGhostFrame, Math.round(w)));
@@ -5290,6 +5342,7 @@ return {
   // 14.000-14.350).
   cancelSend: obj => send(obj),
   setGhostVisible,
+  setProcVisible,
   getScaleState,
   setScale,
   getViewSpanHz: () => viewSpanHz,
@@ -5405,30 +5458,30 @@ function cancelWheelAllowed(nowMs, lastPageScrollMs) {
 }
 /* CANCELWHEEL:END */
 
-// RX1 CANCEL controls. Reads state.cancel from RX1's /ws state push (the
-// Panadapter handler calls onState) and sends commands through
-// Panadapter.cancelSend, so it shares RX1's socket. Also owns the RX2 lock
-// styling (body classes) and the fixed-scale handoff: CANCEL on means both
-// receivers use a fixed scale (RX2 copies RX1's), and off restores the AUTO
-// states the operator had before.
+// RX1 CANCEL controls, COHERENT and NOISE SUB. Reads state.cancel from RX1's
+// /ws state push (the Panadapter handler calls onState) and sends commands
+// through Panadapter.cancelSend. Also owns the RX2 lock styling, and the
+// fixed-scale handoff: while either mode is on, both receivers use a fixed
+// scale (RX2 copies RX1's); off restores the AUTO states from before.
+// In NOISE SUB the GAIN row is SCALE dB (k) and the PHASE row is THRESH sigma
+// (n), with the same wheel, STEP selector and arrow keys.
 const CancelUI = (function () {
   const $ = id => document.getElementById(id);
   const send = obj => Panadapter.cancelSend(obj);
-  // Inputs the operator is dragging or typing in. State pushes skip these,
-  // so a 100 ms sync never fights the hand on the control.
   const editing = new Set();
-  let st = { enabled: false, gain_db: 0, phase_deg: 0, ghost: false, follow_gain: true };
-  let prevEnabled = false;
+  let st = { mode: 'off', last_mode: 'coherent', gain_db: 0, phase_deg: 0,
+             noise_scale_db: -10, noise_n: 2, noise_clamp: false, ghost: false, follow_gain: true };
+  let prevOn = false;
   let savedScale = null;
-  // The step grid, remembered per viewer (a convenience, not state the page needs).
   let stepKey = CANCEL_STEP_DEFAULT;
   try {
     const saved = localStorage.getItem('cancelStep');
     if (saved && CANCEL_STEP_CHOICES[saved] !== undefined) stepKey = saved;
   } catch (e) { /* private window or blocked storage: keep the default */ }
 
+  const isNoise = () => st.mode === 'noise';
+  const isOn = () => st.mode !== 'off';
   function stepSize() { return CANCEL_STEP_CHOICES[stepKey]; }
-
   function fmtDb(v) { return (v === null || v === undefined) ? '—' : `${v.toFixed(1)} dB`; }
 
   function setField(id, value) {
@@ -5452,98 +5505,144 @@ const CancelUI = (function () {
 
   function updateAutoNote() {
     const autoOn = $('auto-scale-cb').checked || $('auto-scale2-cb').checked;
-    $('cancel-auto-note').style.display = (st.enabled && autoOn) ? '' : 'none';
+    $('cancel-auto-note').style.display = (isOn() && autoOn) ? '' : 'none';
   }
 
-  function markStepButtons() {
-    for (const k of Object.keys(CANCEL_STEP_CHOICES)) {
-      $('cancel-step-' + k).classList.toggle('active', k === stepKey);
-    }
+  // Which quantity a control edits. The rows follow the mode.
+  function kindFor(which) {
+    if (which === 'gain') return isNoise() ? 'scale' : 'gain';
+    return isNoise() ? 'thresh' : 'phase';
+  }
+  function displayValue(kind) {
+    if (kind === 'scale') return st.noise_scale_db;
+    if (kind === 'thresh') return st.noise_n;
+    return kind === 'gain' ? st.gain_db : st.phase_deg;
+  }
+  // Range, the clamp and the wrap of each quantity. The slider works in tenths.
+  function limitsFor(kind) {
+    if (kind === 'scale') return { min: -40, max: 40, wrap: false };
+    if (kind === 'thresh') return { min: 1, max: 6, wrap: false };
+    if (kind === 'gain') return { min: -40, max: 80, wrap: false };
+    return { min: 0, max: 360, wrap: true };
   }
 
-  function setStep(k) {
-    if (CANCEL_STEP_CHOICES[k] === undefined) return;
-    stepKey = k;
-    try { localStorage.setItem('cancelStep', k); } catch (e) { /* not persisted: fine */ }
-    markStepButtons();
+  function layoutRows() {
+    const noise = isNoise();
+    $('cancel-gain-label').textContent = noise ? 'Scale' : 'Gain';
+    $('cancel-gain-unit').textContent = 'dB';
+    $('cancel-phase-label').textContent = noise ? 'Thresh' : 'Phase';
+    $('cancel-phase-unit').textContent = noise ? 'σ' : '°';
+    const g = $('cancel-gain-slider'), p = $('cancel-phase-slider');
+    g.min = -400; g.max = noise ? 400 : 800;
+    p.min = noise ? 10 : 0; p.max = noise ? 60 : 3599;
+    $('cancel-invert').disabled = noise;
+    $('cancel-clamp').disabled = !noise;
+    $('cancel-res-label1').textContent = noise ? 'lines' : 'span';
+    $('cancel-res-label2').textContent = noise ? '' : 'audio';
+    $('cancel-res-label2').parentElement.title = noise ? 'RX1 noise floor' : '';
   }
 
   function render(c) {
     st = c;
-    if (!!c.enabled !== prevEnabled) {
-      prevEnabled = !!c.enabled;
-      if (prevEnabled) enterFixedScale(); else exitFixedScale();
+    const on = isOn();
+    if (on !== prevOn) {
+      prevOn = on;
+      if (on) enterFixedScale(); else exitFixedScale();
     }
-    $('cancel-on').classList.toggle('active', !!c.enabled);
-    $('cancel-off').classList.toggle('active', !c.enabled);
+    $('cancel-on').classList.toggle('active', on);
+    $('cancel-off').classList.toggle('active', !on);
+    $('cancel-mode').textContent = (c.last_mode === 'noise') ? 'NOISE SUB' : 'COHERENT';
+    $('cancel-mode').classList.toggle('active', on);
     $('cancel-ghost').classList.toggle('active', !!c.ghost);
     $('cancel-follow').classList.toggle('active', !!c.follow_gain);
-    $('cancel-chip').style.display = c.enabled ? '' : 'none';
-    setField('cancel-gain-slider', Math.round(c.gain_db * 10));
-    setField('cancel-gain-num', c.gain_db.toFixed(1));
-    setField('cancel-phase-slider', Math.round(c.phase_deg * 10));
-    setField('cancel-phase-num', c.phase_deg.toFixed(1));
-    $('cancel-resid-span').textContent = fmtDb(c.residual_span_db);
-    $('cancel-resid-pb').textContent = fmtDb(c.residual_passband_db);
+    $('cancel-clamp').classList.toggle('active', isNoise() && !!c.noise_clamp);
+    $('cancel-chip').textContent = isNoise() ? 'NOISE SUB' : 'CANCEL';
+    $('cancel-chip').style.display = on ? '' : 'none';
+    layoutRows();
+    if (isNoise()) {
+      setField('cancel-gain-slider', Math.round(c.noise_scale_db * 10));
+      setField('cancel-gain-num', c.noise_scale_db.toFixed(1));
+      setField('cancel-phase-slider', Math.round(c.noise_n * 10));
+      setField('cancel-phase-num', c.noise_n.toFixed(1));
+      const status = c.noise_status && c.noise_status !== 'active' ? c.noise_status : String(c.noise_lines);
+      $('cancel-resid-span').textContent = status;
+      $('cancel-resid-pb').textContent = (c.noise_floor1_db === null || c.noise_floor1_db === undefined)
+        ? '—' : `${c.noise_floor1_db.toFixed(1)} dB`;
+    } else {
+      setField('cancel-gain-slider', Math.round(c.gain_db * 10));
+      setField('cancel-gain-num', c.gain_db.toFixed(1));
+      setField('cancel-phase-slider', Math.round(c.phase_deg * 10));
+      setField('cancel-phase-num', c.phase_deg.toFixed(1));
+      $('cancel-resid-span').textContent = fmtDb(c.residual_span_db);
+      $('cancel-resid-pb').textContent = fmtDb(c.residual_passband_db);
+    }
     document.body.classList.toggle('rx2-cancel-locked', !!c.rx2_locked);
     document.body.classList.toggle('rx2-cancel-gain', !!c.rx2_locked && !!c.follow_gain);
-    Panadapter.setGhostVisible(!!(c.enabled && c.ghost));
+    Panadapter.setGhostVisible(!!(on && c.ghost));
+    Panadapter.setProcVisible(isNoise());
     updateAutoNote();
   }
 
-  // Every value goes to the grid before it is sent: no float drift in the
-  // server's set_cancel_* arguments.
-  function setGainDb(v) {
-    if (!isFinite(v)) return;
-    send({ cmd: 'set_cancel_gain_db', gain_db: cancelGridRound(v, 0.1) });
-  }
-  function setPhaseDeg(v) {
-    if (!isFinite(v)) return;
-    send({ cmd: 'set_cancel_phase_deg', phase_deg: cancelGridRound(((v % 360) + 360) % 360, 0.1) });
+  // Commits. Every value is rounded to its grid before it is sent.
+  function commitFor(kind) {
+    if (kind === 'scale') return v => {
+      if (isFinite(v)) send({ cmd: 'set_noise_scale_db', scale_db: cancelGridRound(Math.min(40, Math.max(-40, v)), 0.1) });
+    };
+    if (kind === 'thresh') return v => {
+      if (isFinite(v)) send({ cmd: 'set_noise_n', n: cancelGridRound(Math.min(6, Math.max(1, v)), 0.1) });
+    };
+    if (kind === 'gain') return v => {
+      if (isFinite(v)) send({ cmd: 'set_cancel_gain_db', gain_db: cancelGridRound(v, 0.1) });
+    };
+    return v => {
+      if (isFinite(v)) send({ cmd: 'set_cancel_phase_deg', phase_deg: cancelGridRound(((v % 360) + 360) % 360, 0.1) });
+    };
   }
 
-  function bindSlider(id, onValue) {
+  function bindSlider(id, which) {
     const el = $(id);
-    const begin = () => editing.add(id);
-    const end = () => editing.delete(id);
-    el.addEventListener('pointerdown', begin);
-    el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', end);
-    el.addEventListener('blur', end);
-    el.addEventListener('input', () => onValue(parseFloat(el.value)));
+    el.addEventListener('pointerdown', () => editing.add(id));
+    el.addEventListener('pointerup', () => editing.delete(id));
+    el.addEventListener('pointercancel', () => editing.delete(id));
+    el.addEventListener('blur', () => editing.delete(id));
+    el.addEventListener('input', () => {
+      const v = parseFloat(el.value) / 10;
+      const kind = kindFor(which);
+      $(which === 'gain' ? 'cancel-gain-num' : 'cancel-phase-num').value = v.toFixed(1);
+      commitFor(kind)(v);
+    });
   }
 
   // Arrow keys use the selected step; Shift multiplies it by 5.
-  function bindNumeric(id, kind, onCommit) {
+  function bindNumeric(id, which) {
     const el = $(id);
     el.addEventListener('focus', () => editing.add(id));
     el.addEventListener('blur', () => {
       editing.delete(id);
+      const kind = kindFor(which);
       const v = parseFloat(el.value);
-      if (isFinite(v)) onCommit(v);
-      else el.value = kind === 'gain' ? st.gain_db.toFixed(1) : st.phase_deg.toFixed(1);
+      if (isFinite(v)) commitFor(kind)(v);
+      else el.value = Number(displayValue(kind)).toFixed(1);
     });
     el.addEventListener('keydown', e => {
       if (e.key === 'Enter') { el.blur(); return; }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
       e.preventDefault();
+      const kind = kindFor(which);
+      const lim = limitsFor(kind);
       const cur = parseFloat(el.value);
       const base = cancelGridRound(isFinite(cur) ? cur : 0, stepSize());
       const size = stepSize() * (e.shiftKey ? CANCEL_SHIFT_MULT : 1);
-      const dir = e.key === 'ArrowUp' ? 1 : -1;
-      let next = Math.round((base + dir * size) * 10) / 10;
-      if (kind === 'phase') next = ((next % 360) + 360) % 360;
-      else next = Math.min(80, Math.max(-40, next));
+      let next = Math.round((base + (e.key === 'ArrowUp' ? 1 : -1) * size) * 10) / 10;
+      next = lim.wrap ? ((next % 360) + 360) % 360 : Math.min(lim.max, Math.max(lim.min, next));
       el.value = next.toFixed(1);
-      onCommit(next);
+      commitFor(kind)(next);
     });
   }
 
-  // Wheel: the gate only lets a real page scroll pass the wheel. A pointer
-  // over the control never loses notches to the entry timing the sliders
-  // use. The listener sits on the control, so preventDefault runs only while
-  // the pointer is over it. Non-passive so the page does not scroll under it.
-  function bindWheel(el, kind) {
+  // Wheel: the gate only lets a real page scroll pass the wheel. The listener
+  // sits on the control, so preventDefault runs only over it. Non-passive.
+  function bindWheel(el, which) {
     let acc = 0;
     let lastEventAt = -Infinity;
     el.addEventListener('wheel', e => {
@@ -5552,40 +5651,38 @@ const CancelUI = (function () {
       lastEventAt = now;
       if (!cancelWheelAllowed(now, _v2LastPageScroll)) { acc = 0; return; }
       e.preventDefault();
-      const isSlider = el.type === 'range';
-      const fallback = kind === 'gain' ? st.gain_db : st.phase_deg;
-      const cur = isSlider ? parseFloat(el.value) / 10
-                           : (isFinite(parseFloat(el.value)) ? parseFloat(el.value) : fallback);
+      const kind = kindFor(which);
+      const lim = limitsFor(kind);
+      const cur = el.type === 'range' ? parseFloat(el.value) / 10
+                : (isFinite(parseFloat(el.value)) ? parseFloat(el.value) : displayValue(kind));
       const ev = { deltaY: e.deltaY, deltaMode: e.deltaMode, wheelDeltaY: e.wheelDeltaY, gapMs };
       const r = cancelWheelNext(cur, ev, acc,
-                                { kind, min: -40, max: 80, step: stepSize(), shift: e.shiftKey });
+        { kind: lim.wrap ? 'phase' : 'other', min: lim.min, max: lim.max, step: stepSize(), shift: e.shiftKey });
       acc = r.acc;
       if (!r.changed) return;
-      showValue(kind, r.value);
-      if (kind === 'gain') setGainDb(r.value); else setPhaseDeg(r.value);
+      $(which === 'gain' ? 'cancel-gain-slider' : 'cancel-phase-slider').value = Math.round(r.value * 10);
+      $(which === 'gain' ? 'cancel-gain-num' : 'cancel-phase-num').value = r.value.toFixed(1);
+      commitFor(kind)(r.value);
     }, { passive: false });
   }
 
-  function showValue(kind, v) {
-    const sliderId = kind === 'gain' ? 'cancel-gain-slider' : 'cancel-phase-slider';
-    const numId = kind === 'gain' ? 'cancel-gain-num' : 'cancel-phase-num';
-    $(sliderId).value = Math.round(v * 10);
-    $(numId).value = v.toFixed(1);
+  function markStepButtons() {
+    for (const k of Object.keys(CANCEL_STEP_CHOICES)) {
+      $('cancel-step-' + k).classList.toggle('active', k === stepKey);
+    }
+  }
+  function setStep(k) {
+    if (CANCEL_STEP_CHOICES[k] === undefined) return;
+    stepKey = k;
+    try { localStorage.setItem('cancelStep', k); } catch (e) { /* not persisted: fine */ }
+    markStepButtons();
   }
 
   function init() {
-    bindSlider('cancel-gain-slider', v => {
-      const db = v / 10;
-      $('cancel-gain-num').value = db.toFixed(1);
-      setGainDb(db);
-    });
-    bindSlider('cancel-phase-slider', v => {
-      const deg = v / 10;
-      $('cancel-phase-num').value = deg.toFixed(1);
-      setPhaseDeg(deg);
-    });
-    bindNumeric('cancel-gain-num', 'gain', setGainDb);
-    bindNumeric('cancel-phase-num', 'phase', setPhaseDeg);
+    bindSlider('cancel-gain-slider', 'gain');
+    bindSlider('cancel-phase-slider', 'phase');
+    bindNumeric('cancel-gain-num', 'gain');
+    bindNumeric('cancel-phase-num', 'phase');
     bindWheel($('cancel-gain-slider'), 'gain');
     bindWheel($('cancel-gain-num'), 'gain');
     bindWheel($('cancel-phase-slider'), 'phase');
@@ -5598,14 +5695,29 @@ const CancelUI = (function () {
     $('auto-scale2-cb').addEventListener('change', updateAutoNote);
   }
 
-  function setEnabled(on) { send({ cmd: 'set_cancel_enabled', enabled: !!on }); }
-  function reset() { send({ cmd: 'cancel_reset' }); }
+  function setMode(mode) { send({ cmd: 'set_cancel_mode', mode }); }
+  function setEnabled(on) { setMode(on ? (st.last_mode || 'coherent') : 'off'); }
+  function cycleMode() {
+    const next = st.last_mode === 'noise' ? 'coherent' : 'noise';
+    if (isOn()) setMode(next);
+    else send({ cmd: 'set_cancel_last_mode', mode: next });
+  }
+  function reset() {
+    if (isNoise()) {
+      send({ cmd: 'set_noise_scale_db', scale_db: -10 });
+      send({ cmd: 'set_noise_n', n: 2 });
+    } else {
+      send({ cmd: 'cancel_reset' });
+    }
+  }
   function toggleGhost() { send({ cmd: 'set_cancel_ghost', ghost: !st.ghost }); }
   function toggleFollow() { send({ cmd: 'set_cancel_follow_gain', follow_gain: !st.follow_gain }); }
-  function invert() { setPhaseDeg((st.phase_deg || 0) + 180); }
+  function toggleClamp() { send({ cmd: 'set_noise_clamp', clamp: !st.noise_clamp }); }
+  function invert() { commitFor('phase')((st.phase_deg || 0) + 180); }
 
   init();
-  return { onState: render, setEnabled, reset, toggleGhost, toggleFollow, invert, setStep };
+  return { onState: render, setEnabled, setMode, cycleMode, reset, toggleGhost, toggleFollow,
+           toggleClamp, invert, setStep };
 })();
 </script>
 
