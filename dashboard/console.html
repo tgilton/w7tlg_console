@@ -4103,6 +4103,31 @@ function v2AfGainToPos(gainPct) {
 }
 /* V2AF:END */
 
+/* V2SPEC:BEGIN — which frame a receiver draws, and the temporal smoothing step.
+   Pure: ui-redesign/test_spec_pick.js extracts this block.
+
+   v2PickFrame: with NOISE SUB processing active, the processed wideband data is
+   drawn, in every session type. Otherwise the session's normal source: the fine
+   spectrum in a digital session, else the wideband one. RX2 has no processed data
+   of its own; for it "proc" means its raw wideband frame, so both panels show the
+   same kind of spectrum while RX1 is processed.
+
+   v2SmoothInto: one exponential-average step into the buffer it is given. Each
+   trace owns its buffer. The ghost must never share the main trace's. */
+function v2PickFrame(o) {
+  if (o.procActive) return 'proc';
+  if (o.digital && o.fineAvail) return 'fine';
+  return 'wide';
+}
+function v2SmoothInto(buf, points, alpha) {
+  if (alpha < 0.01) return points;
+  if (!buf || buf.length !== points.length) return new Float32Array(points);
+  const fresh = 1 - alpha;
+  for (let i = 0; i < points.length; i++) buf[i] = fresh * points[i] + alpha * buf[i];
+  return buf;
+}
+/* V2SPEC:END */
+
 /* ── V2TRACE:BEGIN — spectrum trace colours and palette previews ──────
    Pure and stateless; each receiver holds its own selection in its own
    closure. Amendment F12: "ice" is today's exact look and is the default,
@@ -4486,7 +4511,7 @@ function setProcVisible(on) {
     };
     latestProcAt = performance.now();
     // The waterfall follows the trace: processed rows in NOISE SUB, same freeze as raw during TX.
-    if (!rigIsDigital && !rigPtt) pushWaterfallRow(latestProcFrame);
+    if (!rigPtt) pushWaterfallRow(latestProcFrame);
   };
   w.onclose = () => {
     if (procWs === w) procWs = null;
@@ -4543,7 +4568,7 @@ function connectSpectrumWs() {
 
     if (pendingHeader.kind === 'fine') {
       latestFineFrame = frame;
-      if (rigIsDigital && !rigPtt) pushWaterfallRow(frame);
+      if (rigIsDigital && !rigPtt && !procOwnsWaterfall()) pushWaterfallRow(frame);
     } else if (rigPtt) {
       // SDR Switch disconnects the antenna from the SDR during TX — freeze.
     } else if (pendingRetuneHz !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz) > 1000) {
@@ -4913,8 +4938,8 @@ function drawSpectrum() {
   ctx.clearRect(0, 0, w, h);
 
   const procFresh = procWanted && latestProcFrame && (performance.now() - latestProcAt) < 1000;
-  const frame = (rigIsDigital && latestFineFrame) ? latestFineFrame
-              : procFresh ? latestProcFrame : latestFrame;
+  const pick = v2PickFrame({ procActive: !!procFresh, digital: rigIsDigital, fineAvail: !!latestFineFrame });
+  const frame = pick === 'proc' ? latestProcFrame : pick === 'fine' ? latestFineFrame : latestFrame;
 
   if (frame && viewCenterHz !== null) {
     document.getElementById('axis-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);
@@ -4963,7 +4988,7 @@ function drawSpectrum() {
     }
     if (ghostWanted && latestGhostFrame) {
       // Ghost = raw RX1, same view and dB scale as the trace above it.
-      const gp = applySpectrumSmoothing(cropToView(latestGhostFrame, Math.round(w)));
+      const gp = applyGhostSmoothing(cropToView(latestGhostFrame, Math.round(w)));
       ctx.beginPath();
       for (let i = 0; i < gp.length; i++) {
         const x = (i / (gp.length - 1)) * w;
@@ -5096,16 +5121,16 @@ function onAvgSlider(v) {
   document.getElementById('avg-val').textContent = v + '%';
 }
 function applySpectrumSmoothing(points) {
-  if (specAvgAlpha < 0.01) return points;
-  if (!smoothedSpectrum || smoothedSpectrum.length !== points.length) {
-    smoothedSpectrum = new Float32Array(points);
-    return smoothedSpectrum;
-  }
-  const fresh = 1 - specAvgAlpha;
-  for (let i = 0; i < points.length; i++) {
-    smoothedSpectrum[i] = fresh * points[i] + specAvgAlpha * smoothedSpectrum[i];
-  }
-  return smoothedSpectrum;
+  const out = v2SmoothInto(smoothedSpectrum, points, specAvgAlpha);
+  if (out !== points) smoothedSpectrum = out;
+  return out;
+}
+// The ghost's own buffer: same AVG setting, never the main trace's history.
+let smoothedGhost = null;
+function applyGhostSmoothing(points) {
+  const out = v2SmoothInto(smoothedGhost, points, specAvgAlpha);
+  if (out !== points) smoothedGhost = out;
+  return out;
 }
 
 function dbToColor(db, floor, ceil) {
@@ -5381,6 +5406,7 @@ return {
   cancelSend: obj => send(obj),
   setGhostVisible,
   setProcVisible,
+  procActive: procOwnsWaterfall,
   linesInView,
   getScaleState,
   setScale,
@@ -5517,7 +5543,7 @@ function cancelModeLabel(lastMode) { return lastMode === 'noise' ? 'NOISE' : 'CO
 // shows). Otherwise two short lines: the display is on the raw trace, and why.
 function cancelNoiseStatusText(status) {
   if (!status || status === 'active') return null;
-  const why = { grid: 'grid mismatch', stale: 'RX2 stale', no_rx2: 'no RX2' }[status] || String(status);
+  const why = { grid: 'grid mismatch', stale: 'RX2 stale', no_rx2: 'no RX2', error: 'error' }[status] || String(status);
   return 'BYPASS:\n' + why;
 }
 // "~5.1% false": one decimal from 1% up, two below. Empty when there is no estimate.
@@ -6155,7 +6181,7 @@ function connectSpectrumWs2() {
       // (Panadapter's connectSpectrumWs) — used when RX2 is selected as
       // the digital-audio source, same as RX1's DATA-U zoom.
       latestFineFrame2 = frame;
-      if (rigIsDigital && !rigPtt) pushWaterfallRow2(frame);
+      if (rigIsDigital && !rigPtt && !Panadapter.procActive()) pushWaterfallRow2(frame);
     } else if (rigPtt) {
       // SDR Switch disconnects the antenna from the SDR during TX — freeze.
     } else if (pendingRetuneHz2 !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz2) > 1000) {
@@ -6164,7 +6190,7 @@ function connectSpectrumWs2() {
       pendingRetuneHz2 = null;
       if (viewCenterHz === null || !isViewWithinCapture2(frame)) viewCenterHz = frame.centerFreqHz;
       latestFrame2 = frame;
-      if (!rigIsDigital) pushWaterfallRow2(frame);
+      if (!rigIsDigital || Panadapter.procActive()) pushWaterfallRow2(frame);
     }
     pendingHeader2 = null;
   };
@@ -6657,7 +6683,10 @@ function drawSpectrum2() {
   // frames while RX2 is the digital-audio source, same as RX1's own
   // DATA-U zoom (Terry 2026-09-12: "RX2 window doesn't use the fine
   // resolution on the 3k spectrum").
-  const frame2 = (rigIsDigital && latestFineFrame2) ? latestFineFrame2 : latestFrame2;
+  // While RX1 shows processed wideband data (NOISE SUB active), RX2 shows its raw
+  // wideband frame too, so the two panels are the same kind of spectrum.
+  const pick2 = v2PickFrame({ procActive: Panadapter.procActive(), digital: rigIsDigital, fineAvail: !!latestFineFrame2 });
+  const frame2 = pick2 === 'fine' ? latestFineFrame2 : latestFrame2;
 
   if (frame2 && viewCenterHz !== null) {
     document.getElementById('axis2-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);

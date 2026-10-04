@@ -66,7 +66,7 @@ fi
 # ------------------------------------------------------------ 2. node tests
 head_ "2. node unit tests"
 if command -v node >/dev/null 2>&1; then
-  for t in test_meter_math test_af_taper test_af_paths test_palettes test_cancel_wheel; do
+  for t in test_meter_math test_af_taper test_af_paths test_palettes test_cancel_wheel test_spec_pick; do
     if out=$(node "ui-redesign/$t.js" 2>&1); then
       pass "$t.js — $(printf '%s' "$out" | tail -n 1)"
     else

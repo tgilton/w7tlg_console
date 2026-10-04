@@ -161,6 +161,7 @@ check('active shows the lines count (no status)', cancelNoiseStatusText('active'
 check('grid -> BYPASS: grid mismatch', cancelNoiseStatusText('grid') === 'BYPASS:\ngrid mismatch', JSON.stringify(cancelNoiseStatusText('grid')));
 check('stale -> BYPASS: RX2 stale', cancelNoiseStatusText('stale') === 'BYPASS:\nRX2 stale', '');
 check('no_rx2 -> BYPASS: no RX2', cancelNoiseStatusText('no_rx2') === 'BYPASS:\nno RX2', '');
+check('error -> BYPASS: error', cancelNoiseStatusText('error') === 'BYPASS:\nerror', '');
 check('5.1 -> "~5.1% false"', cancelFalseText(5.1) === '~5.1% false', cancelFalseText(5.1));
 check('0.274 -> "~0.27% false"', cancelFalseText(0.274) === '~0.27% false', cancelFalseText(0.274));
 check('no estimate -> empty', cancelFalseText(null) === '' && cancelFalseText(undefined) === '', '');
