@@ -17,6 +17,10 @@ new Function('exports', html.slice(a, b)
   + '\nexports.cancelWheelAllowed = cancelWheelAllowed;'
   + '\nexports.cancelGridRound = cancelGridRound;'
   + '\nexports.CHOICES = CANCEL_STEP_CHOICES;'
+  + '\nexports.cancelBetaKey = cancelBetaKey;'
+  + '\nexports.cancelBetaWheel = cancelBetaWheel;'
+  + '\nexports.cancelAudioToggle = cancelAudioToggle;'
+  + '\nexports.cancelModeLabel = cancelModeLabel;'
   + '\nexports.TRIGGER = CANCEL_WHEEL_TRIGGER_PX;'
   + '\nexports.SCROLL_MS = CANCEL_WHEEL_SCROLL_MS;')(sandbox);
 const { cancelWheelIsMouse, cancelWheelAccumulate, cancelWheelNext, cancelWheelAllowed,
@@ -110,6 +114,42 @@ console.log('direction');
 check('mouse wheel up (deltaY < 0) increases', gain(0, ev(-3)).value > 0, '');
 check('mouse wheel down (deltaY > 0) decreases', gain(0, ev(3)).value < 0, '');
 check('isMouse: a trackpad stream is not a mouse', cancelWheelIsMouse(ev(-3, { gapMs: 8 })) === false, '');
+
+const { cancelBetaKey, cancelBetaWheel, cancelAudioToggle, cancelModeLabel } = sandbox;
+
+console.log('AUDIO toggle: one switch, NOISE mode only');
+let cmd = cancelAudioToggle({ mode: 'noise', noise_audio_on: false });
+check('off -> on sends set_noise_audio on', cmd && cmd.cmd === 'set_noise_audio' && cmd.on === true, JSON.stringify(cmd));
+cmd = cancelAudioToggle({ mode: 'noise', noise_audio_on: true });
+check('on -> off sends set_noise_audio off', cmd && cmd.on === false, JSON.stringify(cmd));
+check('no command in COHERENT mode', cancelAudioToggle({ mode: 'coherent', noise_audio_on: false }) === null, '');
+check('no command when CANCEL is off', cancelAudioToggle({ mode: 'off', noise_audio_on: true }) === null, '');
+check('there is no A/B field in the command', cmd && Object.keys(cmd).sort().join() === 'cmd,on', JSON.stringify(cmd));
+check('short mode labels', cancelModeLabel('noise') === 'NOISE' && cancelModeLabel('coherent') === 'COH', '');
+
+console.log('beta (max attenuation): arrow keys');
+check('ArrowUp on MED: -20 -> -19.5', cancelBetaKey(-20, 'ArrowUp', 0.5, false) === -19.5, cancelBetaKey(-20, 'ArrowUp', 0.5, false));
+check('ArrowDown on MED: -20 -> -20.5', cancelBetaKey(-20, 'ArrowDown', 0.5, false) === -20.5, '');
+check('Shift is 5x: -20 -> -17.5', cancelBetaKey(-20, 'ArrowUp', 0.5, true) === -17.5, '');
+check('FINE: -20 -> -19.9', cancelBetaKey(-20, 'ArrowUp', 0.1, false) === -19.9, '');
+check('COARSE: -20 -> -22', cancelBetaKey(-20, 'ArrowDown', 2.0, false) === -22, '');
+check('clamps at -6', cancelBetaKey(-6, 'ArrowUp', 2.0, true) === -6, '');
+check('clamps at -40', cancelBetaKey(-39, 'ArrowDown', 2.0, true) === -40, '');
+check('other keys are ignored', cancelBetaKey(-20, 'Enter', 0.5, false) === null, '');
+
+console.log('beta: wheel');
+const notch = d => ({ deltaY: d, deltaMode: 0, wheelDeltaY: undefined, gapMs: 60 });
+check('one mouse notch up on MED: -20 -> -19.5', cancelBetaWheel(-20, notch(-3), 0, 0.5, false).value === -19.5, '');
+check('one mouse notch down: -20 -> -20.5', cancelBetaWheel(-20, notch(3), 0, 0.5, false).value === -20.5, '');
+check('Shift notch: -20 -> -22.5', cancelBetaWheel(-20, notch(100), 0, 0.5, true).value === -22.5, '');
+check('wheel clamps at -6 and reports no change', cancelBetaWheel(-6, notch(-3), 0, 0.5, false).changed === false, '');
+check('wheel clamps at -40', cancelBetaWheel(-40, notch(3), 0, 2.0, false).value === -40, '');
+let bv = -20, ba = 0, bsteps = 0;
+for (let i = 0; i < 40; i++) {
+  const br = cancelBetaWheel(bv, { deltaY: -3, deltaMode: 0, gapMs: 8 }, ba, 0.5, false);
+  ba = br.acc; if (br.changed) { bsteps++; bv = br.value; }
+}
+check('trackpad: 120 px is 10 steps of 0.5 (-20 -> -15)', bsteps === 10 && bv === -15, `steps=${bsteps} v=${bv}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

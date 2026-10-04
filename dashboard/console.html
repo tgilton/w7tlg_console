@@ -2739,7 +2739,15 @@ html, body { background: var(--v2-bg-page); }
 .cancel-res { flex: 1 1 auto; min-width: 0; display: flex; justify-content: space-between; align-items: baseline; color: var(--chrome-label); font-size: 0.75rem; }
 .cancel-res b { color: inherit; font-size: 1rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 .cancel-step { display: inline-flex; gap: 4px; margin-top: 6px; }
+/* NOISE mode: the second readout cell is the max-attenuation control (value, then unit). */
+.cancel-res.cancel-beta { flex-direction: row-reverse; justify-content: flex-end; gap: 5px; align-items: center; }
+.cancel-res.cancel-beta span { font-size: 0.6rem; line-height: 1.05; width: 38px; white-space: normal; }
+.cancel-res.cancel-beta b { cursor: ns-resize; padding: 0 3px; border: 1px solid var(--border); border-radius: 3px; }
+.cancel-res.cancel-beta b:focus { outline: 1px solid var(--state-selected); }
 .cancel-row-tight { gap: 4px; }
+/* Row 1 holds ON, OFF, MODE and AUDIO in 190 px: 4 px between buttons, 8 px between lines. */
+.cancel-row-top { gap: 8px 4px; }
+.cancel-row-top .dsp-agc-btn { padding-left: 4px; padding-right: 4px; }
 .cancel-step .dsp-agc-btn { min-width: 52px; }
 .cancel-note { margin-top: 6px; font-size: 0.75rem; color: var(--state-selected); }
 .cancel-row .dsp-agc-btn { flex: 0 0 auto; }
@@ -2905,10 +2913,11 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
 
     <div class="section-box" id="box-cancel">
     <h2 title="y = RX1 &minus; w&middot;RX2 — RX1 with RX2 subtracted at weight w">Cancel</h2>
-        <div class="cancel-row">
+        <div class="cancel-row cancel-row-top">
           <button class="dsp-agc-btn" id="cancel-on" onclick="CancelUI.setEnabled(true)" title="Turn on the selected mode">ON</button>
           <button class="dsp-agc-btn active" id="cancel-off" onclick="CancelUI.setEnabled(false)">OFF</button>
-          <button class="dsp-agc-btn" id="cancel-mode" onclick="CancelUI.cycleMode()" title="Switch between COHERENT (cancels RX2 from RX1 in the IQ) and NOISE SUB (display only)">COHERENT</button>
+          <button class="dsp-agc-btn" id="cancel-mode" onclick="CancelUI.cycleMode()" title="Mode: COH = coherent (cancels RX2 from RX1 in the IQ). NOISE = noise sub (spectrum display, and RX1 audio when AUDIO is on)">COH</button>
+          <button class="dsp-agc-btn" id="cancel-audio" onclick="CancelUI.toggleAudio()" disabled title="NOISE mode only. Off: raw RX1 audio. On: flagged lines attenuated in RX1 audio. The WSJT-X feed stays raw.">AUDIO</button>
           <button class="dsp-agc-btn active" id="cancel-follow" onclick="CancelUI.toggleFollow()" title="While CANCEL is on, RX2's RF gain follows RX1">RX2 GAIN FOLLOWS RX1</button>
         </div>
         <div class="cancel-row cancel-row-tight">
@@ -2937,7 +2946,7 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
         <div class="cancel-note" id="cancel-auto-note" style="display:none">AUTO is on. Fixed scale is what keeps the two traces comparable while CANCEL is on.</div>
         <div class="cancel-readout">
           <span class="cancel-res"><span id="cancel-res-label1">span</span><b id="cancel-resid-span">&mdash;</b></span>
-          <span class="cancel-res"><span id="cancel-res-label2">audio</span><b id="cancel-resid-pb">&mdash;</b></span>
+          <span class="cancel-res" id="cancel-res-cell2"><span id="cancel-res-label2">audio</span><b id="cancel-resid-pb">&mdash;</b></span>
         </div>
     </div>
     <div class="section-box" id="box-antenna">
@@ -5479,6 +5488,24 @@ function cancelWheelNext(value, ev, acc, opts) {
 function cancelWheelAllowed(nowMs, lastPageScrollMs) {
   return !(Number.isFinite(lastPageScrollMs) && nowMs - lastPageScrollMs < CANCEL_WHEEL_SCROLL_MS);
 }
+// Max attenuation (beta) for the audio stage, in dB: -40 (deepest) to -6.
+const CANCEL_BETA_MIN = -40, CANCEL_BETA_MAX = -6;
+function cancelBetaKey(value, key, step, shift) {
+  if (key !== 'ArrowUp' && key !== 'ArrowDown') return null;
+  const size = step * (shift ? CANCEL_SHIFT_MULT : 1);
+  const v = cancelGridRound(value, step) + (key === 'ArrowUp' ? size : -size);
+  return Math.round(Math.min(CANCEL_BETA_MAX, Math.max(CANCEL_BETA_MIN, v)) * 10) / 10;
+}
+function cancelBetaWheel(value, ev, acc, step, shift) {
+  return cancelWheelNext(value, ev, acc,
+    { kind: 'other', min: CANCEL_BETA_MIN, max: CANCEL_BETA_MAX, step, shift });
+}
+// The one AUDIO switch: off = raw, on = processed. It only exists in NOISE mode.
+function cancelAudioToggle(st) {
+  if (st.mode !== 'noise') return null;
+  return { cmd: 'set_noise_audio', on: !st.noise_audio_on };
+}
+function cancelModeLabel(lastMode) { return lastMode === 'noise' ? 'NOISE' : 'COH'; }
 /* CANCELWHEEL:END */
 
 // RX1 CANCEL controls, COHERENT and NOISE SUB. Reads state.cancel from RX1's
@@ -5493,7 +5520,8 @@ const CancelUI = (function () {
   const send = obj => Panadapter.cancelSend(obj);
   const editing = new Set();
   let st = { mode: 'off', last_mode: 'coherent', gain_db: 0, phase_deg: 0,
-             noise_scale_db: -10, noise_n: 2, noise_clamp: false, ghost: false, follow_gain: true };
+             noise_scale_db: -10, noise_n: 2, noise_clamp: false, noise_beta_db: -20,
+             noise_audio_on: false, ghost: false, follow_gain: true };
   let prevOn = false;
   let savedScale = null;
   let stepKey = CANCEL_STEP_DEFAULT;
@@ -5561,8 +5589,10 @@ const CancelUI = (function () {
     $('cancel-invert').disabled = noise;
     $('cancel-clamp').disabled = !noise;
     $('cancel-res-label1').textContent = noise ? 'lines' : 'span';
-    $('cancel-res-label2').textContent = noise ? 'RX1' : 'audio';
-    $('cancel-res-label2').parentElement.title = noise ? 'RX1 noise floor' : '';
+    $('cancel-res-label2').textContent = noise ? 'dB max atten' : 'audio';
+    $('cancel-res-cell2').classList.toggle('cancel-beta', noise);
+    if (noise) $('cancel-resid-pb').tabIndex = 0; else $('cancel-resid-pb').removeAttribute('tabindex');
+    $('cancel-audio').disabled = !noise;
     $('cancel-res-label1').parentElement.title = noise
       ? 'Contiguous groups of detected bins inside the displayed span' : '';
   }
@@ -5576,7 +5606,8 @@ const CancelUI = (function () {
     }
     $('cancel-on').classList.toggle('active', on);
     $('cancel-off').classList.toggle('active', !on);
-    $('cancel-mode').textContent = (c.last_mode === 'noise') ? 'NOISE SUB' : 'COHERENT';
+    $('cancel-mode').textContent = cancelModeLabel(c.last_mode);
+    $('cancel-audio').classList.toggle('active', isNoise() && !!c.noise_audio_on);
     $('cancel-mode').classList.toggle('active', on);
     $('cancel-ghost').classList.toggle('active', !!c.ghost);
     $('cancel-follow').classList.toggle('active', !!c.follow_gain);
@@ -5598,8 +5629,11 @@ const CancelUI = (function () {
       const status = c.noise_status && c.noise_status !== 'active' ? c.noise_status
                    : (inView === null ? '—' : String(inView));
       $('cancel-resid-span').textContent = status;
-      $('cancel-resid-pb').textContent = (c.noise_floor1_db === null || c.noise_floor1_db === undefined)
-        ? '—' : `${c.noise_floor1_db.toFixed(1)} dB`;
+      if (performance.now() >= betaLocalUntil) $('cancel-resid-pb').textContent = c.noise_beta_db.toFixed(1);
+      const fl = c.noise_floor1_db;
+      $('cancel-res-cell2').title = 'Maximum attenuation of a flagged line in RX1 audio (-6 to -40 dB). '
+        + 'Wheel or arrow keys; step from STEP, Shift x5. RX1 noise floor: '
+        + ((fl === null || fl === undefined) ? '—' : fl.toFixed(1) + ' dB');
     } else {
       setField('cancel-gain-slider', Math.round(c.gain_db * 10));
       setField('cancel-gain-num', c.gain_db.toFixed(1));
@@ -5607,6 +5641,7 @@ const CancelUI = (function () {
       setField('cancel-phase-num', c.phase_deg.toFixed(1));
       $('cancel-resid-span').textContent = fmtDb(c.residual_span_db);
       $('cancel-resid-pb').textContent = fmtDb(c.residual_passband_db);
+      $('cancel-res-cell2').title = '';
     }
     document.body.classList.toggle('rx2-cancel-locked', !!c.rx2_locked);
     document.body.classList.toggle('rx2-cancel-gain', !!c.rx2_locked && !!c.follow_gain);
@@ -5698,6 +5733,42 @@ const CancelUI = (function () {
     }, { passive: false });
   }
 
+  // Beta lives in the second readout cell in NOISE mode. A local change shows at once;
+  // state pushes leave it alone for a moment so they do not fight the wheel.
+  let betaLocalUntil = 0;
+  function commitBeta(v) {
+    $('cancel-resid-pb').textContent = v.toFixed(1);
+    betaLocalUntil = performance.now() + 500;
+    send({ cmd: 'set_noise_beta', beta_db: v });
+  }
+  function bindBeta() {
+    const el = $('cancel-resid-pb');
+    let acc = 0, lastEventAt = -Infinity;
+    const current = () => {
+      const v = parseFloat(el.textContent);
+      return isFinite(v) ? v : st.noise_beta_db;
+    };
+    el.addEventListener('keydown', e => {
+      if (!isNoise()) return;
+      const next = cancelBetaKey(current(), e.key, stepSize(), e.shiftKey);
+      if (next === null) return;
+      e.preventDefault();
+      if (next !== current()) commitBeta(next);
+    });
+    el.addEventListener('wheel', e => {
+      if (!isNoise()) return;
+      const now = performance.now();
+      const gapMs = now - lastEventAt;
+      lastEventAt = now;
+      if (!cancelWheelAllowed(now, _v2LastPageScroll)) { acc = 0; return; }
+      e.preventDefault();
+      const ev = { deltaY: e.deltaY, deltaMode: e.deltaMode, wheelDeltaY: e.wheelDeltaY, gapMs };
+      const r = cancelBetaWheel(current(), ev, acc, stepSize(), e.shiftKey);
+      acc = r.acc;
+      if (r.changed) commitBeta(r.value);
+    }, { passive: false });
+  }
+
   function markStepButtons() {
     for (const k of Object.keys(CANCEL_STEP_CHOICES)) {
       $('cancel-step-' + k).classList.toggle('active', k === stepKey);
@@ -5719,6 +5790,7 @@ const CancelUI = (function () {
     bindWheel($('cancel-gain-num'), 'gain');
     bindWheel($('cancel-phase-slider'), 'phase');
     bindWheel($('cancel-phase-num'), 'phase');
+    bindBeta();
     for (const k of Object.keys(CANCEL_STEP_CHOICES)) {
       $('cancel-step-' + k).addEventListener('click', () => setStep(k));
     }
@@ -5745,11 +5817,12 @@ const CancelUI = (function () {
   function toggleGhost() { send({ cmd: 'set_cancel_ghost', ghost: !st.ghost }); }
   function toggleFollow() { send({ cmd: 'set_cancel_follow_gain', follow_gain: !st.follow_gain }); }
   function toggleClamp() { send({ cmd: 'set_noise_clamp', clamp: !st.noise_clamp }); }
+  function toggleAudio() { const m = cancelAudioToggle(st); if (m) send(m); }
   function invert() { commitFor('phase')((st.phase_deg || 0) + 180); }
 
   init();
   return { onState: render, setEnabled, setMode, cycleMode, reset, toggleGhost, toggleFollow,
-           toggleClamp, invert, setStep };
+           toggleClamp, toggleAudio, invert, setStep };
 })();
 </script>
 
