@@ -69,7 +69,11 @@ class FakeSdrClient:
         self.audio_b = AudioDemodulator(input_rate_hz=sample_rate_hz)
         self.combiner = Combiner(input_rate_hz=sample_rate_hz)
         self.digital_audio = DigitalAudioOutput()
-        self.audio.on_audio(self.digital_audio.on_audio_frame)
+        self.audio.on_digital(self.digital_audio.on_audio_frame)
+        from sdr.audio_stft import MaskProvider, StftGainStage
+        self.noise_mask = MaskProvider()
+        self.audio.stft = StftGainStage(provider=self.noise_mask,
+                                        target_hz=lambda: self.audio.target.freq_hz or self.rf_freq_hz)
         # RX1 CANCEL: the real Canceller, with its RX1-downstream output
         # captured in cancelled_out instead of a live spectrum queue.
         self.cancelled_out: list = []

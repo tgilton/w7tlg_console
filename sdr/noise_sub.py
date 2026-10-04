@@ -98,10 +98,12 @@ def local_floor(p: np.ndarray, width: Optional[int] = None):
 class NoiseSubCore:
     """Stateful per-frame processing. The 3-of-5 history lives here."""
 
-    def __init__(self, scale_db: float = -10.0, n: float = 2.0, clamp: bool = False):
+    def __init__(self, scale_db: float = -10.0, n: float = 2.0, clamp: bool = False,
+                 beta_db: float = -20.0):
         self.scale_db = float(scale_db)
         self.n = float(n)
         self.clamp = bool(clamp)
+        self.beta_db = float(beta_db)     # the audio stage's maximum attenuation (a power floor)
         self.reset_history()
 
     def reset_history(self):
@@ -128,6 +130,10 @@ class NoiseSubCore:
             detected = np.asarray(mask, dtype=bool)
         excess = np.where(detected, np.maximum(p2 - f2, 0.0), 0.0)
         k = 10.0 ** (self.scale_db / 10.0)
+        # Power ratio per bin for the audio stage: 1 - k*E2/P1 on flagged bins, 1 elsewhere,
+        # floored at beta. The audio gain is the square root of this.
+        beta_lin = 10.0 ** (self.beta_db / 10.0)
+        ratio = np.where(detected, np.clip(1.0 - k * excess / np.maximum(p1, 1e-30), beta_lin, 1.0), 1.0)
         p_out = f1 + np.maximum(p1 - f1 - k * excess, 0.0)
         thr1 = f1 + self.n * s1
         draw = np.where(self.clamp & (p_out < thr1), f1, p_out) if self.clamp else p_out
@@ -150,6 +156,8 @@ class NoiseSubCore:
             "groups_total": int(groups_total),
             "line_bins": int(np.count_nonzero(detected)),
             "lines": int(groups_total),
+            "ratio": ratio,
+            "mask": detected,
             "floor1_db": float(10 * np.log10(np.mean(f1) + 1e-30)),
             "floor2_db": float(10 * np.log10(np.mean(f2) + 1e-30)),
         }
@@ -207,8 +215,9 @@ class BlockMaskTracker:
 class NoiseSubProcessor:
     """Frame-level wrapper: freshness and grid checks, dB in and out."""
 
-    def __init__(self, scale_db: float = -10.0, n: float = 2.0, clamp: bool = False):
-        self.core = NoiseSubCore(scale_db, n, clamp)
+    def __init__(self, scale_db: float = -10.0, n: float = 2.0, clamp: bool = False,
+                 beta_db: float = -20.0):
+        self.core = NoiseSubCore(scale_db, n, clamp, beta_db)
         self.tracker = BlockMaskTracker(n)
 
     def set_thresh(self, n: float):
@@ -258,6 +267,7 @@ class NoiseSubProcessor:
             "groups": r["groups"],
         }
         return {"status": "active", "frame": frame, "lines": r["lines"],
+                "ratio": r["ratio"], "mask": r["mask"],
                 "floor1_db": r["floor1_db"], "floor2_db": r["floor2_db"]}
 
     def _refuse(self, status: str) -> dict:

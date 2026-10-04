@@ -103,6 +103,9 @@ class Canceller:
         self.noise_scale_db = -10.0
         self.noise_n = 2.0
         self.noise_clamp = False
+        self.noise_beta_db = -20.0       # audio stage maximum attenuation (power), -6..-40 dB
+        self.noise_audio_on = False      # AUDIO switch: off each session, not persisted
+        self.noise_audio_ab = True       # A/B: True = processed audio, False = raw (AUDIO on only)
         self.last_mode = "coherent"      # the mode ON and MODE go back to
         self.noise_status: Optional[str] = None
         self.noise_lines = 0
@@ -189,6 +192,19 @@ class Canceller:
         self.noise_n = round(min(6.0, max(1.0, _quantize(v, 0.1))), 1)
         self._save_settings()
 
+    def set_noise_beta(self, db: float):
+        v = float(db)
+        if not np.isfinite(v):
+            raise ValueError("beta must be a finite number")
+        self.noise_beta_db = round(min(-6.0, max(-40.0, _quantize(v, 0.1))), 1)
+        self._save_settings()
+
+    def set_noise_audio(self, on: bool):
+        self.noise_audio_on = bool(on)
+
+    def set_noise_audio_ab(self, processed: bool):
+        self.noise_audio_ab = bool(processed)
+
     def set_noise_clamp(self, on: bool):
         self.noise_clamp = bool(on)
         self._save_settings()
@@ -223,6 +239,7 @@ class Canceller:
             self.noise_scale_db = round(min(40.0, max(-40.0, float(d.get("noise_scale_db", -10.0)))), 1)
             self.noise_n = round(min(6.0, max(1.0, float(d.get("noise_n", 2.0)))), 1)
             self.noise_clamp = bool(d.get("noise_clamp", False))
+            self.noise_beta_db = round(min(-6.0, max(-40.0, float(d.get("noise_beta_db", -20.0)))), 1)
             lm = d.get("last_mode", "coherent")
             self.last_mode = lm if lm in ("coherent", "noise") else "coherent"
         except Exception:
@@ -238,7 +255,8 @@ class Canceller:
                 json.dump({"gain_db": self.gain_db, "phase_deg": self.phase_deg,
                            "ghost": self.ghost, "follow_gain": self.follow_gain,
                            "noise_scale_db": self.noise_scale_db, "noise_n": self.noise_n,
-                           "noise_clamp": self.noise_clamp, "last_mode": self.last_mode}, fh)
+                           "noise_clamp": self.noise_clamp, "noise_beta_db": self.noise_beta_db,
+                           "last_mode": self.last_mode}, fh)
             os.replace(tmp, self.settings_path)
         except Exception:
             logger.exception("cancel settings not saved")
@@ -551,6 +569,9 @@ class Canceller:
             "noise_scale_db": self.noise_scale_db,
             "noise_n": self.noise_n,
             "noise_clamp": self.noise_clamp,
+            "noise_beta_db": self.noise_beta_db,
+            "noise_audio_on": self.noise_audio_on,
+            "noise_audio_ab": self.noise_audio_ab,
             "noise_status": self.noise_status,
             "noise_lines": self.noise_lines,
             "noise_false_pct": _round_or_none(self.noise_false_pct),

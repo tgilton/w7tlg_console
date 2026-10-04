@@ -48,6 +48,7 @@ from . import sdrplay_capi as capi
 from .audio_demod import AudioDemodulator
 from .canceller import Canceller
 from .combiner import Combiner
+from .audio_stft import MaskProvider, StftGainStage
 from .noise_sub import BLOCK_FRAMES
 from .pairing_debug import PairingDebug
 from .virtual_audio_output import DigitalAudioOutput
@@ -314,6 +315,11 @@ class SdrClient:
         # still frontend/server.py work, not built this pass — defaults to
         # Channel A, matching today's behavior exactly until it exists.
         self.audio_b = AudioDemodulator(input_rate_hz=sample_rate_hz)
+        # NOISE SUB audio stage on RX1 (sdr/audio_stft.py). The mask comes from the
+        # processor through noise_mask; with no mask published the gains are 1.
+        self.noise_mask = MaskProvider()
+        self.audio.stft = StftGainStage(provider=self.noise_mask,
+                                        target_hz=lambda: self.audio.target.freq_hz or self.rf_freq_hz)
         # RX0 — manual tunable RX1/RX2 combine (diversity experiment,
         # 2026-09-12). Off until the Diversity page actually enables it
         # (Combiner.enabled), so it costs nothing when nobody's looking at
@@ -332,7 +338,7 @@ class SdrClient:
         # software (WSJT-X etc.) via a virtual audio cable instead of needing
         # the antenna switched back to the radio's own receiver.
         self.digital_audio = DigitalAudioOutput()
-        self.audio.on_audio(self.digital_audio.on_audio_frame)
+        self.audio.on_digital(self.digital_audio.on_audio_frame)
         # Digital-mode fine spectrum rides the same broadcast path as the
         # wideband one (_publish already just fans out to whatever's
         # subscribed via on_spectrum) — the "kind": "fine" tag on the frame

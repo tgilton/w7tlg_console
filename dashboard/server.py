@@ -326,9 +326,9 @@ def build_state_payload(state: StationState) -> dict:
         # narrowing down whether the BlackHole callback registration or
         # the actual device write is the gap).
         data["rig"]["digital_audio_registered_a"] = \
-            sdr.digital_audio.on_audio_frame in sdr.audio._audio_callbacks
+            sdr.digital_audio.on_audio_frame in sdr.audio._digital_callbacks
         data["rig"]["digital_audio_registered_b"] = \
-            sdr.digital_audio.on_audio_frame in sdr.audio_b._audio_callbacks
+            sdr.digital_audio.on_audio_frame in sdr.audio_b._digital_callbacks
         data["rig"]["digital_audio_qsize"] = sdr.digital_audio._q.qsize()
         data["rig"]["sdr_antenna"] = sdr.antenna_label
         data["rig"]["sdr_rf_gain_pct"] = sdr.rf_gain_pct
@@ -415,6 +415,8 @@ async def on_station_state(state: StationState):
             sdr.audio_b.tx_active = False
             sdr.combiner.tx_active = False
             sdr.canceller.clear_tx()
+            if sdr.audio.stft is not None:
+                sdr.audio.stft.tx_active = False
         if rx2_locked(sdr):
             # RX2 follows RX1 while CANCEL is on (see sdr/canceller.py).
             apply_rx2_follow(sdr)
@@ -523,12 +525,22 @@ async def on_spectrum_frame_noise(frame: dict):
         noise_proc.core.scale_db = c.noise_scale_db
         noise_proc.core.n = c.noise_n
         noise_proc.core.clamp = c.noise_clamp
+        noise_proc.core.beta_db = c.noise_beta_db
         loop = asyncio.get_running_loop()
         res = await loop.run_in_executor(None, noise_proc.process_pair,
                                          frame, _latest_b_frame, time.time())
     finally:
         _noise_busy = False
     c.noise_status = res["status"]
+    # The audio stage: the mask and power ratios from this frame, on RX1's grid.
+    stft = sdr.audio.stft
+    if stft is not None:
+        stft.enabled = bool(c.noise_audio_on and c.noise_audio_ab and c.noise_enabled)
+        stft.beta_db = c.noise_beta_db
+    if res["status"] == "active" and res.get("ratio") is not None:
+        sdr.noise_mask.publish(res["mask"], res["ratio"], frame["center_freq_hz"], frame["span_hz"])
+    else:
+        sdr.noise_mask.clear()
     c.noise_lines = res["lines"]
     c.noise_false_pct = noise_proc.false_alarm_pct()
     c.noise_floor1_db = res["floor1_db"]
@@ -696,6 +708,8 @@ async def _fast_ptt_monitor():
                         sdr.audio_b.tx_active = False   # see on_station_state's matching fix
                         sdr.combiner.tx_active = False
                         sdr.canceller.clear_tx()
+                        if sdr.audio.stft is not None:
+                            sdr.audio.stft.tx_active = False
                     logger.debug("Fast PTT: TX gate closed")
 
             last_ptt = ptt
@@ -1196,6 +1210,16 @@ def _rx2_lock_message(cmd, msg) -> Optional[str]:
             f"turn CANCEL off to tune RX2 independently")
 
 
+def _sync_audio_stage():
+    """The stage runs only when NOISE SUB is on, AUDIO is on and A/B is on processed.
+    Otherwise its gains are 1, and the latency is the same."""
+    if sdr is None or sdr.audio.stft is None:
+        return
+    c = sdr.canceller
+    sdr.audio.stft.enabled = bool(c.noise_enabled and c.noise_audio_on and c.noise_audio_ab)
+    sdr.audio.stft.beta_db = c.noise_beta_db
+
+
 async def _set_cancel_mode(mode: str):
     """off / coherent / noise. The coherent IQ path is turned on and off only
     here, and only for the coherent mode; NOISE SUB is display-only and never
@@ -1219,6 +1243,9 @@ async def _set_cancel_mode(mode: str):
         c.noise_status = None
         c.noise_false_pct = None
         sdr.block_avg_enabled = False
+        sdr.noise_mask.clear()
+        if sdr.audio.stft is not None:
+            sdr.audio.stft.enabled = False
     if mode == "coherent" and cur != "coherent":
         c.set_enabled(True)
     if mode == "noise":
@@ -1265,6 +1292,14 @@ async def _handle_cancel_command(cmd, msg) -> tuple:
             c.set_noise_n(float(msg["n"]))
         elif cmd == "set_noise_clamp":
             c.set_noise_clamp(bool(msg["clamp"]))
+        elif cmd == "set_noise_audio":
+            c.set_noise_audio(bool(msg["on"]))
+            _sync_audio_stage()
+        elif cmd == "set_noise_audio_ab":
+            c.set_noise_audio_ab(bool(msg["processed"]))
+            _sync_audio_stage()
+        elif cmd == "set_noise_beta":
+            c.set_noise_beta(float(msg["beta_db"]))
         elif cmd == "cancel_reset":
             c.reset_weight()
         return True, None
@@ -1427,7 +1462,8 @@ async def handle_ws_command(text: str, ws: WebSocket):
         elif cmd in ("set_cancel_enabled", "set_cancel_mode", "set_cancel_last_mode",
                      "set_cancel_gain_db", "set_cancel_phase_deg", "set_cancel_ghost",
                      "set_cancel_follow_gain", "set_noise_scale_db", "set_noise_n",
-                     "set_noise_clamp", "cancel_reset"):
+                     "set_noise_clamp", "set_noise_audio", "set_noise_audio_ab",
+                     "set_noise_beta", "cancel_reset"):
             ok, error = await _handle_cancel_command(cmd, msg)
             response = {"type": "cmd_response", "cmd": cmd, "ok": ok}
             if error:
@@ -1631,8 +1667,8 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 channel = msg.get("channel", "A")
                 target = sdr.audio_b if channel == "B" else sdr.audio
                 other = sdr.audio if channel == "B" else sdr.audio_b
-                other.off_audio(sdr.digital_audio.on_audio_frame)
-                target.on_audio(sdr.digital_audio.on_audio_frame)
+                other.off_digital(sdr.digital_audio.on_audio_frame)
+                target.on_digital(sdr.digital_audio.on_audio_frame)
                 # AudioDemodulator.enabled (the per-channel AUDIO button,
                 # for local speaker monitoring) gates ALL processing —
                 # feed() is a no-op while it's off. Selecting a channel as
