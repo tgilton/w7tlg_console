@@ -2737,6 +2737,9 @@ html, body { background: var(--v2-bg-page); }
 .cancel-unit { color: var(--chrome-label); }
 .cancel-readout { display: flex; gap: 16px; margin-top: 6px; color: var(--chrome-label); font-size: 0.8rem; }
 .cancel-readout b { color: inherit; font-weight: 600; }
+.cancel-note { margin-top: 6px; font-size: 0.75rem; color: var(--state-selected); }
+.cancel-row .dsp-agc-btn { flex: 0 0 auto; }
+.cancel-num { min-height: 28px; }
 .cancel-chip { margin-left: 8px; color: var(--state-selected); background: var(--state-selected-bg); border: 1px solid currentColor; }
 body.rx2-cancel-locked #freq2-input, body.rx2-cancel-locked #tune2-btn, body.rx2-cancel-locked #span2-slider,
 body.rx2-cancel-locked #mode2-USB, body.rx2-cancel-locked #mode2-LSB, body.rx2-cancel-locked #width2-slider,
@@ -2896,6 +2899,34 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
       </div>
     </div>
 
+    <div class="section-box" id="box-cancel">
+    <h2 title="y = RX1 &minus; w&middot;RX2 — RX1 with RX2 subtracted at weight w">Cancel</h2>
+        <div class="cancel-row">
+          <button class="dsp-agc-btn" id="cancel-on" onclick="CancelUI.setEnabled(true)">ON</button>
+          <button class="dsp-agc-btn active" id="cancel-off" onclick="CancelUI.setEnabled(false)">OFF</button>
+          <button class="dsp-agc-btn" id="cancel-ghost" onclick="CancelUI.toggleGhost()" title="Show the raw RX1 spectrum as a dashed ghost trace">GHOST</button>
+          <button class="dsp-agc-btn active" id="cancel-follow" onclick="CancelUI.toggleFollow()" title="While CANCEL is on, RX2's RF gain follows RX1">RX2 GAIN FOLLOWS RX1</button>
+          <button class="dsp-agc-btn" id="cancel-reset" onclick="CancelUI.reset()" title="Gain 0 dB, phase 0">RESET</button>
+        </div>
+        <div class="cancel-row">
+          <span class="ctl-label">Gain</span>
+          <input type="range" class="display-slider v2-range" id="cancel-gain-slider" min="-400" max="800" step="1" value="0" data-v2-notch="0.3333" aria-label="Cancel gain">
+          <input type="text" class="cancel-num" id="cancel-gain-num" inputmode="decimal" value="0.0" aria-label="Cancel gain in dB" title="Type a value, or use arrow keys (0.1 dB; Shift for 1 dB)">
+          <span class="cancel-unit">dB</span>
+        </div>
+        <div class="cancel-row">
+          <span class="ctl-label">Phase</span>
+          <input type="range" class="display-slider v2-range" id="cancel-phase-slider" min="0" max="3599" step="1" value="0" data-v2-notch="0" aria-label="Cancel phase">
+          <input type="text" class="cancel-num" id="cancel-phase-num" inputmode="decimal" value="0.0" aria-label="Cancel phase in degrees" title="Type a value, or use arrow keys (0.1 deg; Shift for 1 deg)">
+          <span class="cancel-unit">&deg;</span>
+          <button class="dsp-agc-btn" id="cancel-invert" onclick="CancelUI.invert()" title="Add 180 degrees to the phase">+180&deg;</button>
+        </div>
+        <div class="cancel-note" id="cancel-auto-note" style="display:none">AUTO is on. Fixed scale is what keeps the two traces comparable while CANCEL is on.</div>
+        <div class="cancel-readout">
+          <span>Residual span <b id="cancel-resid-span">&mdash;</b></span>
+          <span>Residual audio <b id="cancel-resid-pb">&mdash;</b></span>
+        </div>
+      </div>
     <div class="section-box" id="box-antenna">
     <h2>Antenna</h2>
     <div class="ant-grid">
@@ -3044,33 +3075,6 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
         </div>
       </div>
 
-      <div class="v2-cancel-card" id="cancel-card">
-        <div class="v2-title">Cancel &middot; y = RX1 &minus; w&middot;RX2</div>
-        <div class="cancel-row">
-          <button class="dsp-agc-btn" id="cancel-on" onclick="CancelUI.setEnabled(true)">ON</button>
-          <button class="dsp-agc-btn active" id="cancel-off" onclick="CancelUI.setEnabled(false)">OFF</button>
-          <button class="dsp-agc-btn" id="cancel-ghost" onclick="CancelUI.toggleGhost()" title="Show the raw RX1 spectrum as a dashed ghost trace">GHOST</button>
-          <button class="dsp-agc-btn active" id="cancel-follow" onclick="CancelUI.toggleFollow()" title="While CANCEL is on, RX2's RF gain follows RX1">RX2 GAIN FOLLOWS RX1</button>
-          <button class="dsp-agc-btn" id="cancel-reset" onclick="CancelUI.reset()" title="Gain 0 dB, phase 0">RESET</button>
-        </div>
-        <div class="cancel-row">
-          <span class="ctl-label">Gain</span>
-          <input type="range" class="display-slider v2-range" id="cancel-gain-slider" min="-400" max="800" step="1" value="0" data-v2-notch="0.3333" aria-label="Cancel gain">
-          <input type="text" class="cancel-num" id="cancel-gain-num" inputmode="decimal" value="0.0" aria-label="Cancel gain in dB" title="Type a value, or use arrow keys (0.1 dB; Shift for 1 dB)">
-          <span class="cancel-unit">dB</span>
-        </div>
-        <div class="cancel-row">
-          <span class="ctl-label">Phase</span>
-          <input type="range" class="display-slider v2-range" id="cancel-phase-slider" min="0" max="3599" step="1" value="0" data-v2-notch="0" aria-label="Cancel phase">
-          <input type="text" class="cancel-num" id="cancel-phase-num" inputmode="decimal" value="0.0" aria-label="Cancel phase in degrees" title="Type a value, or use arrow keys (0.1 deg; Shift for 1 deg)">
-          <span class="cancel-unit">&deg;</span>
-          <button class="dsp-agc-btn" id="cancel-invert" onclick="CancelUI.invert()" title="Add 180 degrees to the phase">+180&deg;</button>
-        </div>
-        <div class="cancel-readout">
-          <span>Residual span <b id="cancel-resid-span">&mdash;</b></span>
-          <span>Residual audio <b id="cancel-resid-pb">&mdash;</b></span>
-        </div>
-      </div>
       <div class="v2-mode-card">
         <div class="v2-title">Mode</div>
         <div class="mode-mini-grid v2-mode-grid">
@@ -3178,6 +3182,11 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
       <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()" title="Whole Band">BAND</button>
       <button class="btn" onclick="Panadapter.recenterView()" title="Center">CTR</button>
       <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()" title="Audio">AUD</button>
+      <!-- Layout-only placeholders for RX2's LNK and CPY, so RX1's second
+           tuning row wraps and centers exactly like RX2's. Hidden and out of
+           the tab order; they take the same space and nothing else. -->
+      <button class="btn" type="button" tabindex="-1" aria-hidden="true" style="visibility:hidden">LNK</button>
+      <button class="btn" type="button" tabindex="-1" aria-hidden="true" style="visibility:hidden">CPY</button>
     </div>
     </div>
 
@@ -4752,6 +4761,31 @@ function onFloorSlider(v) {
   document.getElementById('floor-val').textContent = manualFloorDb + 'dB';
 }
 
+// Scale state for CANCEL's fixed-scale handoff (CancelUI). setScale with
+// auto off writes the floor and range the same way the sliders do, so the
+// display and its readouts agree.
+function getScaleState() {
+  const [f, c] = effectiveFloorCeil();
+  return { auto: autoScale, floor: f, range: c - f, manualFloor: manualFloorDb, manualRange: manualRangeDb };
+}
+function setScale(s) {
+  if (s.manualFloor !== undefined) {
+    manualFloorDb = s.manualFloor;
+    manualRangeDb = s.manualRange;
+  } else if (!s.auto) {
+    const g = Math.round(Math.max(0, Math.min(100, (150 - s.range) / 140 * 100)));
+    manualFloorDb = Math.round(s.floor);
+    manualRangeDb = 150 - (g / 100) * 140;
+  }
+  const g = Math.round((150 - manualRangeDb) / 140 * 100);
+  document.getElementById('floor-slider').value = Math.round(manualFloorDb);
+  document.getElementById('floor-val').textContent = Math.round(manualFloorDb) + 'dB';
+  document.getElementById('gain-slider').value = g;
+  document.getElementById('gain-val').textContent = g + '%';
+  document.getElementById('auto-scale-cb').checked = !!s.auto;
+  onAutoScaleToggle(!!s.auto);
+}
+
 function drawRigMarker(c, w, h, dpr) {
   dpr = dpr || 1;
   if (rigFreqHz === null || viewCenterHz === null) return;
@@ -5248,6 +5282,8 @@ return {
   // 14.000-14.350).
   cancelSend: obj => send(obj),
   setGhostVisible,
+  getScaleState,
+  setScale,
   getViewSpanHz: () => viewSpanHz,
   getViewCenterHz: () => viewCenterHz,
 };
@@ -5276,10 +5312,43 @@ Panadapter.init();
      RX1's. See project memory on the RSPduo migration.
      ══════════════════════════════════════════════════════════════════════ -->
 <script>
+/* CANCELWHEEL:BEGIN — pure wheel-step logic for CANCEL's gain and phase
+   controls. No DOM here: node test ui-redesign/test_cancel_wheel.js extracts
+   this block. One event moves at most one step. Trackpad deltas accumulate
+   until a threshold, and the carry is capped at one threshold, so a long
+   swipe cannot bank steps and jump. */
+const CANCEL_WHEEL_TRIGGER_PX = 12;   // accumulated pixels per step
+function cancelWheelAccumulate(acc, deltaY, deltaMode, threshold) {
+  // deltaMode 0 = pixels, 1 = lines (~16 px), 2 = pages (~800 px).
+  const px = deltaMode === 1 ? deltaY * 16 : (deltaMode === 2 ? deltaY * 800 : deltaY);
+  let a = acc - px;                    // wheel up (deltaY < 0) counts as positive
+  let steps = 0;
+  if (a >= threshold) { steps = 1; a -= threshold; }
+  else if (a <= -threshold) { steps = -1; a += threshold; }
+  a = Math.max(-threshold, Math.min(threshold, a));
+  return { steps, acc: a };
+}
+function cancelWheelNext(value, deltaY, deltaMode, acc, opts) {
+  const r = cancelWheelAccumulate(acc, deltaY, deltaMode, CANCEL_WHEEL_TRIGGER_PX);
+  if (r.steps === 0) return { value, acc: r.acc, changed: false };
+  const size = opts.shift ? 1.0 : 0.1;
+  let v = Math.round((value + r.steps * size) * 10) / 10;
+  if (opts.kind === 'phase') {
+    v = Math.round((((v % 360) + 360) % 360) * 10) / 10;
+    if (v >= 360) v = 0;
+  } else {
+    v = Math.min(opts.max, Math.max(opts.min, v));
+  }
+  return { value: v, acc: r.acc, changed: v !== value };
+}
+/* CANCELWHEEL:END */
+
 // RX1 CANCEL controls. Reads state.cancel from RX1's /ws state push (the
 // Panadapter handler calls onState) and sends commands through
 // Panadapter.cancelSend, so it shares RX1's socket. Also owns the RX2 lock
-// styling (body classes), since RX2 is locked while CANCEL is on.
+// styling (body classes) and the fixed-scale handoff: CANCEL on means both
+// receivers use a fixed scale (RX2 copies RX1's), and off restores the AUTO
+// states the operator had before.
 const CancelUI = (function () {
   const $ = id => document.getElementById(id);
   const send = obj => Panadapter.cancelSend(obj);
@@ -5287,6 +5356,8 @@ const CancelUI = (function () {
   // so a 100 ms sync never fights the hand on the control.
   const editing = new Set();
   let st = { enabled: false, gain_db: 0, phase_deg: 0, ghost: false, follow_gain: true };
+  let prevEnabled = false;
+  let savedScale = null;
 
   function fmtDb(v) { return (v === null || v === undefined) ? '—' : `${v.toFixed(1)} dB`; }
 
@@ -5295,8 +5366,31 @@ const CancelUI = (function () {
     if (el && !editing.has(id)) el.value = value;
   }
 
+  function enterFixedScale() {
+    savedScale = { rx1: Panadapter.getScaleState(), rx2: Panadapter2.getScaleState() };
+    const floor = savedScale.rx1.floor, range = savedScale.rx1.range;
+    Panadapter.setScale({ auto: false, floor, range });
+    Panadapter2.setScale({ auto: false, floor, range });
+  }
+
+  function exitFixedScale() {
+    if (!savedScale) return;
+    Panadapter.setScale(savedScale.rx1);
+    Panadapter2.setScale(savedScale.rx2);
+    savedScale = null;
+  }
+
+  function updateAutoNote() {
+    const autoOn = $('auto-scale-cb').checked || $('auto-scale2-cb').checked;
+    $('cancel-auto-note').style.display = (st.enabled && autoOn) ? '' : 'none';
+  }
+
   function render(c) {
     st = c;
+    if (!!c.enabled !== prevEnabled) {
+      prevEnabled = !!c.enabled;
+      if (prevEnabled) enterFixedScale(); else exitFixedScale();
+    }
     $('cancel-on').classList.toggle('active', !!c.enabled);
     $('cancel-off').classList.toggle('active', !c.enabled);
     $('cancel-ghost').classList.toggle('active', !!c.ghost);
@@ -5311,6 +5405,7 @@ const CancelUI = (function () {
     document.body.classList.toggle('rx2-cancel-locked', !!c.rx2_locked);
     document.body.classList.toggle('rx2-cancel-gain', !!c.rx2_locked && !!c.follow_gain);
     Panadapter.setGhostVisible(!!(c.enabled && c.ghost));
+    updateAutoNote();
   }
 
   function setGainDb(v) { if (isFinite(v)) send({ cmd: 'set_cancel_gain_db', gain_db: v }); }
@@ -5350,6 +5445,35 @@ const CancelUI = (function () {
     });
   }
 
+  // Wheel: the same REST gate as every other slider (v2WheelAllowed), then
+  // at most one step per event, with the shared step logic above. The
+  // listener is on the control itself, so preventDefault only ever runs
+  // while the pointer is over it. Non-passive so the page does not scroll.
+  function bindWheel(el, kind) {
+    let acc = 0;
+    el.addEventListener('wheel', e => {
+      if (!v2WheelAllowed(el)) { acc = 0; return; }
+      e.preventDefault();
+      const isSlider = el.type === 'range';
+      const fallback = kind === 'gain' ? st.gain_db : st.phase_deg;
+      const cur = isSlider ? parseFloat(el.value) / 10
+                           : (isFinite(parseFloat(el.value)) ? parseFloat(el.value) : fallback);
+      const r = cancelWheelNext(cur, e.deltaY, e.deltaMode, acc,
+                                { kind, min: -40, max: 80, shift: e.shiftKey });
+      acc = r.acc;
+      if (!r.changed) return;
+      showValue(kind, r.value);
+      if (kind === 'gain') setGainDb(r.value); else setPhaseDeg(r.value);
+    }, { passive: false });
+  }
+
+  function showValue(kind, v) {
+    const sliderId = kind === 'gain' ? 'cancel-gain-slider' : 'cancel-phase-slider';
+    const numId = kind === 'gain' ? 'cancel-gain-num' : 'cancel-phase-num';
+    $(sliderId).value = Math.round(v * 10);
+    $(numId).value = v.toFixed(1);
+  }
+
   function init() {
     bindSlider('cancel-gain-slider', v => {
       const db = v / 10;
@@ -5363,6 +5487,12 @@ const CancelUI = (function () {
     });
     bindNumeric('cancel-gain-num', setGainDb);
     bindNumeric('cancel-phase-num', setPhaseDeg);
+    bindWheel($('cancel-gain-slider'), 'gain');
+    bindWheel($('cancel-gain-num'), 'gain');
+    bindWheel($('cancel-phase-slider'), 'phase');
+    bindWheel($('cancel-phase-num'), 'phase');
+    $('auto-scale-cb').addEventListener('change', updateAutoNote);
+    $('auto-scale2-cb').addEventListener('change', updateAutoNote);
   }
 
   function setEnabled(on) { send({ cmd: 'set_cancel_enabled', enabled: !!on }); }
@@ -6080,6 +6210,28 @@ function onAutoScaleToggle(checked) {
 }
 function onFloorSlider(v) { manualFloorDb2 = parseFloat(v); document.getElementById('floor2-val').textContent = manualFloorDb2 + 'dB'; }
 function onGainSlider(v) { const g = parseFloat(v); manualRangeDb2 = 150 - (g / 100) * 140; document.getElementById('gain2-val').textContent = g + '%'; }
+// Scale state for CANCEL's fixed-scale handoff — see Panadapter.setScale.
+function getScaleState() {
+  const [f, c] = effectiveFloorCeil2();
+  return { auto: autoScale2, floor: f, range: c - f, manualFloor: manualFloorDb2, manualRange: manualRangeDb2 };
+}
+function setScale(s) {
+  if (s.manualFloor !== undefined) {
+    manualFloorDb2 = s.manualFloor;
+    manualRangeDb2 = s.manualRange;
+  } else if (!s.auto) {
+    const g = Math.round(Math.max(0, Math.min(100, (150 - s.range) / 140 * 100)));
+    manualFloorDb2 = Math.round(s.floor);
+    manualRangeDb2 = 150 - (g / 100) * 140;
+  }
+  const g = Math.round((150 - manualRangeDb2) / 140 * 100);
+  document.getElementById('floor2-slider').value = Math.round(manualFloorDb2);
+  document.getElementById('floor2-val').textContent = Math.round(manualFloorDb2) + 'dB';
+  document.getElementById('gain2-slider').value = g;
+  document.getElementById('gain2-val').textContent = g + '%';
+  document.getElementById('auto-scale2-cb').checked = !!s.auto;
+  onAutoScaleToggle(!!s.auto);
+}
 
 function drawTargetMarker2(c, w, h, dpr) {
   if (audioTargetFreqHz === null || viewCenterHz === null) return;
@@ -6732,6 +6884,8 @@ function init() {
 }
 
 return {
+  getScaleState,
+  setScale,
   init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1, onRx1ViewChange,
   onS9CalInput,
   onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect, onTraceSelect,
