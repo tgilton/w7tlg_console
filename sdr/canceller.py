@@ -106,6 +106,7 @@ class Canceller:
         self.last_mode = "coherent"      # the mode ON and MODE go back to
         self.noise_status: Optional[str] = None
         self.noise_lines = 0
+        self.noise_false_pct: Optional[float] = None
         self.noise_floor1_db: Optional[float] = None
         self.noise_floor2_db: Optional[float] = None
         self._load_settings()
@@ -552,6 +553,7 @@ class Canceller:
             "noise_clamp": self.noise_clamp,
             "noise_status": self.noise_status,
             "noise_lines": self.noise_lines,
+            "noise_false_pct": _round_or_none(self.noise_false_pct),
             "noise_floor1_db": _round_or_none(self.noise_floor1_db),
             "noise_floor2_db": _round_or_none(self.noise_floor2_db),
             "gain_db": self.gain_db,

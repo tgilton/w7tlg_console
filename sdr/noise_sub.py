@@ -23,10 +23,13 @@ when the two frames do not share a bin grid (length, center, span).
 """
 
 from collections import deque
+from math import comb
 from typing import Optional
 
 import numpy as np
 
+BLOCK_FRAMES = 11           # raw FFT frames per non-overlapping block (sdr_client)
+BLOCK_CLEAR_EMPTY = 3       # a held line clears after this many empty blocks
 WINDOW_FRACTION = 0.05
 MIN_WINDOW_BINS = 101
 MASK_SIGMA = 3.0
@@ -111,12 +114,18 @@ class NoiseSubCore:
             return np.zeros(len(hist[-1]), dtype=bool) if hist else np.zeros(0, dtype=bool)
         return np.sum(np.array(hist), axis=0) >= PERSIST_MIN
 
-    def process(self, p1: np.ndarray, p2: np.ndarray) -> dict:
+    def process(self, p1: np.ndarray, p2: np.ndarray, mask: Optional[np.ndarray] = None) -> dict:
+        """mask: the held line mask from BlockMaskTracker (the live path). When
+        None, the EMA-frame 3-of-5 detection runs instead: the reference path the
+        unit tests use, not the live one, because EMA outputs are correlated."""
         f1, s1 = local_floor(p1)
         f2, s2 = local_floor(p2)
-        above2 = p2 > f2 + self.n * s2
-        self._line_hist.append(above2)
-        detected = self._persistent(self._line_hist)
+        if mask is None:
+            above2 = p2 > f2 + self.n * s2
+            self._line_hist.append(above2)
+            detected = self._persistent(self._line_hist)
+        else:
+            detected = np.asarray(mask, dtype=bool)
         excess = np.where(detected, np.maximum(p2 - f2, 0.0), 0.0)
         k = 10.0 ** (self.scale_db / 10.0)
         p_out = f1 + np.maximum(p1 - f1 - k * excess, 0.0)
@@ -146,11 +155,79 @@ class NoiseSubCore:
         }
 
 
+class BlockMaskTracker:
+    """Line mask from non-overlapping block averages of BLOCK_FRAMES raw frames.
+
+    Per block: floor F2 from the RX2 block, sigma2 = F2 / sqrt(BLOCK_FRAMES) (the
+    block average's own spread, so the scatter is not estimated from the data).
+    A bin is detected when P2 > F2 + n*sigma2 in 3 of the last 5 blocks. The mask
+    turns on at a detection and clears after BLOCK_CLEAR_EMPTY consecutive
+    undetected blocks. The history and mask reset on any change of centre or
+    span. single_rate is a running estimate of the per-bin exceedance rate on the
+    unmasked bins, used for the live false-alarm readout."""
+
+    def __init__(self, n: float = 2.0):
+        self.n = float(n)
+        self.reset()
+
+    def reset(self):
+        self._hist = deque(maxlen=PERSIST_FRAMES)
+        self._empty: Optional[np.ndarray] = None
+        self.mask: Optional[np.ndarray] = None
+        self.grid: Optional[tuple] = None
+        self.single_rate: Optional[float] = None
+        self.blocks = 0
+
+    def update(self, block: dict) -> np.ndarray:
+        grid = (len(block["data"]), float(block["center_freq_hz"]), float(block["span_hz"]))
+        if self.grid is not None and (grid[0] != self.grid[0]
+                                      or abs(grid[1] - self.grid[1]) > 1.0
+                                      or abs(grid[2] - self.grid[2]) > 1.0):
+            self.reset()                       # centre or span changed: start clean
+        self.grid = grid
+        p2 = 10.0 ** (np.asarray(block["data"], dtype=np.float64) / 10.0)
+        f2, _ = local_floor(p2)
+        sig2 = f2 / np.sqrt(BLOCK_FRAMES)
+        above = p2 > f2 + self.n * sig2
+        self._hist.append(above)
+        self.blocks += 1
+        det = NoiseSubCore._persistent(self._hist)
+        if self.mask is None:
+            self.mask = np.zeros(len(p2), dtype=bool)
+            self._empty = np.zeros(len(p2), dtype=np.int32)
+        self._empty = np.where(det, 0, self._empty + 1)
+        self.mask = (self.mask | det) & (self._empty < BLOCK_CLEAR_EMPTY)
+        free = ~self.mask
+        if np.any(free):
+            frac = float(np.mean(above[free]))
+            self.single_rate = frac if self.single_rate is None else 0.8 * self.single_rate + 0.2 * frac
+        return self.mask
+
+
 class NoiseSubProcessor:
     """Frame-level wrapper: freshness and grid checks, dB in and out."""
 
     def __init__(self, scale_db: float = -10.0, n: float = 2.0, clamp: bool = False):
         self.core = NoiseSubCore(scale_db, n, clamp)
+        self.tracker = BlockMaskTracker(n)
+
+    def set_thresh(self, n: float):
+        self.core.n = float(n)
+        self.tracker.n = float(n)
+
+    def process_block(self, block_b: Optional[dict]):
+        """RX2 block average: updates the held line mask."""
+        if block_b is None:
+            return
+        self.tracker.update(block_b)
+
+    def false_alarm_pct(self) -> Optional[float]:
+        """Expected share of bins that are false per frame, from the measured
+        single-look rate: a 3-of-5 over independent blocks."""
+        p = self.tracker.single_rate
+        if p is None:
+            return None
+        return 100.0 * sum(comb(5, k) * p ** k * (1 - p) ** (5 - k) for k in (3, 4, 5))
 
     def process_pair(self, a: dict, b: Optional[dict], now: float) -> dict:
         """a, b: console spectrum frames ({'data' (dB), 'center_freq_hz',
@@ -167,7 +244,8 @@ class NoiseSubProcessor:
             return self._refuse("grid")
         p1 = 10.0 ** (np.asarray(da, dtype=np.float64) / 10.0)
         p2 = 10.0 ** (np.asarray(db, dtype=np.float64) / 10.0)
-        r = self.core.process(p1, p2)
+        mask = self.tracker.mask if self.tracker.mask is not None else np.zeros(len(p2), dtype=bool)
+        r = self.core.process(p1, p2, mask)
         frame = {
             "ts": a["ts"],
             "channel": "A",
@@ -184,5 +262,6 @@ class NoiseSubProcessor:
 
     def _refuse(self, status: str) -> dict:
         self.core.reset_history()
+        self.tracker.reset()
         return {"status": status, "frame": None, "lines": 0,
                 "floor1_db": None, "floor2_db": None}

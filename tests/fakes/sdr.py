@@ -76,6 +76,8 @@ class FakeSdrClient:
         self._avg_power = None
         self._spectrum_callbacks_ghost = []
         self.ghost_frames: list = []
+        self._blk_a: list = []
+        self._blk_b: list = []
         self.canceller = Canceller(
             sample_rate_hz=sample_rate_hz, fft_size=fft_size, display_fps=display_fps,
             deliver=lambda i, q: self.cancelled_out.append((i, q)),
@@ -116,6 +118,15 @@ class FakeSdrClient:
         self.combiner.gate_tx()
         self.canceller.gate_tx()
         self.digital_audio.flush()
+
+    # NOISE SUB block averages: same surface as SdrClient (no threads here).
+    block_avg_enabled = False
+
+    def on_block(self, cb, is_b: bool = False):
+        (self._blk_b if is_b else self._blk_a).append(cb)
+
+    def clear_block_averages(self):
+        pass
 
     def on_spectrum_ghost(self, cb):
         self._spectrum_callbacks_ghost.append(cb)

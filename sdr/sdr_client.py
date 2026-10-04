@@ -48,6 +48,7 @@ from . import sdrplay_capi as capi
 from .audio_demod import AudioDemodulator
 from .canceller import Canceller
 from .combiner import Combiner
+from .noise_sub import BLOCK_FRAMES
 from .pairing_debug import PairingDebug
 from .virtual_audio_output import DigitalAudioOutput
 
@@ -195,6 +196,16 @@ class SdrClient:
         self._avg_decay = max(0.0, (spectrum_avg_frames - 1.0) / (spectrum_avg_frames + 1.0))
         self._avg_power: Optional[np.ndarray] = None
         self._reset_avg_event = threading.Event()
+        # NOISE SUB block averages (display only, sdr/noise_sub.py): non-overlapping
+        # sums of BLOCK_FRAMES raw FFT frames, published as 'block' frames. Off
+        # unless NOISE SUB is on; reset on retune, TX and mode change.
+        self.block_avg_enabled = False
+        self._blk_acc = None
+        self._blk_n = 0
+        self._blk_acc_b = None
+        self._blk_n_b = 0
+        self._blk_callbacks: list = []
+        self._blk_callbacks_b: list = []
         # Channel B's own averaged-spectrum state — separate from Channel
         # A's above, same reasoning throughout.
         self._avg_power_b: Optional[np.ndarray] = None
@@ -363,6 +374,51 @@ class SdrClient:
     def on_spectrum(self, cb: SpectrumCallback):
         self._spectrum_callbacks.append(cb)
 
+    def on_block(self, cb: SpectrumCallback, is_b: bool = False):
+        """Block-average frames (NOISE SUB). is_b selects RX2."""
+        (self._blk_callbacks_b if is_b else self._blk_callbacks).append(cb)
+
+    def clear_block_averages(self):
+        self._blk_acc = None
+        self._blk_n = 0
+        self._blk_acc_b = None
+        self._blk_n_b = 0
+
+    def _block_step(self, power, is_b: bool):
+        acc = self._blk_acc_b if is_b else self._blk_acc
+        n = self._blk_n_b if is_b else self._blk_n
+        acc = power.astype(np.float64) if acc is None else acc + power
+        n += 1
+        if n < BLOCK_FRAMES:
+            if is_b:
+                self._blk_acc_b, self._blk_n_b = acc, n
+            else:
+                self._blk_acc, self._blk_n = acc, n
+            return
+        if is_b:
+            self._blk_acc_b, self._blk_n_b = None, 0
+        else:
+            self._blk_acc, self._blk_n = None, 0
+        frame = {
+            "ts": time.time(),
+            "channel": "B" if is_b else "A",
+            "kind": "block",
+            "n": n,
+            "center_freq_hz": self.rf_freq_hz_b if is_b else self.rf_freq_hz,
+            "span_hz": self.sample_rate_hz,
+            "sample_rate_hz": self.sample_rate_hz,
+            "data": (10.0 * np.log10(acc / n / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32),
+        }
+        if self._loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(self._publish_block(frame, is_b), self._loop)
+            except RuntimeError:
+                pass
+
+    async def _publish_block(self, frame: dict, is_b: bool):
+        for cb in (self._blk_callbacks_b if is_b else self._blk_callbacks):
+            await cb(frame)
+
     def on_spectrum_b(self, cb: SpectrumCallback):
         """Channel B's spectrum feed — separate from on_spectrum, see
         _spectrum_callbacks_b. Nothing subscribes to this yet."""
@@ -383,6 +439,7 @@ class SdrClient:
         self.audio_b.gate_tx()
         self.combiner.gate_tx()
         self.canceller.gate_tx()
+        self.clear_block_averages()
         self.digital_audio.flush()
 
     async def start(self):
@@ -505,6 +562,7 @@ class SdrClient:
         # A retune is a discontinuity, not noise — don't let the average blend
         # the old frequency's content into the new view's first few frames.
         self._reset_avg_event.set()
+        self.clear_block_averages()
         if self._loop:
             self._loop.run_in_executor(None, self._apply_center_freq, freq_hz)
 
@@ -1080,6 +1138,8 @@ class SdrClient:
                 # done in real spectrum analyzers.
                 self._avg_power = self._avg_power * self._avg_decay + power * (1.0 - self._avg_decay)
             mag_db = (10.0 * np.log10(self._avg_power / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
+        if self.block_avg_enabled and not self.audio.tx_active:
+            self._block_step(power, False)
         return {
             "ts": time.time(),
             "channel": "A",
@@ -1170,6 +1230,8 @@ class SdrClient:
             else:
                 self._avg_power_b = self._avg_power_b * self._avg_decay + power * (1.0 - self._avg_decay)
             mag_db = (10.0 * np.log10(self._avg_power_b / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
+        if self.block_avg_enabled and not self.audio_b.tx_active:
+            self._block_step(power, True)
         return {
             "ts": time.time(),
             "channel": "B",

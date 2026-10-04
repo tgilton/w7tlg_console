@@ -497,6 +497,15 @@ async def on_spectrum_frame_b_store(frame: dict):
     _latest_b_frame = frame
 
 
+async def on_block_frame_b(frame: dict):
+    """RX2 block average (11 raw frames) -> the NOISE SUB line mask. Off the loop."""
+    if sdr is None or not sdr.canceller.noise_enabled:
+        return
+    noise_proc.set_thresh(sdr.canceller.noise_n)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, noise_proc.process_block, frame)
+
+
 async def on_spectrum_frame_noise(frame: dict):
     """RX1 frame -> NOISE SUB. Runs off the event loop, one at a time: a
     frame that arrives while one is in flight is dropped, not queued."""
@@ -521,6 +530,7 @@ async def on_spectrum_frame_noise(frame: dict):
         _noise_busy = False
     c.noise_status = res["status"]
     c.noise_lines = res["lines"]
+    c.noise_false_pct = noise_proc.false_alarm_pct()
     c.noise_floor1_db = res["floor1_db"]
     c.noise_floor2_db = res["floor2_db"]
     if res["frame"] is not None:
@@ -825,6 +835,7 @@ async def lifespan(app: FastAPI):
     sdr.on_spectrum_ghost(on_spectrum_frame_ghost)
     sdr.on_spectrum(on_spectrum_frame_noise)
     sdr.on_spectrum_b(on_spectrum_frame_b_store)
+    sdr.on_block(on_block_frame_b, is_b=True)
     await sdr.start()
     if not sdr.available:
         logger.warning("SDR unavailable — panadapter features disabled.")
@@ -1204,11 +1215,16 @@ async def _set_cancel_mode(mode: str):
     if cur == "noise" and mode != "noise":
         c.noise_enabled = False
         noise_proc.core.reset_history()
+        noise_proc.tracker.reset()
         c.noise_status = None
+        c.noise_false_pct = None
+        sdr.block_avg_enabled = False
     if mode == "coherent" and cur != "coherent":
         c.set_enabled(True)
     if mode == "noise":
         c.noise_enabled = True
+        sdr.block_avg_enabled = True
+        sdr.clear_block_averages()
     if mode != "off":
         c.set_last_mode(mode)
     if mode == "off" and _cancel_snapshot is not None:
