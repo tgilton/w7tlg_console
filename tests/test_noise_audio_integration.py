@@ -142,3 +142,34 @@ def test_latency_of_the_browser_path_is_the_stage_latency_and_digital_is_undelay
     print(f"\n    first audible block: digital call {first_d}, browser call {first_b} "
           f"(stage latency {d.stft.latency_samples} samples = {d.stft.latency_samples / 16000 * 1000:.0f} ms)")
     assert first_d is not None and first_b is not None and first_b >= first_d
+
+
+def test_server_publishes_the_mask_to_the_stage_only_with_noise_and_audio_on(fake_sdr, monkeypatch):
+    """The processed frame carries the mask and power ratios to RX1's stage. The stage runs
+    only when NOISE SUB is on, AUDIO is on and A/B is on processed."""
+    import asyncio
+    import dashboard.server as server
+
+    fake_sdr.available = True
+    fake_sdr.audio.set_target(TARGET, "USB", 2800.0)
+    monkeypatch.setattr(server, "sdr", fake_sdr)
+    monkeypatch.setattr(server, "_cancel_snapshot", None)
+    monkeypatch.setattr(server, "_latest_b_frame", None)
+    rng = np.random.default_rng(41)
+    now = server.time.time()
+    a = {"data": (10 * np.log10(rng.exponential(1.0, 65536))).astype(np.float32),
+         "center_freq_hz": CENTER, "span_hz": SPAN, "sample_rate_hz": SPAN, "ts": now}
+    b = dict(a, data=(10 * np.log10(rng.exponential(1.0, 65536))).astype(np.float32))
+    asyncio.run(server._handle_cancel_command("set_cancel_mode", {"mode": "noise"}))
+    server._latest_b_frame = b
+    asyncio.run(server._handle_cancel_command("set_noise_audio", {"on": True}))
+    asyncio.run(server.on_spectrum_frame_noise(a))
+    assert fake_sdr.noise_mask.get() is not None          # the mask is published
+    assert fake_sdr.audio.stft.enabled is True
+    asyncio.run(server._handle_cancel_command("set_noise_audio_ab", {"processed": False}))
+    assert fake_sdr.audio.stft.enabled is False           # raw while A/B is on raw
+    asyncio.run(server._handle_cancel_command("set_noise_audio_ab", {"processed": True}))
+    asyncio.run(server._handle_cancel_command("set_noise_audio", {"on": False}))
+    assert fake_sdr.audio.stft.enabled is False           # AUDIO off: gains 1
+    asyncio.run(server._handle_cancel_command("set_cancel_mode", {"mode": "off"}))
+    assert fake_sdr.noise_mask.get() is None              # leaving NOISE SUB clears the mask
