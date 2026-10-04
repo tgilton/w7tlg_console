@@ -21,6 +21,9 @@ new Function('exports', html.slice(a, b)
   + '\nexports.cancelBetaWheel = cancelBetaWheel;'
   + '\nexports.cancelAudioToggle = cancelAudioToggle;'
   + '\nexports.cancelModeLabel = cancelModeLabel;'
+  + '\nexports.cancelNoiseStatusText = cancelNoiseStatusText;'
+  + '\nexports.cancelFalseText = cancelFalseText;'
+  + '\nexports.cancelInvertCommand = cancelInvertCommand;'
   + '\nexports.TRIGGER = CANCEL_WHEEL_TRIGGER_PX;'
   + '\nexports.SCROLL_MS = CANCEL_WHEEL_SCROLL_MS;')(sandbox);
 const { cancelWheelIsMouse, cancelWheelAccumulate, cancelWheelNext, cancelWheelAllowed,
@@ -150,6 +153,22 @@ for (let i = 0; i < 40; i++) {
   ba = br.acc; if (br.changed) { bsteps++; bv = br.value; }
 }
 check('trackpad: 120 px is 10 steps of 0.5 (-20 -> -15)', bsteps === 10 && bv === -15, `steps=${bsteps} v=${bv}`);
+
+const { cancelNoiseStatusText, cancelFalseText, cancelInvertCommand } = sandbox;
+
+console.log('NOISE status text, false share text, and +180');
+check('active shows the lines count (no status)', cancelNoiseStatusText('active') === null && cancelNoiseStatusText(null) === null, '');
+check('grid -> BYPASS: grid mismatch', cancelNoiseStatusText('grid') === 'BYPASS:\ngrid mismatch', JSON.stringify(cancelNoiseStatusText('grid')));
+check('stale -> BYPASS: RX2 stale', cancelNoiseStatusText('stale') === 'BYPASS:\nRX2 stale', '');
+check('no_rx2 -> BYPASS: no RX2', cancelNoiseStatusText('no_rx2') === 'BYPASS:\nno RX2', '');
+check('5.1 -> "~5.1% false"', cancelFalseText(5.1) === '~5.1% false', cancelFalseText(5.1));
+check('0.274 -> "~0.27% false"', cancelFalseText(0.274) === '~0.27% false', cancelFalseText(0.274));
+check('no estimate -> empty', cancelFalseText(null) === '' && cancelFalseText(undefined) === '', '');
+check('the text starts with a tilde, never a minus', cancelFalseText(5.1)[0] === '~', '');
+check('+180 sends nothing in NOISE mode', cancelInvertCommand({ mode: 'noise', phase_deg: 70 }) === null, '');
+check('+180 sends nothing when CANCEL is off', cancelInvertCommand({ mode: 'off', phase_deg: 70 }) === null, '');
+const inv = cancelInvertCommand({ mode: 'coherent', phase_deg: 270.5 });
+check('+180 in COHERENT wraps: 270.5 -> 90.5', inv && inv.cmd === 'set_cancel_phase_deg' && inv.phase_deg === 90.5, JSON.stringify(inv));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

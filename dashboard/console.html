@@ -2739,6 +2739,12 @@ html, body { background: var(--v2-bg-page); }
 .cancel-res { flex: 1 1 auto; min-width: 0; display: flex; justify-content: space-between; align-items: baseline; color: var(--chrome-label); font-size: 0.75rem; }
 .cancel-res b { color: inherit; font-size: 1rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 .cancel-step { display: inline-flex; gap: 4px; margin-top: 6px; }
+/* NOISE mode: +180 is hidden, and the expected false share takes its place, right-aligned. */
+.cancel-false { margin-left: auto; font-size: 0.75rem; color: var(--chrome-label); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* NOISE mode, not processing: the status replaces the lines count, on two short lines. */
+.cancel-res.cancel-bypass > span { display: none; }
+.cancel-res.cancel-bypass b { font-size: 0.6rem; line-height: 1.1; font-weight: 700; text-align: left; color: var(--state-fault); white-space: pre-line; }
+.cancel-readout.cancel-noise .cancel-beta { flex: 0 0 auto; }
 /* NOISE mode: the second readout cell is the max-attenuation control (value, then unit). */
 .cancel-res.cancel-beta { flex-direction: row-reverse; justify-content: flex-end; gap: 5px; align-items: center; }
 .cancel-res.cancel-beta span { font-size: 0.6rem; line-height: 1.05; width: 38px; white-space: normal; }
@@ -2942,10 +2948,11 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
           <input type="text" class="cancel-num" id="cancel-phase-num" inputmode="decimal" value="0.0" aria-label="Cancel phase in degrees" title="Type a value, or use arrow keys (step from STEP; Shift x5)">
           <span class="cancel-unit" id="cancel-phase-unit">&deg;</span>
           <button class="dsp-agc-btn" id="cancel-invert" onclick="CancelUI.invert()" title="Add 180 degrees to the phase">+180&deg;</button>
+          <span class="cancel-false" id="cancel-false" style="display:none" title="Expected share of bins that are false detections at this THRESH, measured live from the unmasked RX2 bins"></span>
         </div>
         <div class="cancel-note" id="cancel-auto-note" style="display:none">AUTO is on. Fixed scale is what keeps the two traces comparable while CANCEL is on.</div>
         <div class="cancel-readout">
-          <span class="cancel-res"><span id="cancel-res-label1">span</span><b id="cancel-resid-span">&mdash;</b></span>
+          <span class="cancel-res" id="cancel-res-cell1"><span id="cancel-res-label1">span</span><b id="cancel-resid-span">&mdash;</b></span>
           <span class="cancel-res" id="cancel-res-cell2"><span id="cancel-res-label2">audio</span><b id="cancel-resid-pb">&mdash;</b></span>
         </div>
     </div>
@@ -5506,6 +5513,24 @@ function cancelAudioToggle(st) {
   return { cmd: 'set_noise_audio', on: !st.noise_audio_on };
 }
 function cancelModeLabel(lastMode) { return lastMode === 'noise' ? 'NOISE' : 'COH'; }
+// NOISE SUB status for the readout. null while processing is active (the lines count
+// shows). Otherwise two short lines: the display is on the raw trace, and why.
+function cancelNoiseStatusText(status) {
+  if (!status || status === 'active') return null;
+  const why = { grid: 'grid mismatch', stale: 'RX2 stale', no_rx2: 'no RX2' }[status] || String(status);
+  return 'BYPASS:\n' + why;
+}
+// "~5.1% false": one decimal from 1% up, two below. Empty when there is no estimate.
+function cancelFalseText(pct) {
+  if (pct === null || pct === undefined || !isFinite(pct)) return '';
+  return '~' + (pct < 1 ? pct.toFixed(2) : pct.toFixed(1)) + '% false';
+}
+// +180 belongs to COHERENT phase. No command from any other mode.
+function cancelInvertCommand(st) {
+  if (st.mode !== 'coherent') return null;
+  const deg = ((((st.phase_deg || 0) + 180) % 360) + 360) % 360;
+  return { cmd: 'set_cancel_phase_deg', phase_deg: cancelGridRound(deg, 0.1) };
+}
 /* CANCELWHEEL:END */
 
 // RX1 CANCEL controls, COHERENT and NOISE SUB. Reads state.cancel from RX1's
@@ -5587,6 +5612,10 @@ const CancelUI = (function () {
     g.min = -400; g.max = noise ? 400 : 800;
     p.min = noise ? 10 : 0; p.max = noise ? 60 : 3599;
     $('cancel-invert').disabled = noise;
+    $('cancel-invert').style.display = noise ? 'none' : '';
+    $('cancel-false').style.display = noise ? '' : 'none';
+    $('cancel-res-cell1').parentElement.classList.toggle('cancel-noise', noise);
+    if (!noise) $('cancel-res-cell1').classList.remove('cancel-bypass');
     $('cancel-clamp').disabled = !noise;
     $('cancel-res-label1').textContent = noise ? 'lines' : 'span';
     $('cancel-res-label2').textContent = noise ? 'dB max atten' : 'audio';
@@ -5622,13 +5651,16 @@ const CancelUI = (function () {
       setField('cancel-phase-num', c.noise_n.toFixed(1));
       // The live expected false share at this THRESH, in the unit slot (no new row).
       const fp = c.noise_false_pct;
-      $('cancel-phase-unit').textContent = 'σ' + (fp === null || fp === undefined
-        ? '' : ' ~' + (fp < 1 ? fp.toFixed(2) : fp.toFixed(1)) + '%');
-      $('cancel-phase-unit').title = 'THRESH in sigma. The % is the expected share of bins that are false at this threshold, measured live.';
+      $('cancel-phase-unit').textContent = 'σ';
+      $('cancel-false').textContent = cancelFalseText(fp);
+      const bypass = cancelNoiseStatusText(c.noise_status);
       const inView = Panadapter.linesInView();
-      const status = c.noise_status && c.noise_status !== 'active' ? c.noise_status
-                   : (inView === null ? '—' : String(inView));
-      $('cancel-resid-span').textContent = status;
+      $('cancel-res-cell1').classList.toggle('cancel-bypass', bypass !== null);
+      $('cancel-res-cell1').title = bypass !== null
+        ? 'NOISE SUB is not processing: the trace and the audio are raw RX1. ' + bypass.replace('\n', ' ')
+        : 'Contiguous groups of detected bins inside the displayed span';
+      $('cancel-resid-span').textContent = bypass !== null ? bypass
+        : (inView === null ? '—' : String(inView));
       if (performance.now() >= betaLocalUntil) $('cancel-resid-pb').textContent = c.noise_beta_db.toFixed(1);
       const fl = c.noise_floor1_db;
       $('cancel-res-cell2').title = 'Maximum attenuation of a flagged line in RX1 audio (-6 to -40 dB). '
@@ -5818,7 +5850,7 @@ const CancelUI = (function () {
   function toggleFollow() { send({ cmd: 'set_cancel_follow_gain', follow_gain: !st.follow_gain }); }
   function toggleClamp() { send({ cmd: 'set_noise_clamp', clamp: !st.noise_clamp }); }
   function toggleAudio() { const m = cancelAudioToggle(st); if (m) send(m); }
-  function invert() { commitFor('phase')((st.phase_deg || 0) + 180); }
+  function invert() { const m = cancelInvertCommand(st); if (m) send(m); }
 
   init();
   return { onState: render, setEnabled, setMode, cycleMode, reset, toggleGhost, toggleFollow,
