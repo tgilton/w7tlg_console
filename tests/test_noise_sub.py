@@ -260,3 +260,16 @@ def test_noise_path_refuses_without_rx2_and_publishes_when_fresh(fake_sdr, monke
     asyncio.run(server.on_spectrum_frame_noise(frame_a))
     assert fake_sdr.canceller.noise_status == "stale" and len(published) == 1
     _mode(server, "off")
+
+
+def test_groups_are_contiguous_runs_over_the_whole_frame():
+    """The count is contiguous runs of detected bins, not detected bins. The runs
+    are taken over the whole frame; the browser keeps the ones in its span."""
+    m = np.zeros(64, bool)
+    m[[10, 11, 12, 20, 30, 31]] = True
+    starts, ends = ns.runs(m)
+    assert list(zip(starts.tolist(), ends.tolist())) == [(10, 13), (20, 21), (30, 32)]
+    assert len(ns.runs(np.zeros(8, bool))[0]) == 0
+    # A run that reaches the end of the frame still closes.
+    s2, e2 = ns.runs(np.array([True, True, False, True]))
+    assert list(zip(s2.tolist(), e2.tolist())) == [(0, 2), (3, 4)]

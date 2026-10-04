@@ -35,6 +35,7 @@ PERSIST_FRAMES = 5
 PERSIST_MIN = 3
 RX2_MAX_AGE_S = 0.250
 MAX_MARKERS = 200
+MAX_GROUPS = 4000     # contiguous detected runs sent per frame
 SCALE_DB_MIN, SCALE_DB_MAX = -40.0, 40.0
 THRESH_MIN, THRESH_MAX = 1.0, 6.0
 
@@ -44,6 +45,13 @@ def window_bins(n_bins: int) -> int:
     if w % 2 == 0:
         w += 1
     return min(w, n_bins if n_bins % 2 else n_bins - 1)
+
+
+def runs(mask: np.ndarray):
+    """Contiguous True runs as (starts, ends), end exclusive."""
+    m8 = np.asarray(mask, dtype=np.int8)
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], m8, [0]))))
+    return edges[0::2], edges[1::2]
 
 
 def _box_sum(x: np.ndarray, width: int) -> np.ndarray:
@@ -121,10 +129,18 @@ class NoiseSubCore:
         if len(idx) > MAX_MARKERS:
             order = np.argsort(p_out[idx])[::-1]
             idx = np.sort(idx[order[:MAX_MARKERS]])
+        # Contiguous runs of detected bins over the WHOLE frame (the browser
+        # counts the runs that fall in its displayed span). [start, end) pairs.
+        starts, ends = runs(detected)
+        groups_total = len(starts)
+        flat = np.stack([starts, ends], axis=1)[:MAX_GROUPS].ravel().tolist()
         return {
             "draw": draw,
             "markers": idx.tolist(),
-            "lines": int(np.count_nonzero(detected)),
+            "groups": flat,
+            "groups_total": int(groups_total),
+            "line_bins": int(np.count_nonzero(detected)),
+            "lines": int(groups_total),
             "floor1_db": float(10 * np.log10(np.mean(f1) + 1e-30)),
             "floor2_db": float(10 * np.log10(np.mean(f2) + 1e-30)),
         }
@@ -161,6 +177,7 @@ class NoiseSubProcessor:
             "sample_rate_hz": a.get("sample_rate_hz", a["span_hz"]),
             "data": (10.0 * np.log10(r["draw"] + 1e-30)).astype(np.float32),
             "markers": r["markers"],
+            "groups": r["groups"],
         }
         return {"status": "active", "frame": frame, "lines": r["lines"],
                 "floor1_db": r["floor1_db"], "floor2_db": r["floor2_db"]}

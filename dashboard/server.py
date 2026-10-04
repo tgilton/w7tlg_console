@@ -141,6 +141,8 @@ class SpectrumConnectionManager:
         }
         if "markers" in frame:
             header_dict["markers"] = frame["markers"]
+        if "groups" in frame:
+            header_dict["groups"] = frame["groups"]
         header = json.dumps(header_dict)
         payload = frame["data"].astype("float32").tobytes()
         dead = []

@@ -2736,7 +2736,7 @@ html, body { background: var(--v2-bg-page); }
 .cancel-num { width: 64px; font: inherit; color: inherit; background: var(--bg-2); border: 1px solid var(--border); padding: 2px 4px; text-align: right; }
 .cancel-unit { color: var(--chrome-label); }
 .cancel-readout { display: flex; gap: 12px; margin-top: 6px; min-height: 27px; align-items: center; }
-.cancel-res { flex: 1 1 0; min-width: 0; display: flex; justify-content: space-between; align-items: baseline; color: var(--chrome-label); font-size: 0.75rem; }
+.cancel-res { flex: 1 1 auto; min-width: 0; display: flex; justify-content: space-between; align-items: baseline; color: var(--chrome-label); font-size: 0.75rem; }
 .cancel-res b { color: inherit; font-size: 1rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 .cancel-step { display: inline-flex; gap: 4px; margin-top: 6px; }
 .cancel-row-tight { gap: 4px; }
@@ -4433,6 +4433,20 @@ let procWs = null;
 function procOwnsWaterfall() {
   return procWanted && latestProcFrame !== null && (performance.now() - latestProcAt) < 1000;
 }
+// NOISE SUB: contiguous detected runs that fall inside the displayed span,
+// from the latest processed frame. Null when there is no fresh processed frame.
+function linesInView() {
+  if (!procWanted || !latestProcFrame || (performance.now() - latestProcAt) >= 1000) return null;
+  const f = latestProcFrame, n = f.data.length;
+  const binHz = f.spanHz / n, fullLo = f.centerFreqHz - f.spanHz / 2;
+  const lo = (viewCenterHz - viewSpanHz / 2 - fullLo) / binHz;
+  const hi = (viewCenterHz + viewSpanHz / 2 - fullLo) / binHz;
+  let count = 0;
+  for (let i = 0; i + 1 < f.groups.length; i += 2) {
+    if (f.groups[i + 1] > lo && f.groups[i] < hi) count++;
+  }
+  return count;
+}
 function setProcVisible(on) {
   procWanted = !!on;
   if (!procWanted) {
@@ -4452,6 +4466,7 @@ function setProcVisible(on) {
       spanHz: pendingProcHeader.span_hz,
       data: new Float32Array(evt.data),
       markers: pendingProcHeader.markers || [],
+      groups: pendingProcHeader.groups || [],
     };
     latestProcAt = performance.now();
     // The waterfall follows the trace: processed rows in NOISE SUB, same freeze as raw during TX.
@@ -5350,6 +5365,7 @@ return {
   cancelSend: obj => send(obj),
   setGhostVisible,
   setProcVisible,
+  linesInView,
   getScaleState,
   setScale,
   getViewSpanHz: () => viewSpanHz,
@@ -5545,8 +5561,10 @@ const CancelUI = (function () {
     $('cancel-invert').disabled = noise;
     $('cancel-clamp').disabled = !noise;
     $('cancel-res-label1').textContent = noise ? 'lines' : 'span';
-    $('cancel-res-label2').textContent = noise ? '' : 'audio';
+    $('cancel-res-label2').textContent = noise ? 'RX1' : 'audio';
     $('cancel-res-label2').parentElement.title = noise ? 'RX1 noise floor' : '';
+    $('cancel-res-label1').parentElement.title = noise
+      ? 'Contiguous groups of detected bins inside the displayed span' : '';
   }
 
   function render(c) {
@@ -5571,7 +5589,9 @@ const CancelUI = (function () {
       setField('cancel-gain-num', c.noise_scale_db.toFixed(1));
       setField('cancel-phase-slider', Math.round(c.noise_n * 10));
       setField('cancel-phase-num', c.noise_n.toFixed(1));
-      const status = c.noise_status && c.noise_status !== 'active' ? c.noise_status : String(c.noise_lines);
+      const inView = Panadapter.linesInView();
+      const status = c.noise_status && c.noise_status !== 'active' ? c.noise_status
+                   : (inView === null ? '—' : String(inView));
       $('cancel-resid-span').textContent = status;
       $('cancel-resid-pb').textContent = (c.noise_floor1_db === null || c.noise_floor1_db === undefined)
         ? '—' : `${c.noise_floor1_db.toFixed(1)} dB`;
