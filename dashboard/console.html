@@ -4428,6 +4428,11 @@ let latestProcFrame = null;
 let latestProcAt = -Infinity;
 let procWanted = false;
 let procWs = null;
+// True while processed frames are arriving: then they own the RX1 waterfall
+// and the raw path must not add rows. Stale for over a second, raw resumes.
+function procOwnsWaterfall() {
+  return procWanted && latestProcFrame !== null && (performance.now() - latestProcAt) < 1000;
+}
 function setProcVisible(on) {
   procWanted = !!on;
   if (!procWanted) {
@@ -4449,6 +4454,8 @@ function setProcVisible(on) {
       markers: pendingProcHeader.markers || [],
     };
     latestProcAt = performance.now();
+    // The waterfall follows the trace: processed rows in NOISE SUB, same freeze as raw during TX.
+    if (!rigIsDigital && !rigPtt) pushWaterfallRow(latestProcFrame);
   };
   w.onclose = () => {
     if (procWs === w) procWs = null;
@@ -4516,7 +4523,7 @@ function connectSpectrumWs() {
         viewCenterHz = frame.centerFreqHz;
       }
       latestFrame = frame;
-      if (!rigIsDigital) pushWaterfallRow(frame);
+      if (!rigIsDigital && !procOwnsWaterfall()) pushWaterfallRow(frame);
     }
     pendingHeader = null;
   };
