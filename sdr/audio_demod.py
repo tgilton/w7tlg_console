@@ -31,6 +31,8 @@ from typing import Optional
 import numpy as np
 from scipy.signal import resample_poly, sosfilt
 
+from .audio_stft import fade_weights
+
 
 def _ensure_torchaudio_backend_shim():
     """deepfilternet 0.5.6's df.io unconditionally imports
@@ -292,6 +294,15 @@ class AudioDemodulator:
         self.stft = None
         self._dig_ssb_overlap = None
         self._dig_agc_gain = 1.0
+        # The stage is in the path only while NOISE SUB mode is on (stage_request, set by
+        # the server). Off, the output is the plain chain with no added delay. The audio
+        # thread moves between the states; entry and exit are crossfades.
+        self.stage_request = False
+        self._stage_state = "bypass"     # bypass | entering | in | exiting
+        self._stage_fade_pos = 0
+        self._bb_hist: Optional[np.ndarray] = None
+        # RX2: a PCM delay on the browser output, to match RX1's stage latency in the mode.
+        self.pcm_delay = None
         self._sample_counter = 0
         # Pre-allocated and written via slice assignment, not concatenate —
         # concatenate-and-grow recopies the whole accumulated buffer on
@@ -443,9 +454,9 @@ class AudioDemodulator:
         listening to weak signals doesn't produce a loud blast on TX→RX return."""
         self.tx_active = True
         if self.stft is not None:
+            # Flag only: the stage's buffers belong to the audio thread, which resets
+            # them on the falling edge (_reset_after_tx).
             self.stft.tx_active = True
-            self.stft.reset()
-        self._dig_agc_gain = 1.0
         dropped = 0
         while True:
             try:
@@ -689,9 +700,7 @@ class AudioDemodulator:
                 continue
             if self._was_tx_active:
                 self._was_tx_active = False
-                if self.stft is not None:
-                    self.stft.reset()
-                self._dig_ssb_overlap = None
+                self._reset_after_tx()
                 self._acc_len = 0
                 if self._decim_filter_coarse is not None:
                     self._decim_overlap_coarse = np.zeros(
@@ -798,14 +807,76 @@ class AudioDemodulator:
             self._ssb_overlap = np.zeros(len(self._ssb_filter) - 1, dtype=np.complex64)
 
         if self.stft is not None:
-            # Digital path first: raw baseband, SSB and AGC only, so it does not depend on
-            # the AUDIO switch. The browser path then takes the stage's output.
-            digital = self._digital_chain(intermediate)
-            browser_in = self.stft.process(intermediate)
-            browser = self._browser_chain(browser_in) if len(browser_in) else None
-            return browser, digital
+            return self._stage_path(intermediate)
         browser = self._browser_chain(intermediate)
+        if self.pcm_delay is not None and browser is not None:
+            return self.pcm_delay.process(browser), browser
         return browser, browser
+
+    def _reset_after_tx(self):
+        """Falling edge of TX, on the audio thread. The stage restarts from silence, a fade
+        in progress is finished, and the stage state follows the request."""
+        if self.stft is not None:
+            self._bb_hist = None
+            if self.stage_request:
+                self.stft.prime(np.zeros(0))
+                self._stage_state = "in"
+                self._dig_ssb_overlap = None
+                self._dig_agc_gain = 1.0
+            else:
+                self.stft.reset()
+                self._stage_state = "bypass"
+            self._stage_fade_pos = 0
+        if self.pcm_delay is not None:
+            self.pcm_delay.reset()
+
+    def _stage_path(self, x: np.ndarray):
+        """RX1. Bypass: the plain chain, with digital = browser, as before the stage existed.
+        In the path: the browser takes the stage's output (the input delayed by N samples,
+        with the gains applied), and the digital feed runs its own raw chain, seeded from
+        the plain chain's state at entry so it carries on sample for sample."""
+        n2 = 2 * self.stft.n
+        if self._bb_hist is None:
+            self._bb_hist = np.zeros(n2, dtype=np.complex128)
+        hist = self._bb_hist
+        self._bb_hist = np.concatenate([hist, x])[-n2:]
+
+        if self._stage_state == "bypass":
+            if not self.stage_request:
+                browser = self._browser_chain(x)
+                return browser, browser
+            self.stft.prime(hist)
+            self._dig_ssb_overlap = self._ssb_overlap.copy()
+            self._dig_agc_gain = self.agc_gain
+            self._stage_state, self._stage_fade_pos = "entering", 0
+        elif self._stage_state == "in" and not self.stage_request:
+            self._stage_state, self._stage_fade_pos = "exiting", 0
+
+        digital = self._digital_chain(x)
+        y = self.stft.process(x)
+        if self._stage_state == "in":
+            return self._browser_chain(y), digital
+
+        fade = self.stft.n
+        w = fade_weights(self._stage_fade_pos, len(x), fade)
+        self._stage_fade_pos += len(x)
+        done = self._stage_fade_pos >= fade
+        if self._stage_state == "entering":
+            browser = self._browser_chain((1.0 - w) * x + w * y)
+            if done:
+                self._stage_state = "in"
+            return browser, digital
+        browser = self._browser_chain((1.0 - w) * y + w * x)
+        # Walk the AGC gain to the raw chain's across the fade, so the handover below is
+        # continuous (the two differ when removed lines had let the AGC rise).
+        self.agc_gain += (self._dig_agc_gain - self.agc_gain) * float(w[-1])
+        if done:
+            # Back to the plain chain. It takes over the raw chain's filter and AGC state,
+            # so the digital feed continues without a break.
+            self._stage_state = "bypass"
+            self._ssb_overlap = self._dig_ssb_overlap.copy()
+            self.agc_gain = self._dig_agc_gain
+        return browser, digital
 
     def _digital_chain(self, x: np.ndarray) -> bytes:
         """Raw RX1 for the digital path: SSB filter and AGC on the raw baseband. EQ and

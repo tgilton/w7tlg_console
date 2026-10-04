@@ -535,7 +535,7 @@ async def on_spectrum_frame_noise(frame: dict):
     # The audio stage: the mask and power ratios from this frame, on RX1's grid.
     stft = sdr.audio.stft
     if stft is not None:
-        stft.enabled = bool(c.noise_audio_on and c.noise_audio_ab and c.noise_enabled)
+        stft.enabled = bool(c.noise_audio_on and c.noise_enabled)
         stft.beta_db = c.noise_beta_db
     if res["status"] == "active" and res.get("ratio") is not None:
         sdr.noise_mask.publish(res["mask"], res["ratio"], frame["center_freq_hz"], frame["span_hz"])
@@ -1211,12 +1211,16 @@ def _rx2_lock_message(cmd, msg) -> Optional[str]:
 
 
 def _sync_audio_stage():
-    """The stage runs only when NOISE SUB is on, AUDIO is on and A/B is on processed.
-    Otherwise its gains are 1, and the latency is the same."""
+    """The stage is in RX1's audio path only while NOISE SUB mode is on, and RX2's
+    browser audio is delayed by the same amount for that time. Inside the mode, AUDIO off
+    is unity gain through the same stage, so toggling AUDIO never shifts timing."""
     if sdr is None or sdr.audio.stft is None:
         return
     c = sdr.canceller
-    sdr.audio.stft.enabled = bool(c.noise_enabled and c.noise_audio_on and c.noise_audio_ab)
+    sdr.audio.stage_request = bool(c.noise_enabled)
+    if sdr.audio_b.pcm_delay is not None:
+        sdr.audio_b.pcm_delay.request = bool(c.noise_enabled)
+    sdr.audio.stft.enabled = bool(c.noise_enabled and c.noise_audio_on)
     sdr.audio.stft.beta_db = c.noise_beta_db
 
 
@@ -1244,14 +1248,13 @@ async def _set_cancel_mode(mode: str):
         c.noise_false_pct = None
         sdr.block_avg_enabled = False
         sdr.noise_mask.clear()
-        if sdr.audio.stft is not None:
-            sdr.audio.stft.enabled = False
     if mode == "coherent" and cur != "coherent":
         c.set_enabled(True)
     if mode == "noise":
         c.noise_enabled = True
         sdr.block_avg_enabled = True
         sdr.clear_block_averages()
+    _sync_audio_stage()
     if mode != "off":
         c.set_last_mode(mode)
     if mode == "off" and _cancel_snapshot is not None:
@@ -1295,11 +1298,9 @@ async def _handle_cancel_command(cmd, msg) -> tuple:
         elif cmd == "set_noise_audio":
             c.set_noise_audio(bool(msg["on"]))
             _sync_audio_stage()
-        elif cmd == "set_noise_audio_ab":
-            c.set_noise_audio_ab(bool(msg["processed"]))
-            _sync_audio_stage()
         elif cmd == "set_noise_beta":
             c.set_noise_beta(float(msg["beta_db"]))
+            _sync_audio_stage()
         elif cmd == "cancel_reset":
             c.reset_weight()
         return True, None
@@ -1462,7 +1463,7 @@ async def handle_ws_command(text: str, ws: WebSocket):
         elif cmd in ("set_cancel_enabled", "set_cancel_mode", "set_cancel_last_mode",
                      "set_cancel_gain_db", "set_cancel_phase_deg", "set_cancel_ghost",
                      "set_cancel_follow_gain", "set_noise_scale_db", "set_noise_n",
-                     "set_noise_clamp", "set_noise_audio", "set_noise_audio_ab",
+                     "set_noise_clamp", "set_noise_audio",
                      "set_noise_beta", "cancel_reset"):
             ok, error = await _handle_cancel_command(cmd, msg)
             response = {"type": "cmd_response", "cmd": cmd, "ok": ok}

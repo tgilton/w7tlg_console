@@ -104,8 +104,7 @@ class Canceller:
         self.noise_n = 2.0
         self.noise_clamp = False
         self.noise_beta_db = -20.0       # audio stage maximum attenuation (power), -6..-40 dB
-        self.noise_audio_on = False      # AUDIO switch: off each session, not persisted
-        self.noise_audio_ab = True       # A/B: True = processed audio, False = raw (AUDIO on only)
+        self.noise_audio_on = False      # AUDIO: off = raw (unity gain), on = processed. Not persisted.
         self.last_mode = "coherent"      # the mode ON and MODE go back to
         self.noise_status: Optional[str] = None
         self.noise_lines = 0
@@ -201,9 +200,6 @@ class Canceller:
 
     def set_noise_audio(self, on: bool):
         self.noise_audio_on = bool(on)
-
-    def set_noise_audio_ab(self, processed: bool):
-        self.noise_audio_ab = bool(processed)
 
     def set_noise_clamp(self, on: bool):
         self.noise_clamp = bool(on)
@@ -571,7 +567,6 @@ class Canceller:
             "noise_clamp": self.noise_clamp,
             "noise_beta_db": self.noise_beta_db,
             "noise_audio_on": self.noise_audio_on,
-            "noise_audio_ab": self.noise_audio_ab,
             "noise_status": self.noise_status,
             "noise_lines": self.noise_lines,
             "noise_false_pct": _round_or_none(self.noise_false_pct),

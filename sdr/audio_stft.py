@@ -112,6 +112,16 @@ class StftGainStage:
         output is the start of a fresh stream, delayed by the constant latency."""
         self._reset_state()
 
+    def prime(self, history: np.ndarray):
+        """Reset, then run 2N samples of history through and discard what comes out.
+        After this, every process(x) returns exactly len(x) samples: x delayed by N,
+        with the start-up fill already behind it."""
+        self.reset()
+        h = np.asarray(history, dtype=np.complex128)
+        if len(h) < 2 * self.n:
+            h = np.concatenate([np.zeros(2 * self.n - len(h), dtype=np.complex128), h])
+        self.process(h[-2 * self.n:])
+
     # ------------------------------------------------------------- mapping
     def _rebuild_mapping(self, state: dict, target: float):
         """RF-bin index and widened sqrt gain for every baseband bin."""
@@ -172,7 +182,7 @@ class StftGainStage:
             self._add_acc(s, y)
             self._next_frame += 1
         # Samples t < next_frame*hop are final; t is emitted once input t+N has arrived.
-        upto = min(self._next_frame * hop, self._n_in - n + 1)
+        upto = min(self._next_frame * hop, self._n_in - n)
         out = np.zeros(0, dtype=np.complex128)
         if upto > self._emitted:
             out = self._acc[self._emitted - self._accbase: upto - self._accbase].copy()
@@ -199,3 +209,59 @@ class StftGainStage:
         if drop_acc > 0:
             self._acc = self._acc[drop_acc:]
             self._accbase += drop_acc
+
+
+def fade_weights(pos: int, n: int, length: int) -> np.ndarray:
+    """Raised-cosine weights 0 -> 1 for samples pos .. pos+n-1 of a fade of `length`."""
+    k = np.minimum(pos + np.arange(n), length)
+    return 0.5 - 0.5 * np.cos(np.pi * k / length)
+
+
+class PcmDelay:
+    """A constant delay of n samples on int16 PCM, switched in and out by a crossfade.
+
+    Used on RX2's browser audio so the stereo pair stays time-aligned with RX1 while
+    RX1's STFT stage is in the path. Off, process() returns the bytes it was given
+    (the same object), and keeps the last n samples so the delayed signal exists at the
+    moment it is switched in. On, the output is the input delayed by exactly n samples.
+    Entry and exit crossfade between the live and the delayed signal over `fade` samples.
+    The cost is one n-sample copy per block."""
+
+    def __init__(self, n: int = DEFAULT_N, fade: int = DEFAULT_N):
+        self.n = int(n)
+        self.fade = int(fade)
+        self.request = False
+        self.state = "bypass"            # bypass | entering | in | exiting
+        self._pos = 0
+        self._buf = np.zeros(self.n, dtype=np.int16)
+
+    def reset(self):
+        """TX: forget the history, and finish any fade in progress."""
+        self._buf = np.zeros(self.n, dtype=np.int16)
+        self.state = "in" if self.state in ("entering", "in") and self.request else "bypass"
+        self._pos = 0
+
+    def process(self, pcm: bytes) -> bytes:
+        x = np.frombuffer(pcm, dtype=np.int16)
+        joined = np.concatenate([self._buf, x])
+        delayed = joined[:len(x)]
+        self._buf = joined[len(x):]
+        if self.state == "bypass":
+            if not self.request:
+                return pcm
+            self.state, self._pos = "entering", 0
+        elif self.state == "in" and not self.request:
+            self.state, self._pos = "exiting", 0
+        if self.state == "in":
+            return delayed.tobytes()
+        w = fade_weights(self._pos, len(x), self.fade)
+        self._pos += len(x)
+        if self.state == "entering":
+            out = (1.0 - w) * x + w * delayed
+            if self._pos >= self.fade:
+                self.state = "in"
+        else:
+            out = (1.0 - w) * delayed + w * x
+            if self._pos >= self.fade:
+                self.state = "bypass"
+        return np.rint(out).astype(np.int16).tobytes()

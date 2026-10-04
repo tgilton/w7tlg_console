@@ -1,12 +1,23 @@
-"""NOISE SUB audio stage in the real RX1 demodulator (sdr/audio_demod.py). Raw IQ in,
-through _process, so the browser and digital chains are the production code. The
-tone is at RF target+1 kHz: on USB it is audible at 1 kHz on the baseband the stage
-gains. Each test prints its numbers."""
+"""NOISE SUB audio stage in the real demodulators (sdr/audio_demod.py), driven with raw
+IQ through _process, so every chain is the production code.
+
+The stage is in RX1's path only while NOISE SUB mode is on (stage_request). Outside the
+mode the output must be bit-identical to main: the tests load main's audio_demod.py from
+git and compare bytes. The test vector is synthetic and deterministic (FT8-like tones
+plus noise); no recorded baseband exists in the repo. Each test prints its numbers."""
+import asyncio
+import importlib.util
+import subprocess
+from pathlib import Path
+
 import numpy as np
+import pytest
 
+import sdr.audio_demod as branch_mod
 from sdr.audio_demod import AudioDemodulator
-from sdr.audio_stft import MaskProvider, StftGainStage
+from sdr.audio_stft import MaskProvider, PcmDelay, StftGainStage
 
+REPO = Path(__file__).resolve().parent.parent
 CENTER = 14_074_000.0
 TARGET = 14_075_000.0           # RX1 target: +1 kHz from the centre
 SPAN = 2e6
@@ -14,140 +25,335 @@ NBINS = 65536
 BIN_HZ = SPAN / NBINS
 RF_LO = CENTER - SPAN / 2
 FS = 2e6
+N = 1024                         # stage latency, samples at 16 kHz
 
 
-def make_demod(enabled: bool, flag_rf_hz=None, r=0.01):
-    d = AudioDemodulator(input_rate_hz=FS)
+@pytest.fixture(scope="module")
+def main_mod(tmp_path_factory):
+    """main's sdr/audio_demod.py, loaded from git as its own module."""
+    try:
+        src = subprocess.run(["git", "show", "main:sdr/audio_demod.py"], cwd=REPO,
+                             capture_output=True, text=True, check=True).stdout
+    except Exception:
+        pytest.skip("main:sdr/audio_demod.py is not available from git")
+    path = tmp_path_factory.mktemp("main_demod") / "audio_demod_main.py"
+    path.write_text(src)
+    spec = importlib.util.spec_from_file_location("audio_demod_main", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def configure(d, session="voice", agc=None, eq_db=0.0):
     d.rf_center_hz = CENTER
     d.set_target(TARGET, "USB", 2800.0)
-    # AGC off: a lone tone would otherwise be re-levelled by the AGC, and the test
-    # would measure the AGC rather than the stage. The AGC sits after the stage.
-    d.agc_mode = "off"
+    if session == "digital":
+        d.enter_digital_mode()               # what an FT8 / JS8 / DATA session applies
+    if agc is not None:
+        d.agc_mode = agc
+    d.eq_bass_db = eq_db
+    return d
+
+
+def attach_stage(d, flag_rf_hz=None, r=0.01, audio_on=False, mode_on=False):
     prov = MaskProvider()
     mask = np.zeros(NBINS, bool)
     ratio = np.ones(NBINS)
     if flag_rf_hz is not None:
         i = int(np.floor((flag_rf_hz - RF_LO) / BIN_HZ))
-        mask[i - 2: i + 3] = True            # a flagged run, as the processor publishes it
+        mask[i - 2: i + 3] = True
         ratio[i - 2: i + 3] = r
     prov.publish(mask, ratio, CENTER, SPAN)
     d.stft = StftGainStage(provider=prov, target_hz=lambda: d.target.freq_hz)
-    d.stft.enabled = enabled
+    d.stft.enabled = audio_on
+    d.stage_request = mode_on
     return d
 
 
-def iq_blocks(n_calls, block, tone_rf_hz=CENTER + 2000.0, noise=0.05, seed=5):
-    """Consecutive blocks of a tone at tone_rf_hz plus a little noise."""
+def vector(n_calls, block, tones=(2000.0, 2300.0, 2706.25, 3400.0), noise=0.05, seed=5, amp=3000):
+    """Deterministic IQ blocks: tones at CENTER + offset (audio = offset - 1 kHz) plus noise."""
     rng = np.random.default_rng(seed)
     t0 = 0
     for _ in range(n_calls):
         t = (t0 + np.arange(block)) / FS
-        sig = np.exp(2j * np.pi * (tone_rf_hz - CENTER) * t)
-        n = noise * (rng.standard_normal(block) + 1j * rng.standard_normal(block))
-        x = (sig + n) * 3000
+        sig = sum(np.exp(2j * np.pi * f * t) for f in tones) / len(tones)
+        nz = noise * (rng.standard_normal(block) + 1j * rng.standard_normal(block))
+        x = (sig + nz) * amp
         yield x.real.astype(np.float64), x.imag.astype(np.float64)
         t0 += block
 
 
-def run_demod(d, n_calls, **kw):
+def run(d, n_calls, events=None, **kw):
+    """Returns (browser, digital) int16 arrays. events: {call index: fn(d)}."""
+    events = events or {}
     browser, digital = [], []
-    for bi, bq in iq_blocks(n_calls, d.batch_samples, **kw):
-        b, dg = d._process(bi, bq)
+    for k, (bi, bq) in enumerate(vector(n_calls, d.batch_samples, **kw)):
+        if k in events:
+            events[k](d)
+        out = d._process(bi, bq)
+        b, dg = out if isinstance(out, tuple) else (out, out)
         if b is not None:
             browser.append(np.frombuffer(b, dtype=np.int16))
         if dg is not None:
             digital.append(np.frombuffer(dg, dtype=np.int16))
-    return (np.concatenate(browser) if browser else np.zeros(0, np.int16),
-            np.concatenate(digital) if digital else np.zeros(0, np.int16))
+    cat = lambda xs: np.concatenate(xs) if xs else np.zeros(0, np.int16)
+    return cat(browser), cat(digital)
 
 
-def test_digital_path_is_bit_identical_with_audio_on_and_off():
-    off = make_demod(enabled=False, flag_rf_hz=CENTER + 2000.0)
-    on = make_demod(enabled=True, flag_rf_hz=CENTER + 2000.0)
-    _, dig_off = run_demod(off, 120)
-    _, dig_on = run_demod(on, 120)
-    print(f"\n    digital path: {len(dig_off)} samples, identical with AUDIO on and off: "
-          f"{np.array_equal(dig_off, dig_on)}")
-    assert len(dig_off) and np.array_equal(dig_off, dig_on)
+def maxdiff(a, b):
+    n = min(len(a), len(b))
+    return int(np.abs(a[:n].astype(np.int64) - b[:n].astype(np.int64)).max()), n
 
 
-def test_browser_path_attenuates_the_flagged_tone_and_digital_does_not():
-    on = make_demod(enabled=True, flag_rf_hz=CENTER + 2000.0)
-    off = make_demod(enabled=False, flag_rf_hz=CENTER + 2000.0)
-    b_on, _ = run_demod(on, 240)
-    b_off, _ = run_demod(off, 240)
-    tail = slice(len(b_on) // 2, None)
-    db = 10 * np.log10(np.mean(b_on[tail].astype(float) ** 2) / np.mean(b_off[tail].astype(float) ** 2))
-    print(f"\n    browser path, AUDIO on vs off, flagged 1 kHz tone (steady second half): {db:+.1f} dB")
-    assert -24.0 < db < -14.0
+def on(d):
+    d.stage_request = True
 
 
-def test_unflagged_tone_is_unchanged_on_the_browser_path():
-    on = make_demod(enabled=True, flag_rf_hz=CENTER - 3000.0)     # flag somewhere else
-    off = make_demod(enabled=False)
-    b_on, _ = run_demod(on, 240)
-    b_off, _ = run_demod(off, 240)
-    n = min(len(b_on), len(b_off))
-    tail = slice(n // 2, n)
-    db = 10 * np.log10(np.mean(b_on[tail].astype(float) ** 2) / np.mean(b_off[tail].astype(float) ** 2))
-    print(f"\n    browser path, unflagged tone, AUDIO on vs off: {db:+.3f} dB")
-    assert abs(db) < 0.1
+def off(d):
+    d.stage_request = False
 
 
-def test_tx_gate_resets_the_stage_and_the_first_tx_after_enabling_is_audible():
-    d = make_demod(enabled=True, flag_rf_hz=CENTER + 2000.0)
-    run_demod(d, 60)
-    d.gate_tx()
-    assert d.stft.tx_active is True and d.stft._next_frame == 0
-    d.stft.tx_active = False          # the server clears the flag on the falling edge
-    browser, _ = run_demod(d, 120, tone_rf_hz=CENTER + 500.0)
-    power_db = 10 * np.log10(np.mean(browser[len(browser) // 2:].astype(float) ** 2) + 1e-12)
-    print(f"\n    first RX after TX with AUDIO on: output power {power_db:.1f} dB (not silent)")
-    assert power_db > -60.0
+# ------------------------------------------------- 1. bypass: bit-identical to main
+@pytest.mark.parametrize("session,eq_db", [("voice", 0.0), ("voice", 6.0), ("digital", 0.0)])
+def test_noise_sub_off_browser_and_digital_are_bit_identical_to_main(main_mod, session, eq_db):
+    m = configure(main_mod.AudioDemodulator(input_rate_hz=FS), session, eq_db=eq_db)
+    b = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), session, eq_db=eq_db),
+                     flag_rf_hz=CENTER + 2000.0, audio_on=True, mode_on=False)
+    m_out, _ = run(m, 300)
+    b_browser, b_digital = run(b, 300)
+    d1, n1 = maxdiff(m_out, b_browser)
+    d2, n2 = maxdiff(m_out, b_digital)
+    print(f"\n    NOISE SUB off, {session} session, EQ {eq_db:+.0f} dB: browser max diff {d1} over {n1} "
+          f"samples, digital max diff {d2}; lengths {len(m_out)} / {len(b_browser)} / {len(b_digital)}")
+    assert len(m_out) == len(b_browser) == len(b_digital) > 30000
+    assert d1 == 0 and d2 == 0
 
 
-def test_browser_audio_has_no_step_larger_than_the_signal_on_ab_flips():
-    base = make_demod(enabled=False, flag_rf_hz=CENTER + 2000.0)
-    b_raw, _ = run_demod(base, 200)
-    flip = make_demod(enabled=False, flag_rf_hz=CENTER + 2000.0)
-    chunks = []
-    calls = 0
-    for bi, bq in iq_blocks(200, flip.batch_samples):
-        if calls == 60:
-            flip.stft.enabled = True          # A to processed
-        if calls == 130:
-            flip.stft.enabled = False         # and back to raw
-        b, _ = flip._process(bi, bq)
-        if b is not None:
-            chunks.append(np.frombuffer(b, dtype=np.int16))
-        calls += 1
-    b_flip = np.concatenate(chunks)
+# ------------------------------------------- 3. digital path regression against main
+def test_digital_feed_in_a_digital_session_is_bit_identical_to_main_in_every_case(main_mod):
+    m = configure(main_mod.AudioDemodulator(input_rate_hz=FS), "digital")
+    ref, _ = run(m, 300)
+    cases = {
+        "NOISE SUB off": dict(mode_on=False, audio_on=False, events=None),
+        "NOISE SUB on from the start": dict(mode_on=True, audio_on=False, events=None),
+        "NOISE SUB + AUDIO on, line flagged": dict(mode_on=True, audio_on=True, events=None),
+        "enter at call 80, exit at call 200, AUDIO on": dict(mode_on=False, audio_on=True,
+                                                            events={80: on, 200: off}),
+    }
+    print()
+    for name, c in cases.items():
+        d = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), "digital"),
+                         flag_rf_hz=CENTER + 2000.0, audio_on=c["audio_on"], mode_on=c["mode_on"])
+        _, dig = run(d, 300, events=c["events"])
+        diff, n = maxdiff(ref, dig)
+        print(f"    digital feed vs main, {name}: max sample difference {diff} over {n} samples")
+        assert len(dig) == len(ref) and diff == 0
+
+
+def test_voice_session_digital_feed_loses_eq_only_while_noise_sub_is_on(main_mod):
+    m = configure(main_mod.AudioDemodulator(input_rate_hz=FS), "voice", eq_db=6.0)
+    ref, _ = run(m, 300)
+    d_off = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), "voice", eq_db=6.0))
+    d_on = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), "voice", eq_db=6.0), mode_on=True)
+    _, dig_off = run(d_off, 300)
+    _, dig_on = run(d_on, 300)
+    diff_off, _ = maxdiff(ref, dig_off)
+    diff_on, _ = maxdiff(ref, dig_on)
+    print(f"\n    voice session, bass EQ +6 dB, digital feed vs main: NOISE SUB off {diff_off}, "
+          f"NOISE SUB on {diff_on} (the raw chain has no EQ or NR)")
+    assert diff_off == 0 and diff_on > 0
+
+
+# ------------------------------------------------------ 1. latency and crossfades
+def test_in_the_mode_the_browser_audio_is_the_raw_audio_delayed_by_exactly_n():
+    raw = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"))
+    mode = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"), mode_on=True)
+    b_raw, _ = run(raw, 300)
+    b_mode, d_mode = run(mode, 300)
+    assert len(b_mode) == len(b_raw)
+    skip = 4 * N
+    diff = np.abs(b_mode[skip + N:].astype(int) - b_raw[skip:len(b_raw) - N].astype(int)).max()
+    dd, _ = maxdiff(d_mode, b_raw)
+    print(f"\n    AUDIO off in the mode: browser = raw delayed by {N} samples (64 ms), max diff {diff} LSB; "
+          f"digital undelayed, max diff {dd}")
+    assert diff <= 1 and dd == 0
+
+
+def test_toggling_audio_inside_the_mode_does_not_shift_timing():
+    """An unflagged tone: AUDIO on and off give the same samples at the same positions."""
+    a = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"),
+                     flag_rf_hz=CENTER - 3000.0, mode_on=True, audio_on=False)
+    b = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"),
+                     flag_rf_hz=CENTER - 3000.0, mode_on=True, audio_on=False)
+    flip = lambda d: setattr(d.stft, "enabled", not d.stft.enabled)
+    ba, _ = run(a, 300)
+    bb, _ = run(b, 300, events={60: flip, 140: flip, 220: flip})
+    diff, n = maxdiff(ba[8 * N:], bb[8 * N:])
+    print(f"\n    AUDIO flipped three times vs never: {len(ba)} and {len(bb)} samples, max diff {diff} LSB")
+    assert len(ba) == len(bb) and diff <= 2
+
+
+def test_mode_entry_and_exit_crossfade_without_a_click():
+    """A step is a sample-to-sample change larger than the raw signal ever makes."""
+    raw = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"))
+    b_raw, _ = run(raw, 300)
+    d = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"),
+                     flag_rf_hz=CENTER - 3000.0, audio_on=True)
+    b, _ = run(d, 300, events={80: on, 200: off})
     raw_step = np.abs(np.diff(b_raw.astype(np.int64))).max()
-    flip_step = np.abs(np.diff(b_flip.astype(np.int64))).max()
-    print(f"\n    A/B flips: largest sample step {flip_step} LSB; raw signal step {raw_step} LSB")
-    assert flip_step <= raw_step * 1.05 + 2
+    step = np.abs(np.diff(b.astype(np.int64))).max()
+    before, _ = maxdiff(b[:80 * 131], b_raw[:80 * 131])
+    tail = slice(200 * 131 + 2 * N, None)
+    after = np.abs(b[tail].astype(int) - b_raw[tail].astype(int)).max()
+    print(f"\n    entry at call 80, exit at call 200: largest step {step} LSB (raw signal {raw_step} LSB); "
+          f"{len(b)} samples out for {len(b_raw)} raw; before entry diff {before}, after exit diff {after}")
+    assert len(b) == len(b_raw)                   # no samples dropped or added: no gap
+    assert step <= raw_step * 1.05 + 2
+    assert before == 0 and after <= 1             # raw before entry, and raw again after the exit fade
+    assert d._stage_state == "bypass"
 
 
-def test_latency_of_the_browser_path_is_the_stage_latency_and_digital_is_undelayed():
-    d = make_demod(enabled=False)
-    # a 1 kHz audio tone: RF target + 1 kHz, inside the SSB passband (a DC tone is not)
-    blocks = list(iq_blocks(80, d.batch_samples, tone_rf_hz=CENTER + 2000.0))
-    first_b = first_d = None
-    for k, (bi, bq) in enumerate(blocks):
-        b, dg = d._process(bi, bq)
-        if first_b is None and b is not None and np.abs(np.frombuffer(b, np.int16)).max() > 100:
-            first_b = k
-        if first_d is None and dg is not None and np.abs(np.frombuffer(dg, np.int16)).max() > 100:
-            first_d = k
-    print(f"\n    first audible block: digital call {first_d}, browser call {first_b} "
-          f"(stage latency {d.stft.latency_samples} samples = {d.stft.latency_samples / 16000 * 1000:.0f} ms)")
-    assert first_d is not None and first_b is not None and first_b >= first_d
+def test_exit_with_the_agc_running_hands_the_gain_over_without_a_jump():
+    """A removed line lets the AGC rise, so the two chains' gains differ at exit. The gain
+    at each block boundary must move no faster across the exit than the AGC itself moves."""
+    kw = dict(tones=(2000.0, 2706.25), noise=0.05)
+    d = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="fast"),
+                     flag_rf_hz=CENTER + 2000.0, audio_on=True)
+    gains = []
+    def probe(dd):
+        gains.append((dd.agc_gain, dd._dig_agc_gain))
+
+    def probe_and_exit(dd):
+        probe(dd)
+        off(dd)
+    events = {k: probe for k in range(295, 330)}
+    events.update({80: on, 300: probe_and_exit})
+    b, _ = run(d, 400, events=events, **kw)
+    g = np.array([x[0] for x in gains])
+    before = gains[4]
+    jump = np.abs(np.diff(g)).max() / g.max()
+    print(f"\n    AGC gain before exit: browser {before[0]:.2f}, raw {before[1]:.2f}; largest block-to-block "
+          f"change across the exit {jump * 100:.1f}% (one jump would be {abs(before[0] - before[1]) / before[0] * 100:.0f}%)")
+    assert before[0] > before[1] * 1.2            # the case is real: the gains do differ
+    assert jump < 0.12
+    assert d._stage_state == "bypass"
+    assert abs(g[-1] - gains[-1][1]) / g[-1] < 0.02   # and the plain chain ends on the raw gain
 
 
-def test_server_publishes_the_mask_to_the_stage_only_with_noise_and_audio_on(fake_sdr, monkeypatch):
-    """The processed frame carries the mask and power ratios to RX1's stage. The stage runs
-    only when NOISE SUB is on, AUDIO is on and A/B is on processed."""
-    import asyncio
+def test_flagged_tone_is_attenuated_in_the_mode_with_audio_on_only():
+    kw = dict(tones=(2000.0,), noise=0.01)
+    base = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"),
+                        flag_rf_hz=CENTER + 2000.0, mode_on=True, audio_on=False)
+    proc = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"),
+                        flag_rf_hz=CENTER + 2000.0, mode_on=True, audio_on=True)
+    b0, _ = run(base, 300, **kw)
+    b1, dig = run(proc, 300, **kw)
+    half = len(b0) // 2
+    p = lambda v: np.mean(v[half:].astype(float) ** 2)
+    print(f"\n    flagged 1 kHz tone: AUDIO on vs off {10 * np.log10(p(b1) / p(b0)):+.1f} dB on the browser "
+          f"path; digital feed {10 * np.log10(p(dig) / p(b0)):+.2f} dB")
+    assert -21.0 < 10 * np.log10(p(b1) / p(b0)) < -18.5
+    assert abs(10 * np.log10(p(dig) / p(b0))) < 0.1
+
+
+# ------------------------------------------------------------------ RX2 delay
+def test_pcm_delay_is_exact_constant_and_passes_bytes_through_when_off():
+    pd = PcmDelay()
+    rng = np.random.default_rng(3)
+    x = rng.integers(-20000, 20000, 20000).astype(np.int16)
+    blk = x[:131].tobytes()
+    assert pd.process(blk) is blk                       # off: the same object, untouched
+    pd2 = PcmDelay()
+    pd2.request = True
+    out = np.concatenate([np.frombuffer(pd2.process(x[i:i + 131].tobytes()), np.int16)
+                          for i in range(0, len(x), 131)])
+    assert len(out) == len(x)
+    assert np.array_equal(out[4 * N:], x[3 * N:len(x) - N])
+    print(f"\n    RX2 PCM delay: output = input delayed by exactly {N} samples, bit-exact, one "
+          f"{N}-sample copy per block")
+
+
+def test_pcm_delay_entry_and_exit_crossfade_and_return_to_passthrough():
+    t = np.arange(40000)
+    x = (8000 * np.sin(2 * np.pi * 440 * t / 16000)).astype(np.int16)
+    pd = PcmDelay()
+    out = []
+    for k, i in enumerate(range(0, len(x), 131)):
+        if k == 60:
+            pd.request = True
+        if k == 180:
+            pd.request = False
+        out.append(np.frombuffer(pd.process(x[i:i + 131].tobytes()), np.int16))
+    out = np.concatenate(out)
+    step, raw_step = np.abs(np.diff(out.astype(int))).max(), np.abs(np.diff(x.astype(int))).max()
+    print(f"\n    RX2 delay in and out: largest step {step} LSB (signal {raw_step} LSB), state {pd.state}")
+    assert len(out) == len(x) and step <= raw_step + 2
+    assert pd.state == "bypass" and np.array_equal(out[-3000:], x[-3000:])
+
+
+def test_rx1_and_rx2_browser_audio_stay_aligned_in_the_mode():
+    rx1 = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"), mode_on=True)
+    rx2 = configure(AudioDemodulator(input_rate_hz=FS), agc="off")
+    rx2.pcm_delay = PcmDelay()
+    rx2.pcm_delay.request = True
+    b1, _ = run(rx1, 300)
+    b2, d2 = run(rx2, 300)
+    diff = np.abs(b1[4 * N:].astype(int) - b2[4 * N:].astype(int)).max()
+    print(f"\n    same IQ into RX1 (stage, AUDIO off) and RX2 (PCM delay): max difference {diff} LSB; "
+          f"RX2 digital feed undelayed")
+    assert len(b1) == len(b2) and diff <= 1
+    rx2_plain = configure(AudioDemodulator(input_rate_hz=FS), agc="off")
+    p, _ = run(rx2_plain, 300)
+    assert np.array_equal(d2, p)
+
+
+def test_rx2_without_the_mode_is_bit_identical_to_main(main_mod):
+    m = configure(main_mod.AudioDemodulator(input_rate_hz=FS))
+    r = configure(AudioDemodulator(input_rate_hz=FS))
+    r.pcm_delay = PcmDelay()
+    ref, _ = run(m, 200)
+    b, dg = run(r, 200)
+    assert np.array_equal(ref, b) and np.array_equal(ref, dg)
+
+
+# ------------------------------------------------------------------------- TX
+def test_tx_sets_the_flag_only_and_the_falling_edge_restarts_the_stage_audibly():
+    d = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"),
+                     flag_rf_hz=CENTER - 3000.0, mode_on=True, audio_on=True)
+    run(d, 60)
+    frames_before = d.stft._next_frame
+    d.gate_tx()
+    assert d.stft.tx_active is True and d.stft._next_frame == frames_before   # buffers untouched
+    d._reset_after_tx()                      # the audio thread, on the falling edge
+    d.stft.tx_active = False                 # the server, at both falling-edge sites
+    assert d._stage_state == "in"
+    b, dig = run(d, 120)
+    power = 10 * np.log10(np.mean(b[len(b) // 2:].astype(float) ** 2))
+    print(f"\n    first RX after TX in the mode: {len(b)} browser samples for {len(dig)} digital, "
+          f"power {power:.1f} dB (not silent)")
+    assert len(b) == len(dig) and power > 20.0
+
+
+def test_tx_during_a_fade_finishes_the_fade():
+    d = attach_stage(configure(AudioDemodulator(input_rate_hz=FS)), mode_on=False)
+    run(d, 20)
+    d.stage_request = True
+    run(d, 2)                                # mid-entry
+    assert d._stage_state == "entering"
+    d._reset_after_tx()
+    assert d._stage_state == "in"
+    d.stage_request = False
+    d._reset_after_tx()
+    assert d._stage_state == "bypass"
+    pd = PcmDelay()
+    pd.request = True
+    pd.process(np.zeros(131, np.int16).tobytes())
+    pd.reset()
+    assert pd.state == "in"
+
+
+# --------------------------------------------------------------------- server
+def test_server_mode_entry_and_exit_switch_the_stage_and_the_rx2_delay(fake_sdr, monkeypatch):
     import dashboard.server as server
 
     fake_sdr.available = True
@@ -155,21 +361,47 @@ def test_server_publishes_the_mask_to_the_stage_only_with_noise_and_audio_on(fak
     monkeypatch.setattr(server, "sdr", fake_sdr)
     monkeypatch.setattr(server, "_cancel_snapshot", None)
     monkeypatch.setattr(server, "_latest_b_frame", None)
+    cmd = lambda c, m: asyncio.run(server._handle_cancel_command(c, m))
+    a, b = fake_sdr.audio, fake_sdr.audio_b
+
+    assert a.stage_request is False and b.pcm_delay.request is False
+    cmd("set_noise_audio", {"on": True})                  # AUDIO alone does nothing outside the mode
+    assert a.stage_request is False and a.stft.enabled is False
+
+    cmd("set_cancel_mode", {"mode": "noise"})
+    assert a.stage_request is True and b.pcm_delay.request is True and a.stft.enabled is True
+    cmd("set_noise_audio", {"on": False})                 # unity gain, stage still in the path
+    assert a.stage_request is True and a.stft.enabled is False
+    cmd("set_noise_beta", {"beta_db": -33.3})
+    assert a.stft.beta_db == -33.3 and fake_sdr.canceller.state()["noise_beta_db"] == -33.3
+    cmd("set_noise_beta", {"beta_db": -99})
+    assert fake_sdr.canceller.noise_beta_db == -40.0
+
+    cmd("set_cancel_mode", {"mode": "coherent"})          # COHERENT does not use the stage
+    assert a.stage_request is False and b.pcm_delay.request is False and a.stft.enabled is False
+    cmd("set_cancel_mode", {"mode": "noise"})
+    assert a.stage_request is True
+    cmd("set_cancel_mode", {"mode": "off"})
+    assert a.stage_request is False and b.pcm_delay.request is False
+    assert "noise_audio_ab" not in fake_sdr.canceller.state()
+
+
+def test_server_publishes_the_mask_to_the_stage_and_clears_it_on_exit(fake_sdr, monkeypatch):
+    import dashboard.server as server
+
+    fake_sdr.available = True
+    fake_sdr.audio.set_target(TARGET, "USB", 2800.0)
+    monkeypatch.setattr(server, "sdr", fake_sdr)
+    monkeypatch.setattr(server, "_cancel_snapshot", None)
     rng = np.random.default_rng(41)
     now = server.time.time()
     a = {"data": (10 * np.log10(rng.exponential(1.0, 65536))).astype(np.float32),
          "center_freq_hz": CENTER, "span_hz": SPAN, "sample_rate_hz": SPAN, "ts": now}
-    b = dict(a, data=(10 * np.log10(rng.exponential(1.0, 65536))).astype(np.float32))
+    monkeypatch.setattr(server, "_latest_b_frame",
+                        dict(a, data=(10 * np.log10(rng.exponential(1.0, 65536))).astype(np.float32)))
     asyncio.run(server._handle_cancel_command("set_cancel_mode", {"mode": "noise"}))
-    server._latest_b_frame = b
     asyncio.run(server._handle_cancel_command("set_noise_audio", {"on": True}))
     asyncio.run(server.on_spectrum_frame_noise(a))
-    assert fake_sdr.noise_mask.get() is not None          # the mask is published
-    assert fake_sdr.audio.stft.enabled is True
-    asyncio.run(server._handle_cancel_command("set_noise_audio_ab", {"processed": False}))
-    assert fake_sdr.audio.stft.enabled is False           # raw while A/B is on raw
-    asyncio.run(server._handle_cancel_command("set_noise_audio_ab", {"processed": True}))
-    asyncio.run(server._handle_cancel_command("set_noise_audio", {"on": False}))
-    assert fake_sdr.audio.stft.enabled is False           # AUDIO off: gains 1
+    assert fake_sdr.noise_mask.get() is not None and fake_sdr.audio.stft.enabled is True
     asyncio.run(server._handle_cancel_command("set_cancel_mode", {"mode": "off"}))
-    assert fake_sdr.noise_mask.get() is None              # leaving NOISE SUB clears the mask
+    assert fake_sdr.noise_mask.get() is None and fake_sdr.audio.stft.enabled is False

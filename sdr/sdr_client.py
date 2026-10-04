@@ -48,7 +48,7 @@ from . import sdrplay_capi as capi
 from .audio_demod import AudioDemodulator
 from .canceller import Canceller
 from .combiner import Combiner
-from .audio_stft import MaskProvider, StftGainStage
+from .audio_stft import MaskProvider, PcmDelay, StftGainStage
 from .noise_sub import BLOCK_FRAMES
 from .pairing_debug import PairingDebug
 from .virtual_audio_output import DigitalAudioOutput
@@ -318,6 +318,7 @@ class SdrClient:
         # NOISE SUB audio stage on RX1 (sdr/audio_stft.py). The mask comes from the
         # processor through noise_mask; with no mask published the gains are 1.
         self.noise_mask = MaskProvider()
+        self.audio_b.pcm_delay = PcmDelay()      # matches the stage's latency, in the mode only
         self.audio.stft = StftGainStage(provider=self.noise_mask,
                                         target_hz=lambda: self.audio.target.freq_hz or self.rf_freq_hz)
         # RX0 — manual tunable RX1/RX2 combine (diversity experiment,
