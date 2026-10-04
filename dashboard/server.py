@@ -35,6 +35,7 @@ from config.station_profile import station_profile
 from rig.rigctld_client import (
     RigctldClient, is_valid_hw_frequency, is_valid_hw_mode,
     note_ptt_reply_value)
+from sdr.canceller import apply_rx2_follow, restore_rx2, rx2_locked, snapshot_rx2
 from sdr.sdr_client import SdrClient
 from session.session_manager import SessionManager
 from session.session_profiles import PROFILES
@@ -195,6 +196,10 @@ audio_manager_b = AudioConnectionManager()
 # spectrum of its own. See sdr/combiner.py.
 audio_manager_0 = AudioConnectionManager()
 spectrum_manager_0 = SpectrumConnectionManager()
+# RX1 CANCEL ghost trace (raw RX1 FFT) — see sdr/canceller.py.
+spectrum_manager_ghost = SpectrumConnectionManager()
+# RX2's settings captured when CANCEL turns on, restored when it turns off.
+_cancel_snapshot: Optional[dict] = None
 # See subscribe_fine_spectrum/unsubscribe_fine_spectrum in handle_ws_command —
 # ref-counts real demand for AudioDemodulator.fine_spectrum_enabled instead of
 # it running unconditionally.
@@ -375,6 +380,8 @@ def build_state_payload(state: StationState) -> dict:
                     sdr.audio_b.target.freq_hz, sdr.audio_b.target.bandwidth_hz)
                 if db_fs_b is not None:
                     data["rig"]["sdr_strength_db_b"] = db_fs_b
+    if sdr is not None:
+        data["cancel"] = {**sdr.canceller.state(), "rx2_locked": rx2_locked(sdr)}
     data["station_profile"] = station_profile.to_dict()
     data["antenna_names"] = ANTENNA_NAMES
     return data
@@ -396,6 +403,10 @@ async def on_station_state(state: StationState):
             # line above.
             sdr.audio_b.tx_active = False
             sdr.combiner.tx_active = False
+            sdr.canceller.clear_tx()
+        if sdr.canceller.enabled:
+            # RX2 follows RX1 while CANCEL is on (see sdr/canceller.py).
+            apply_rx2_follow(sdr)
     await manager.broadcast({"type": "state", "data": build_state_payload(state)})
 
 
@@ -462,6 +473,10 @@ async def on_audio_frame_0(audio_bytes: bytes):
 
 async def on_spectrum_frame_0(frame: dict):
     await spectrum_manager_0.broadcast_frame(frame)
+
+
+async def on_spectrum_frame_ghost(frame: dict):
+    await spectrum_manager_ghost.broadcast_frame(frame)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -622,6 +637,7 @@ async def _fast_ptt_monitor():
                         sdr.audio.tx_active = False
                         sdr.audio_b.tx_active = False   # see on_station_state's matching fix
                         sdr.combiner.tx_active = False
+                        sdr.canceller.clear_tx()
                     logger.debug("Fast PTT: TX gate closed")
 
             last_ptt = ptt
@@ -756,6 +772,9 @@ async def lifespan(app: FastAPI):
     sdr.audio_b.on_audio(on_audio_frame_b)
     sdr.combiner.on_audio(on_audio_frame_0)
     sdr.combiner.on_spectrum(on_spectrum_frame_0)
+    sdr.canceller.settings_path = str(Path(__file__).parent.parent / "data" / "cancel_settings.json")
+    sdr.canceller._load_settings()
+    sdr.on_spectrum_ghost(on_spectrum_frame_ghost)
     await sdr.start()
     if not sdr.available:
         logger.warning("SDR unavailable — panadapter features disabled.")
@@ -1094,6 +1113,64 @@ async def websocket_endpoint(websocket: WebSocket):
                 sdr.audio_b.fine_spectrum_enabled = False
 
 
+RX2_LOCKED_CMDS = {
+    "set_panadapter_freq": "RX2 center",
+    "set_audio_target": "RX2 mode/bandwidth",
+    "set_rf_notch": "RX2 RF notch",
+    "set_dab_notch": "RX2 DAB notch",
+}
+
+
+def _rx2_lock_message(cmd, msg) -> Optional[str]:
+    """RX2 follows RX1 while CANCEL is on. Reject direct RX2 changes to the
+    locked settings with a message the operator can act on."""
+    if sdr is None or not rx2_locked(sdr) or msg.get("channel") != "B":
+        return None
+    what = RX2_LOCKED_CMDS.get(cmd)
+    if what is None and cmd == "set_rf_gain" and sdr.canceller.follow_gain:
+        what = "RX2 RF gain"
+    if what is None:
+        return None
+    return (f"{what} is locked to RX1 while CANCEL is on — "
+            f"turn CANCEL off to tune RX2 independently")
+
+
+async def _handle_cancel_command(cmd, msg) -> tuple:
+    """Returns (ok, error). Enable/disable run the RX2 lock transition; the
+    worker join on disable runs in the executor so the loop never waits on it."""
+    global _cancel_snapshot
+    if sdr is None or not sdr.available:
+        return False, "SDR not available"
+    c = sdr.canceller
+    try:
+        if cmd == "set_cancel_enabled":
+            on = bool(msg["enabled"])
+            if on and not c.enabled:
+                _cancel_snapshot = snapshot_rx2(sdr)
+                c.set_enabled(True)
+                apply_rx2_follow(sdr)
+            elif not on and c.enabled:
+                await asyncio.get_running_loop().run_in_executor(None, c.set_enabled, False)
+                if _cancel_snapshot is not None:
+                    restore_rx2(sdr, _cancel_snapshot)
+                    _cancel_snapshot = None
+        elif cmd == "set_cancel_gain_db":
+            c.set_gain_db(float(msg["gain_db"]))
+        elif cmd == "set_cancel_phase_deg":
+            c.set_phase_deg(float(msg["phase_deg"]))
+        elif cmd == "set_cancel_ghost":
+            c.set_ghost(bool(msg["ghost"]))
+        elif cmd == "set_cancel_follow_gain":
+            c.set_follow_gain(bool(msg["follow_gain"]))
+            if c.enabled:
+                apply_rx2_follow(sdr)
+        elif cmd == "cancel_reset":
+            c.reset_weight()
+        return True, None
+    except (KeyError, ValueError, TypeError) as e:
+        return False, f"bad CANCEL command: {e}"
+
+
 async def handle_ws_command(text: str, ws: WebSocket):
     if bridge is None:
         await ws.send_text(json.dumps({
@@ -1102,6 +1179,11 @@ async def handle_ws_command(text: str, ws: WebSocket):
     try:
         msg = json.loads(text)
         cmd = msg.get("cmd")
+        lock_msg = _rx2_lock_message(cmd, msg)
+        if lock_msg:
+            await ws.send_text(json.dumps({
+                "type": "cmd_response", "cmd": cmd, "ok": False, "error": lock_msg}))
+            return
 
         if cmd == "set_mode_op":
             mode = OperatingMode(msg["mode"])
@@ -1241,6 +1323,14 @@ async def handle_ws_command(text: str, ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "cmd_response", "cmd": cmd, "ok": delay is not None,
                 "sample_delay": delay}))
+
+        elif cmd in ("set_cancel_enabled", "set_cancel_gain_db", "set_cancel_phase_deg",
+                     "set_cancel_ghost", "set_cancel_follow_gain", "cancel_reset"):
+            ok, error = await _handle_cancel_command(cmd, msg)
+            response = {"type": "cmd_response", "cmd": cmd, "ok": ok}
+            if error:
+                response["error"] = error
+            await ws.send_text(json.dumps(response))
 
         elif cmd == "subscribe_fine_spectrum":
             # The diversity page's own RX1/RX2 spectrum panels — see
@@ -1662,6 +1752,16 @@ async def spectrum_websocket_b(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         spectrum_manager_b.disconnect(websocket)
+
+
+@app.websocket("/ws/spectrum_ghost")
+async def spectrum_websocket_ghost(websocket: WebSocket):
+    await spectrum_manager_ghost.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        spectrum_manager_ghost.disconnect(websocket)
 
 
 @app.websocket("/ws/spectrum_0")

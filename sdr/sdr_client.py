@@ -46,6 +46,7 @@ import numpy as np
 
 from . import sdrplay_capi as capi
 from .audio_demod import AudioDemodulator
+from .canceller import Canceller
 from .combiner import Combiner
 from .pairing_debug import PairingDebug
 from .virtual_audio_output import DigitalAudioOutput
@@ -53,6 +54,11 @@ from .virtual_audio_output import DigitalAudioOutput
 logger = logging.getLogger(__name__)
 
 SpectrumCallback = Callable[[dict], Coroutine]
+
+
+def _first_sample(params) -> int:
+    """firstSampleNum of a native stream callback (-1 if the pointer is NULL)."""
+    return int(params.contents.firstSampleNum) if params else -1
 
 # Manual RF gain: one 0-100% knob drives both of SDRplay's underlying front-
 # end gain parameters together (same combined-knob convention SDRuno uses),
@@ -302,6 +308,15 @@ class SdrClient:
         # (Combiner.enabled), so it costs nothing when nobody's looking at
         # it. See sdr/combiner.py for the full design.
         self.combiner = Combiner(input_rate_hz=sample_rate_hz)
+        # RX1 CANCEL (sdr/canceller.py). Off by default; settings persistence
+        # is attached by the server, so tests never touch data/.
+        self.canceller = Canceller(
+            sample_rate_hz=sample_rate_hz, fft_size=fft_size, display_fps=display_fps,
+            deliver=self._deliver_cancelled,
+            publish_ghost=self._publish_ghost_threadsafe,
+            cancelled_power=lambda: self._avg_power,
+            context=self._cancel_context)
+        self._spectrum_callbacks_ghost: list[SpectrumCallback] = []
         # Second subscriber on the same demodulated audio — feeds digital-mode
         # software (WSJT-X etc.) via a virtual audio cable instead of needing
         # the antenna switched back to the radio's own receiver.
@@ -367,6 +382,7 @@ class SdrClient:
         self.audio.gate_tx()
         self.audio_b.gate_tx()
         self.combiner.gate_tx()
+        self.canceller.gate_tx()
         self.digital_audio.flush()
 
     async def start(self):
@@ -426,6 +442,8 @@ class SdrClient:
         self.audio_b.rf_center_hz = self.rf_freq_hz_b
         self.audio_b.start(self._loop)
         self.combiner.start(self._loop)
+        if self.canceller.enabled:
+            self.canceller.start_worker()
         self.digital_audio.start()
         if self._pairing_dbg is not None:
             self._pairing_dbg.start()
@@ -456,6 +474,7 @@ class SdrClient:
             self.audio.stop()
             self.audio_b.stop()
             self.combiner.stop()
+            self.canceller.stop_worker()
             self.digital_audio.stop()
             if consumer:
                 consumer.join(3.0)
@@ -787,19 +806,24 @@ class SdrClient:
         self._last_sample_at = time.monotonic()
         i = np.ctypeslib.as_array(xi, shape=(num_samples,)).astype(np.int16, copy=True)
         q_arr = np.ctypeslib.as_array(xq, shape=(num_samples,)).astype(np.int16, copy=True)
-        try:
-            self._q.put_nowait((i, q_arr))
-        except queue.Full:
-            try:
-                self._q.get_nowait()
-                self.dropped_count += 1
-            except queue.Empty:
-                pass
+        if self.canceller.enabled:
+            # CANCEL on: RX1's downstream (spectrum queue, FFT, demod) gets
+            # y = x1 - w*x2 from the canceller's worker, not this raw block.
+            self.canceller.feed_a(i, q_arr, _first_sample(params))
+        else:
             try:
                 self._q.put_nowait((i, q_arr))
             except queue.Full:
-                pass
-        self.audio.feed(i, q_arr)
+                try:
+                    self._q.get_nowait()
+                    self.dropped_count += 1
+                except queue.Empty:
+                    pass
+                try:
+                    self._q.put_nowait((i, q_arr))
+                except queue.Full:
+                    pass
+            self.audio.feed(i, q_arr)
         if self.combiner.enabled:
             # RX0's target/filter tracks RX1's own live settings each
             # callback — cheap attribute reads/copies, no separate sync
@@ -847,6 +871,10 @@ class SdrClient:
             except queue.Full:
                 pass
         self.audio_b.feed(i, q_arr)
+        if self.canceller.enabled:
+            # RX2 stays raw for its own pipeline; the canceller also needs
+            # its block, paired by firstSampleNum with RX1's.
+            self.canceller.feed_b(i, q_arr, _first_sample(params))
         if self.combiner.enabled:
             try:
                 self.combiner.rf_center_hz_b = self.audio_b.rf_center_hz
@@ -1212,6 +1240,46 @@ class SdrClient:
     async def _publish_b(self, frame: dict):
         for cb in self._spectrum_callbacks_b:
             await cb(frame)
+
+    def on_spectrum_ghost(self, cb: SpectrumCallback):
+        """Raw RX1 ghost trace while CANCEL is on — see sdr/canceller.py."""
+        self._spectrum_callbacks_ghost.append(cb)
+
+    def _publish_ghost_threadsafe(self, frame: dict):
+        """Called from the canceller's worker thread."""
+        if self._loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._publish_ghost(frame), self._loop)
+        except RuntimeError:
+            pass   # loop closing/closed during shutdown
+
+    async def _publish_ghost(self, frame: dict):
+        for cb in self._spectrum_callbacks_ghost:
+            await cb(frame)
+
+    def _deliver_cancelled(self, i: np.ndarray, q_arr: np.ndarray):
+        """RX1's raw-path entry points, fed with y instead of x1. Called from
+        the canceller's worker thread. Same queue and audio.feed as the raw
+        callback — keep the two in step."""
+        try:
+            self._q.put_nowait((i, q_arr))
+        except queue.Full:
+            try:
+                self._q.get_nowait()
+                self.dropped_count += 1
+            except queue.Empty:
+                pass
+            try:
+                self._q.put_nowait((i, q_arr))
+            except queue.Full:
+                pass
+        self.audio.feed(i, q_arr)
+
+    def _cancel_context(self) -> dict:
+        t = self.audio.target
+        return {"center_hz": self.rf_freq_hz, "freq_hz": t.freq_hz, "mode": t.mode,
+                "bandwidth_hz": t.bandwidth_hz, "low_cut_hz": self.audio.low_cut_hz}
 
     async def _publish_fine_a(self, frame: dict):
         frame["channel"] = "A"
