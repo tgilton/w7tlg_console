@@ -334,6 +334,47 @@ def test_tx_sets_the_flag_only_and_the_falling_edge_restarts_the_stage_audibly()
     assert len(b) == len(dig) and power > 20.0
 
 
+def test_stage_flag_guards_the_demodulator_no_audio_and_no_state_advance():
+    """IQ fed straight into _process with the stage's flag set (the demodulator's own
+    tx_active is left clear, so only the stage's guard is under test)."""
+    d = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="fast"),
+                     flag_rf_hz=CENTER - 3000.0, mode_on=True, audio_on=True)
+    run(d, 60)
+    st = d.stft
+    snap = lambda: (st._n_in, st._next_frame, st._emitted, st._g.copy(), d._bb_hist.copy(),
+                    d._ssb_overlap.copy(), d._dig_ssb_overlap.copy(), d.agc_gain, d._dig_agc_gain,
+                    d._stage_state, d._stage_fade_pos)
+    before = snap()
+    st.tx_active = True
+    b, dig = run(d, 40)
+    after = snap()
+    print(f"\n    stage flag set, 40 IQ blocks: browser {len(b)} samples, digital {len(dig)} samples, "
+          f"stage frames {before[1]} -> {after[1]}")
+    assert len(b) == 0 and len(dig) == 0
+    for x, y in zip(before, after):
+        assert np.array_equal(x, y) if isinstance(x, np.ndarray) else x == y
+
+
+def test_first_rx_after_tx_is_audible_once_the_flag_is_cleared():
+    d = attach_stage(configure(AudioDemodulator(input_rate_hz=FS), agc="off"),
+                     flag_rf_hz=CENTER - 3000.0, mode_on=True, audio_on=True)
+    ref, _ = run(d, 60)
+    d.gate_tx()                                   # rising edge: sets both flags
+    assert d.tx_active and d.stft.tx_active
+    silent, _ = run(d, 10)                        # still flagged: nothing comes out
+    d.tx_active = False                           # the server's falling edge ...
+    d.stft.tx_active = False                      # ... clears both, at both sites
+    d._reset_after_tx()                           # and the audio thread restarts the stage
+    b, dig = run(d, 120)
+    half = len(b) // 2
+    lvl = lambda v: 10 * np.log10(np.mean(v.astype(float) ** 2))
+    print(f"\n    during TX {len(silent)} samples; after the clear {len(b)} browser / {len(dig)} digital, "
+          f"level {lvl(b[half:]):.1f} dB vs {lvl(ref[len(ref) // 2:]):.1f} dB before TX")
+    assert len(silent) == 0
+    assert len(b) == len(dig) == 120 * 131
+    assert abs(lvl(b[half:]) - lvl(ref[len(ref) // 2:])) < 0.5
+
+
 def test_tx_during_a_fade_finishes_the_fade():
     d = attach_stage(configure(AudioDemodulator(input_rate_hz=FS)), mode_on=False)
     run(d, 20)

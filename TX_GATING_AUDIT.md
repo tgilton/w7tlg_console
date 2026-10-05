@@ -27,7 +27,8 @@ RSPduo swap (2026-09-11) or against the current SDS-4000S wiring.
 Fourteen elements, server + browser, as audited on 2026-09-19 (rows 1-14),
 plus seven added on branch `rx2-cancel` (rows 15-21).
 
-> **Table refreshed 2026-10-04** on `rx2-cancel` at `8aba9d5`. All line
+> **Table refreshed 2026-10-04** on `rx2-cancel` at `8aba9d5`; rows 7, 18, 19
+> and 21 again on 2026-10-05 when row 18's flag became a real guard. All line
 > numbers in the two tables of this section were re-read from the source at
 > that commit, and rows 15-21 were added. Nothing else in this document was
 > re-audited: sections 2-8 are the 2026-09-19 audit, and the line numbers
@@ -42,7 +43,7 @@ plus seven added on branch `rx2-cancel` (rows 15-21).
 | 4 | `SdrClient.gate_tx()` — fans out to A, B, RX0, the canceller (#15), the block averages (#17) and BlackHole | `sdr/sdr_client.py:434-450` | called by #1 and #9 | (b) |
 | 5 | `AudioDemodulator.gate_tx()` — IQ queue flush + AGC reset to 1.0; also sets the STFT stage's flag (#18) | `sdr/audio_demod.py:450-470` | #4 | (b) |
 | 6 | `AudioDemodulator._run` TX drop + overlap/EQ/NR state reset on falling edge; calls `_reset_after_tx()` (#18, #19) | `sdr/audio_demod.py:692-717` | `tx_active` | (b) |
-| 7 | `AudioDemodulator._publish` early-return on `tx_active` (browser path) | `sdr/audio_demod.py:991-998` | `tx_active` | (b) |
+| 7 | `AudioDemodulator._publish` early-return on `tx_active` (browser path) | `sdr/audio_demod.py:995-1002` | `tx_active` | (b) |
 | 8 | `DigitalAudioOutput.flush()` — drains the BlackHole queue | `sdr/virtual_audio_output.py:68-76` | #4 | (b) |
 | 9 | `on_station_state` slow-path PTT edge (100 ms bridge poll); falling edge clears A, B, RX0, the canceller and the stage flag | `dashboard/server.py:401-423` (clears at `409-419`) | main rig poll | (b) safety net |
 | 10 | `on_audio_frame` / `_b` / `_0` broadcast gates | `dashboard/server.py:466-484` | `tx_active` | (b) last line of defence |
@@ -53,10 +54,10 @@ plus seven added on branch `rx2-cancel` (rows 15-21).
 | 15 | `Canceller.gate_tx()` — sets its `tx_active`, discards both input queues, the pairing deques and the pending batch, and clears the ghost FFT and residual state. `clear_tx()` clears the flag. `pump()` discards and `_process()` returns while the flag is set, so nothing is delivered to RX1 during TX | `sdr/canceller.py:329-347` (gate, clear), `367`, `439` (guards) | #4; cleared by #20 | (b) |
 | 16 | Canceller's place in `SdrClient.gate_tx()` — called after the combiner, before the BlackHole flush. The vendor callbacks keep enqueueing during TX (streams are not paused; the stall watchdog needs them) | `sdr/sdr_client.py:448` | #4 | (b) |
 | 17 | NOISE SUB block averages: `clear_block_averages()` on TX, and no raw frame is added to a block while that receiver's `tx_active` is set | `sdr/sdr_client.py:388-392` (clear), `449` (call), `1148`, `1240` (guards) | #4, `tx_active` | (b) display hygiene |
-| 18 | STFT audio stage (RX1). `gate_tx` sets `stft.tx_active` only. The flag is not read anywhere: the stage is not run during TX because #6 drops the IQ before `_process`. The stage's buffers belong to the audio thread, which restarts them in `_reset_after_tx()` on the falling edge (primed from silence if NOISE SUB mode is on, plain reset if not), finishes any entry or exit fade, and resets the raw digital chain's filter and AGC state | `sdr/audio_demod.py:459` (flag), `703` (call), `816-831` (`_reset_after_tx`) | #5, #6 | (b) |
-| 19 | RX2 PCM delay: `PcmDelay.reset()` on the falling edge, from `_reset_after_tx()` — history zeroed, any fade finished | `sdr/audio_stft.py:238-243`, `sdr/audio_demod.py:830-831` | #6 | (b) |
+| 18 | STFT audio stage (RX1). `gate_tx` sets `stft.tx_active`, and the flag is a guard of its own on top of #6 dropping the IQ: `StftGainStage.process()` returns nothing and changes no state while it is set, and `_stage_path` returns no audio on either path and advances no history, fade or filter state. The stage's buffers belong to the audio thread, which restarts them in `_reset_after_tx()` on the falling edge (primed from silence if NOISE SUB mode is on, plain reset if not; the restart is not subject to the guard, since it can run just before #20 clears the flag), finishes any entry or exit fade, and resets the raw digital chain's filter and AGC state | `sdr/audio_demod.py:459` (flag set), `703` (call), `816-831` (`_reset_after_tx`), `838-841` (guard); `sdr/audio_stft.py:172-175` (guard) | #5, #6; cleared by #20 | (b) |
+| 19 | RX2 PCM delay: `PcmDelay.reset()` on the falling edge, from `_reset_after_tx()` — history zeroed, any fade finished | `sdr/audio_stft.py:246-251`, `sdr/audio_demod.py:830-831` | #6 | (b) |
 | 20 | Both falling-edge sites in `server.py` clear the canceller's flag and the stage's flag, next to the A, B and RX0 clears | `dashboard/server.py:417-419` (`on_station_state`), `731-733` (`_fast_ptt_monitor`) | PTT falling edge | (b) |
-| 21 | `AudioDemodulator._publish_digital` early-return on `tx_active` — the digital (WSJT-X) subscribers are a separate list from the browser's since the stage was added, with their own gate | `sdr/audio_demod.py:984-989` | `tx_active` | (b) |
+| 21 | `AudioDemodulator._publish_digital` early-return on `tx_active` — the digital (WSJT-X) subscribers are a separate list from the browser's since the stage was added, with their own gate | `sdr/audio_demod.py:988-993` | `tx_active` | (b) |
 
 † #1 is filed under (b) deliberately — see §6.1. It is *described* in its
 own commit as protecting the SDR front end, but it cannot: it is software

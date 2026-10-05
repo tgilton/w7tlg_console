@@ -835,6 +835,10 @@ class AudioDemodulator:
         In the path: the browser takes the stage's output (the input delayed by N samples,
         with the gains applied), and the digital feed runs its own raw chain, seeded from
         the plain chain's state at entry so it carries on sample for sample."""
+        if self.stft.tx_active:
+            # The stage's own TX guard, on top of _run dropping the IQ: no audio out on
+            # either path, and no history, fade or filter state advanced.
+            return None, None
         n2 = 2 * self.stft.n
         if self._bb_hist is None:
             self._bb_hist = np.zeros(n2, dtype=np.complex128)

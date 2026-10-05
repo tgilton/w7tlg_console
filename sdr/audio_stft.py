@@ -19,8 +19,9 @@ Structure
     floor, -20 dB by default. G is smoothed across frequency (3 bins) and in time
     (first-order, 200 ms attack and release).
 
-The stage holds no TX flag of its own beyond what the caller sets: reset()
-clears its state, and the caller clears its flag on the falling edge.
+tx_active is a guard of the stage's own: while it is set, process() takes nothing in,
+returns nothing and changes no state. The demodulator sets it on TX and the server
+clears it on the falling edge; reset() and prime() restart the stage's state.
 """
 
 import math
@@ -120,7 +121,7 @@ class StftGainStage:
         h = np.asarray(history, dtype=np.complex128)
         if len(h) < 2 * self.n:
             h = np.concatenate([np.zeros(2 * self.n - len(h), dtype=np.complex128), h])
-        self.process(h[-2 * self.n:])
+        self._run(h[-2 * self.n:])     # the restart itself is not subject to the TX guard
 
     # ------------------------------------------------------------- mapping
     def _rebuild_mapping(self, state: dict, target: float):
@@ -168,6 +169,13 @@ class StftGainStage:
         """Complex baseband in, complex baseband out. The output is the input delayed
         by latency_samples; the first calls return fewer samples while the delay fills,
         and the total count stays input minus latency."""
+        if self.tx_active:
+            # TX guard: take nothing in, put nothing out, and leave every buffer, the
+            # frame counter and the smoothed gains exactly as they are.
+            return np.zeros(0, dtype=np.complex128)
+        return self._run(x)
+
+    def _run(self, x: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=np.complex128)
         self._inbuf = np.concatenate([self._inbuf, x])
         self._n_in += len(x)

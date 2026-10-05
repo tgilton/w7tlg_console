@@ -241,3 +241,39 @@ def test_mapping_survives_a_retune_of_the_target():
     x = tone(1000.0, 32000)
     y = run(st, x)
     assert steady_gain(y, x) > 0.9                  # the flag is no longer on this tone
+
+
+# ------------------------------------------------------------- TX guard
+def _stage_snapshot(st):
+    return (st._n_in, st._next_frame, st._emitted, st._inbase, st._accbase,
+            st._inbuf.copy(), st._acc.copy(), st._g.copy(), st._map_key)
+
+
+def test_tx_flag_is_a_guard_no_output_and_no_state_change():
+    st = make_stage(flag_bb_freqs=[+1000.0], r=0.01)
+    run(st, tone(1000.0, 8000))                       # a running stage, gains mid-way
+    before = _stage_snapshot(st)
+    st.tx_active = True
+    outs = [st.process(tone(2000.0, 131)) for _ in range(40)]
+    after = _stage_snapshot(st)
+    assert all(len(o) == 0 for o in outs)
+    for b, a in zip(before, after):
+        assert np.array_equal(b, a) if isinstance(b, np.ndarray) else b == a
+    print(f"\n    TX flag set: 40 blocks in, {sum(len(o) for o in outs)} samples out, state unchanged "
+          f"(frames {before[1]} -> {after[1]})")
+
+
+def test_stage_resumes_after_the_flag_clears():
+    st = make_stage(flag_bb_freqs=[])
+    run(st, tone(1000.0, 8000))
+    st.tx_active = True
+    st.process(tone(1000.0, 4000))
+    st.prime(np.zeros(0))                             # the audio thread's restart on the falling edge,
+    assert len(st.process(tone(1500.0, 131))) == 0    # which may come before the server's clear
+    st.tx_active = False
+    x = tone(1500.0, 16000)
+    y = run(st, x)
+    assert len(y) == len(x)                           # primed: one sample out per sample in
+    g = np.abs(y[4096:]).mean() / np.abs(x[4096:len(y)]).mean()
+    print(f"\n    after the clear: {len(y)} samples out for {len(x)} in, gain {20 * np.log10(g):+.3f} dB")
+    assert abs(20 * np.log10(g)) < 0.01
