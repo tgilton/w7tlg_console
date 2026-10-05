@@ -31,6 +31,8 @@ from typing import Optional
 import numpy as np
 from scipy.signal import resample_poly, sosfilt
 
+from .audio_stft import fade_weights
+
 
 def _ensure_torchaudio_backend_shim():
     """deepfilternet 0.5.6's df.io unconditionally imports
@@ -284,6 +286,23 @@ class AudioDemodulator:
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._audio_callbacks: list[AudioCallback] = []
+        # Digital-mode subscribers (WSJT-X via BlackHole). Kept apart from the browser list
+        # so the browser can carry the NOISE SUB stage while this path stays raw.
+        self._digital_callbacks: list[AudioCallback] = []
+        # NOISE SUB audio stage (sdr/audio_stft.py), RX1 only. None elsewhere, and then
+        # the digital output is the browser output, exactly as before.
+        self.stft = None
+        self._dig_ssb_overlap = None
+        self._dig_agc_gain = 1.0
+        # The stage is in the path only while NOISE SUB mode is on (stage_request, set by
+        # the server). Off, the output is the plain chain with no added delay. The audio
+        # thread moves between the states; entry and exit are crossfades.
+        self.stage_request = False
+        self._stage_state = "bypass"     # bypass | entering | in | exiting
+        self._stage_fade_pos = 0
+        self._bb_hist: Optional[np.ndarray] = None
+        # RX2: a PCM delay on the browser output, to match RX1's stage latency in the mode.
+        self.pcm_delay = None
         self._sample_counter = 0
         # Pre-allocated and written via slice assignment, not concatenate —
         # concatenate-and-grow recopies the whole accumulated buffer on
@@ -322,6 +341,15 @@ class AudioDemodulator:
         API."""
         if cb in self._audio_callbacks:
             self._audio_callbacks.remove(cb)
+
+    def on_digital(self, cb: AudioCallback):
+        """Digital-mode subscriber (WSJT-X path). Idempotent."""
+        if cb not in self._digital_callbacks:
+            self._digital_callbacks.append(cb)
+
+    def off_digital(self, cb: AudioCallback):
+        if cb in self._digital_callbacks:
+            self._digital_callbacks.remove(cb)
 
     def on_fine_spectrum(self, cb: Callable[[dict], Coroutine]):
         self._fine_spectrum_callbacks.append(cb)
@@ -425,6 +453,10 @@ class AudioDemodulator:
         already buffered, and resets AGC gain so the high-gain state built up
         listening to weak signals doesn't produce a loud blast on TX→RX return."""
         self.tx_active = True
+        if self.stft is not None:
+            # Flag only: the stage's buffers belong to the audio thread, which resets
+            # them on the falling edge (_reset_after_tx).
+            self.stft.tx_active = True
         dropped = 0
         while True:
             try:
@@ -668,6 +700,7 @@ class AudioDemodulator:
                 continue
             if self._was_tx_active:
                 self._was_tx_active = False
+                self._reset_after_tx()
                 self._acc_len = 0
                 if self._decim_filter_coarse is not None:
                     self._decim_overlap_coarse = np.zeros(
@@ -706,17 +739,22 @@ class AudioDemodulator:
                     continue
 
                 try:
-                    audio_bytes = self._process(self._acc_i, self._acc_q)
+                    browser_bytes, digital_bytes = self._process(self._acc_i, self._acc_q)
                 except Exception:
                     logger.exception("Audio demod error")
                     continue
-                if audio_bytes is not None and self._loop is not None:
+                if self._loop is not None:
                     try:
-                        asyncio.run_coroutine_threadsafe(self._publish(audio_bytes), self._loop)
+                        if browser_bytes is not None:
+                            asyncio.run_coroutine_threadsafe(self._publish(browser_bytes), self._loop)
+                        if digital_bytes is not None:
+                            asyncio.run_coroutine_threadsafe(self._publish_digital(digital_bytes), self._loop)
                     except RuntimeError:
                         pass   # loop closing/closed during shutdown
 
-    def _process(self, block_i: np.ndarray, block_q: np.ndarray) -> Optional[bytes]:
+    def _process(self, block_i: np.ndarray, block_q: np.ndarray):
+        """Returns (browser_bytes, digital_bytes); either may be None. Without a stage the
+        two are the same object, as before."""
         # Snapshot once — self.target is replaced as a single unit by
         # set_target(), so one read here guarantees freq/mode/bandwidth
         # stay a matched combination for this whole call, even if
@@ -767,6 +805,110 @@ class AudioDemodulator:
                 target.bandwidth_hz, target.mode, self.low_cut_hz)
             self._ssb_filter_key = filter_key
             self._ssb_overlap = np.zeros(len(self._ssb_filter) - 1, dtype=np.complex64)
+
+        if self.stft is not None:
+            return self._stage_path(intermediate)
+        browser = self._browser_chain(intermediate)
+        if self.pcm_delay is not None and browser is not None:
+            return self.pcm_delay.process(browser), browser
+        return browser, browser
+
+    def _reset_after_tx(self):
+        """Falling edge of TX, on the audio thread. The stage restarts from silence, a fade
+        in progress is finished, and the stage state follows the request."""
+        if self.stft is not None:
+            self._bb_hist = None
+            if self.stage_request:
+                self.stft.prime(np.zeros(0))
+                self._stage_state = "in"
+                self._dig_ssb_overlap = None
+                self._dig_agc_gain = 1.0
+            else:
+                self.stft.reset()
+                self._stage_state = "bypass"
+            self._stage_fade_pos = 0
+        if self.pcm_delay is not None:
+            self.pcm_delay.reset()
+
+    def _stage_path(self, x: np.ndarray):
+        """RX1. Bypass: the plain chain, with digital = browser, as before the stage existed.
+        In the path: the browser takes the stage's output (the input delayed by N samples,
+        with the gains applied), and the digital feed runs its own raw chain, seeded from
+        the plain chain's state at entry so it carries on sample for sample."""
+        if self.stft.tx_active:
+            # The stage's own TX guard, on top of _run dropping the IQ: no audio out on
+            # either path, and no history, fade or filter state advanced.
+            return None, None
+        n2 = 2 * self.stft.n
+        if self._bb_hist is None:
+            self._bb_hist = np.zeros(n2, dtype=np.complex128)
+        hist = self._bb_hist
+        self._bb_hist = np.concatenate([hist, x])[-n2:]
+
+        if self._stage_state == "bypass":
+            if not self.stage_request:
+                browser = self._browser_chain(x)
+                return browser, browser
+            self.stft.prime(hist)
+            self._dig_ssb_overlap = self._ssb_overlap.copy()
+            self._dig_agc_gain = self.agc_gain
+            self._stage_state, self._stage_fade_pos = "entering", 0
+        elif self._stage_state == "in" and not self.stage_request:
+            self._stage_state, self._stage_fade_pos = "exiting", 0
+
+        digital = self._digital_chain(x)
+        y = self.stft.process(x)
+        if self._stage_state == "in":
+            return self._browser_chain(y), digital
+
+        fade = self.stft.n
+        w = fade_weights(self._stage_fade_pos, len(x), fade)
+        self._stage_fade_pos += len(x)
+        done = self._stage_fade_pos >= fade
+        if self._stage_state == "entering":
+            browser = self._browser_chain((1.0 - w) * x + w * y)
+            if done:
+                self._stage_state = "in"
+            return browser, digital
+        browser = self._browser_chain((1.0 - w) * y + w * x)
+        # Walk the AGC gain to the raw chain's across the fade, so the handover below is
+        # continuous (the two differ when removed lines had let the AGC rise).
+        self.agc_gain += (self._dig_agc_gain - self.agc_gain) * float(w[-1])
+        if done:
+            # Back to the plain chain. It takes over the raw chain's filter and AGC state,
+            # so the digital feed continues without a break.
+            self._stage_state = "bypass"
+            self._ssb_overlap = self._dig_ssb_overlap.copy()
+            self.agc_gain = self._dig_agc_gain
+        return browser, digital
+
+    def _digital_chain(self, x: np.ndarray) -> bytes:
+        """Raw RX1 for the digital path: SSB filter and AGC on the raw baseband. EQ and
+        NR are not applied on this path (NR is the expensive part, and it is not run
+        twice). Independent of the NOISE SUB stage."""
+        if self._dig_ssb_overlap is None or len(self._dig_ssb_overlap) != len(self._ssb_filter) - 1:
+            self._dig_ssb_overlap = np.zeros(len(self._ssb_filter) - 1, dtype=np.complex64)
+        ext = np.concatenate([self._dig_ssb_overlap, x])
+        filtered = np.convolve(ext, self._ssb_filter, mode="valid")
+        self._dig_ssb_overlap = ext[-(len(self._ssb_filter) - 1):]
+        audio = np.real(filtered).astype(np.float32) / 32768.0
+        if self.agc_mode == "off":
+            gain = 1.0
+        else:
+            rms = float(np.sqrt(np.mean(audio ** 2))) + 1e-6
+            block_duration_s = len(audio) / INTERMEDIATE_RATE_HZ
+            tau = AGC_TAU_FAST_S if self.agc_mode == "fast" else AGC_TAU_SLOW_S
+            alpha = 1.0 - np.exp(-block_duration_s / tau)
+            self._dig_agc_gain += (0.15 / rms - self._dig_agc_gain) * alpha
+            self._dig_agc_gain = float(np.clip(self._dig_agc_gain, 0.1, 6.0))
+            gain = self._dig_agc_gain
+        audio = np.clip(audio * gain * self.manual_gain, -0.95, 0.95)
+        return (audio * 32767).astype(np.int16).tobytes()
+
+    def _browser_chain(self, intermediate: np.ndarray) -> Optional[bytes]:
+        """The browser (speaker) path: SSB filter, EQ, NR, AGC. Same code as before; its
+        input is the stage's output when the stage is attached."""
+        target = self.target
 
         # Stateful SSB channel filter (overlap-save) — each batch (~131
         # samples at 16kHz) is shorter than the 161-tap filter, so a plain
@@ -842,6 +984,13 @@ class AudioDemodulator:
 
         pcm16 = (audio * 32767).astype(np.int16)
         return pcm16.tobytes()
+
+    async def _publish_digital(self, audio_bytes: bytes):
+        """Digital-mode output (WSJT-X). Gated on TX exactly like the browser path."""
+        if self.tx_active:
+            return
+        for cb in self._digital_callbacks:
+            await cb(audio_bytes)
 
     async def _publish(self, audio_bytes: bytes):
         # Gate ALL audio output during TX — catches both the browser WebSocket

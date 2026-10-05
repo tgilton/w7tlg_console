@@ -21,11 +21,15 @@
 #   5. CSS brace balance      a truncated rule silently eats the rest
 #   6. smoke_console.js       the real page loads without a ReferenceError
 #   7. test_wheel_real.js     a real WheelEvent still moves every slider
+#   8. test_tx_freeze.js      RX1 and RX2 displays hold the pre-TX frame during
+#                             TX with frames arriving on every socket
 #
 # Checks 3-5 are static and catch what a screenshot cannot. Check 6 is the
 # one that would have caught the stage 5 outage; Amendment F15 requires it
-# before every commit that touches console.html. --quick skips 6 and 7,
-# which are the slow ones (~10s each) and the only ones that need Chrome.
+# before every commit that touches console.html. --quick skips 6, 7 and 8,
+# which are the slow ones (6 and 7 ~10s each, 8 ~40s) and the only ones that
+# need Chrome. Check 8 is the one that would have caught the NOISE-mode trace
+# staying live in TX.
 #
 # Exits non-zero if any check fails. Each check prints PASS or FAIL.
 
@@ -66,7 +70,7 @@ fi
 # ------------------------------------------------------------ 2. node tests
 head_ "2. node unit tests"
 if command -v node >/dev/null 2>&1; then
-  for t in test_meter_math test_af_taper test_af_paths test_palettes; do
+  for t in test_meter_math test_af_taper test_af_paths test_palettes test_cancel_wheel test_spec_pick; do
     if out=$(node "ui-redesign/$t.js" 2>&1); then
       pass "$t.js — $(printf '%s' "$out" | tail -n 1)"
     else
@@ -147,10 +151,10 @@ if [ "$1" = "$2" ]; then pass "braces balanced ($1/$2)"; else fail "braces $1/$2
 
 # ------------------------------------------------------ 6/7. browser checks
 if [ "$QUICK" -eq 1 ]; then
-  head_ "6-7. browser checks"
+  head_ "6-8. browser checks"
   skip "--quick given"
 elif [ ! -x "$CHROME" ]; then
-  head_ "6-7. browser checks"
+  head_ "6-8. browser checks"
   skip "Chrome not found at $CHROME"
 else
   head_ "6. smoke_console.js (the real page, headless)"
@@ -167,6 +171,14 @@ else
   else
     fail "test_wheel_real.js"
     printf '%s\n' "$out" | tail -n 30
+  fi
+
+  head_ "8. test_tx_freeze.js (displays frozen during TX, every socket live)"
+  if out=$(node ui-redesign/test_tx_freeze.js 2>&1); then
+    pass "test_tx_freeze.js — $(printf '%s' "$out" | tail -n 1)"
+  else
+    fail "test_tx_freeze.js"
+    printf '%s\n' "$out" | grep -E "FAIL|passed" | tail -n 30
   fi
 fi
 

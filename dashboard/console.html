@@ -2728,6 +2728,41 @@ html, body { background: var(--v2-bg-page); }
 .panel-resize-handle:hover, .panel-resize-handle.dragging { background: var(--v2-btn-bg); }
 
 /* V2:END */
+/* RX1 CANCEL block (sdr/canceller.py). Reuses the panel's button, slider
+   and label classes; this block adds layout, the chip, and the RX2 lock. */
+.v2-cancel-card { margin-top: 10px; }
+.cancel-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.cancel-row .display-slider { flex: 1 1 120px; min-width: 100px; }
+.cancel-num { width: 64px; font: inherit; color: inherit; background: var(--bg-2); border: 1px solid var(--border); padding: 2px 4px; text-align: right; }
+.cancel-unit { color: var(--chrome-label); }
+.cancel-readout { display: flex; gap: 12px; margin-top: 6px; min-height: 27px; align-items: center; }
+.cancel-res { flex: 1 1 auto; min-width: 0; display: flex; justify-content: space-between; align-items: baseline; color: var(--chrome-label); font-size: 0.75rem; }
+.cancel-res b { color: inherit; font-size: 1rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.cancel-step { display: inline-flex; gap: 4px; margin-top: 6px; }
+/* NOISE mode: +180 is hidden, and the expected false share takes its place, right-aligned. */
+.cancel-false { margin-left: auto; font-size: 0.75rem; color: var(--chrome-label); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* NOISE mode, not processing: the status replaces the lines count, on two short lines. */
+.cancel-res.cancel-bypass > span { display: none; }
+.cancel-res.cancel-bypass b { font-size: 0.6rem; line-height: 1.1; font-weight: 700; text-align: left; color: var(--state-fault); white-space: pre-line; }
+.cancel-readout.cancel-noise .cancel-beta { flex: 0 0 auto; }
+/* NOISE mode: the second readout cell is the max-attenuation control (value, then unit). */
+.cancel-res.cancel-beta { flex-direction: row-reverse; justify-content: flex-end; gap: 5px; align-items: center; }
+.cancel-res.cancel-beta span { font-size: 0.6rem; line-height: 1.05; width: 38px; white-space: normal; }
+.cancel-res.cancel-beta b { cursor: ns-resize; padding: 0 3px; border: 1px solid var(--border); border-radius: 3px; }
+.cancel-res.cancel-beta b:focus { outline: 1px solid var(--state-selected); }
+.cancel-row-tight { gap: 4px; }
+/* Row 1 holds ON, OFF, MODE and AUDIO in 190 px: 4 px between buttons, 8 px between lines. */
+.cancel-row-top { gap: 8px 4px; }
+.cancel-row-top .dsp-agc-btn { padding-left: 4px; padding-right: 4px; }
+.cancel-step .dsp-agc-btn { min-width: 52px; }
+.cancel-note { margin-top: 6px; font-size: 0.75rem; color: var(--state-selected); }
+.cancel-row .dsp-agc-btn { flex: 0 0 auto; }
+.cancel-num { min-height: 28px; }
+.cancel-chip { margin-left: 8px; color: var(--state-selected); background: var(--state-selected-bg); border: 1px solid currentColor; }
+body.rx2-cancel-locked #freq2-input, body.rx2-cancel-locked #tune2-btn, body.rx2-cancel-locked #span2-slider,
+body.rx2-cancel-locked #mode2-USB, body.rx2-cancel-locked #mode2-LSB, body.rx2-cancel-locked #width2-slider,
+body.rx2-cancel-locked #rf-notch2-btn, body.rx2-cancel-locked #dab-notch2-btn { opacity: 0.4; pointer-events: none; }
+body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -2882,6 +2917,45 @@ html, body { background: var(--v2-bg-page); }
       </div>
     </div>
 
+    <div class="section-box" id="box-cancel">
+    <h2 title="y = RX1 &minus; w&middot;RX2 — RX1 with RX2 subtracted at weight w">Cancel</h2>
+        <div class="cancel-row cancel-row-top">
+          <button class="dsp-agc-btn" id="cancel-on" onclick="CancelUI.setEnabled(true)" title="Turn on the selected mode">ON</button>
+          <button class="dsp-agc-btn active" id="cancel-off" onclick="CancelUI.setEnabled(false)">OFF</button>
+          <button class="dsp-agc-btn" id="cancel-mode" onclick="CancelUI.cycleMode()" title="Mode: COH = coherent (cancels RX2 from RX1 in the IQ). NOISE = noise sub (spectrum display, and RX1 audio when AUDIO is on)">COH</button>
+          <button class="dsp-agc-btn" id="cancel-audio" onclick="CancelUI.toggleAudio()" disabled title="NOISE mode only. Off: raw RX1 audio. On: flagged lines attenuated in RX1 audio. The WSJT-X feed stays raw.">AUDIO</button>
+          <button class="dsp-agc-btn active" id="cancel-follow" onclick="CancelUI.toggleFollow()" title="While CANCEL is on, RX2's RF gain follows RX1">RX2 GAIN FOLLOWS RX1</button>
+        </div>
+        <div class="cancel-row cancel-row-tight">
+          <button class="dsp-agc-btn" id="cancel-reset" onclick="CancelUI.reset()" title="Coherent: gain 0 dB, phase 0. Noise sub: scale -10 dB, thresh 2.0">RESET</button>
+          <button class="dsp-agc-btn" id="cancel-ghost" onclick="CancelUI.toggleGhost()" title="Show the raw RX1 spectrum as a dashed ghost trace">GHOST</button>
+          <button class="dsp-agc-btn" id="cancel-clamp" onclick="CancelUI.toggleClamp()" title="NOISE SUB only: bins below the threshold drawn at the floor">CLAMP</button>
+          <span class="cancel-step" role="group" aria-label="Step size for wheel and arrow keys">
+            <button class="dsp-agc-btn" id="cancel-step-fine" type="button" title="Step 0.1 (dB or degrees); Shift = 5x">FINE</button>
+            <button class="dsp-agc-btn" id="cancel-step-med" type="button" title="Step 0.5 (dB or degrees); Shift = 5x">MED</button>
+            <button class="dsp-agc-btn" id="cancel-step-coarse" type="button" title="Step 2.0 (dB or degrees); Shift = 5x">COARSE</button>
+          </span>
+        </div>
+        <div class="cancel-row">
+          <span class="ctl-label" id="cancel-gain-label">Gain</span>
+          <input type="range" class="display-slider v2-range" id="cancel-gain-slider" min="-400" max="800" step="1" value="0" data-v2-notch="0.3333" aria-label="Cancel gain">
+          <input type="text" class="cancel-num" id="cancel-gain-num" inputmode="decimal" value="0.0" aria-label="Cancel gain in dB" title="Type a value, or use arrow keys (step from STEP; Shift x5)">
+          <span class="cancel-unit" id="cancel-gain-unit">dB</span>
+        </div>
+        <div class="cancel-row">
+          <span class="ctl-label" id="cancel-phase-label">Phase</span>
+          <input type="range" class="display-slider v2-range" id="cancel-phase-slider" min="0" max="3599" step="1" value="0" data-v2-notch="0" aria-label="Cancel phase">
+          <input type="text" class="cancel-num" id="cancel-phase-num" inputmode="decimal" value="0.0" aria-label="Cancel phase in degrees" title="Type a value, or use arrow keys (step from STEP; Shift x5)">
+          <span class="cancel-unit" id="cancel-phase-unit">&deg;</span>
+          <button class="dsp-agc-btn" id="cancel-invert" onclick="CancelUI.invert()" title="Add 180 degrees to the phase">+180&deg;</button>
+          <span class="cancel-false" id="cancel-false" style="display:none" title="Expected share of bins that are false detections at this THRESH, measured live from the unmasked RX2 bins"></span>
+        </div>
+        <div class="cancel-note" id="cancel-auto-note" style="display:none">AUTO is on. Fixed scale is what keeps the two traces comparable while CANCEL is on.</div>
+        <div class="cancel-readout">
+          <span class="cancel-res" id="cancel-res-cell1"><span id="cancel-res-label1">span</span><b id="cancel-resid-span">&mdash;</b></span>
+          <span class="cancel-res" id="cancel-res-cell2"><span id="cancel-res-label2">audio</span><b id="cancel-resid-pb">&mdash;</b></span>
+        </div>
+    </div>
     <div class="section-box" id="box-antenna">
     <h2>Antenna</h2>
     <div class="ant-grid">
@@ -2917,6 +2991,7 @@ html, body { background: var(--v2-bg-page); }
         <div class="v2-freq-head">
           <span class="v2-label">Frequency</span>
           <span class="v2-rx-chip">RX1</span>
+          <span class="badge cancel-chip" id="cancel-chip" style="display:none">CANCEL</span>
         </div>
         <div class="freq-readout" id="vfo">  0<i class="v2-freq-sep">.</i>000<i class="v2-freq-sep">.</i>000</div>
         <div class="vfo-meta">
@@ -3136,6 +3211,11 @@ html, body { background: var(--v2-bg-page); }
       <button class="btn" id="whole-band-btn" onclick="Panadapter.snapToWholeBand()" title="Whole Band">BAND</button>
       <button class="btn" onclick="Panadapter.recenterView()" title="Center">CTR</button>
       <button class="btn active" id="mute-btn" onclick="Panadapter.toggleMute()" title="Audio">AUD</button>
+      <!-- Layout-only placeholders for RX2's LNK and CPY, so RX1's second
+           tuning row wraps and centers exactly like RX2's. Hidden and out of
+           the tab order; they take the same space and nothing else. -->
+      <button class="btn" type="button" tabindex="-1" aria-hidden="true" style="visibility:hidden">LNK</button>
+      <button class="btn" type="button" tabindex="-1" aria-hidden="true" style="visibility:hidden">CPY</button>
     </div>
     </div>
 
@@ -4023,6 +4103,39 @@ function v2AfGainToPos(gainPct) {
 }
 /* V2AF:END */
 
+/* V2SPEC:BEGIN — which frame a receiver draws, and the temporal smoothing step.
+   Pure: ui-redesign/test_spec_pick.js extracts this block.
+
+   v2PickFrame: with NOISE SUB processing active, the processed wideband data is
+   drawn, in every session type. Otherwise the session's normal source: the fine
+   spectrum in a digital session, else the wideband one. RX2 has no processed data
+   of its own; for it "proc" means its raw wideband frame, so both panels show the
+   same kind of spectrum while RX1 is processed.
+
+   v2SmoothInto: one exponential-average step into the buffer it is given. Each
+   trace owns its buffer. The ghost must never share the main trace's. */
+function v2PickFrame(o) {
+  if (o.procActive) return 'proc';
+  if (o.digital && o.fineAvail) return 'fine';
+  return 'wide';
+}
+// Is the processed frame usable? Fresh means under a second old. During TX no new
+// frame is stored (the handlers drop them), so the last one is HELD: it does not age
+// while PTT is down, and the trace does not fall back to a raw or fine frame.
+const V2_PROC_FRESH_MS = 1000;
+function v2ProcFresh(o) {
+  if (!o.wanted || !o.have) return false;
+  return !!o.ptt || o.ageMs < V2_PROC_FRESH_MS;
+}
+function v2SmoothInto(buf, points, alpha) {
+  if (alpha < 0.01) return points;
+  if (!buf || buf.length !== points.length) return new Float32Array(points);
+  const fresh = 1 - alpha;
+  for (let i = 0; i < points.length; i++) buf[i] = fresh * points[i] + alpha * buf[i];
+  return buf;
+}
+/* V2SPEC:END */
+
 /* ── V2TRACE:BEGIN — spectrum trace colours and palette previews ──────
    Pure and stateless; each receiver holds its own selection in its own
    closure. Amendment F12: "ice" is today's exact look and is the default,
@@ -4227,6 +4340,7 @@ function connectWs() {
   ws.onclose = () => setTimeout(connectWs, 2000);
   ws.onmessage = evt => {
     const msg = JSON.parse(evt.data);
+    if (msg.type === 'cmd_response' && !msg.ok && msg.error) showToast(msg.error, 'error');
     if (msg.type === 'tx_mute') {
       // Fast PTT gate fired on the server. Call txSilenceStart() (not just a
       // ring flush) so audioWs is closed — that drops the pending binary audio
@@ -4239,9 +4353,14 @@ function connectWs() {
     }
     if (msg.type === 'state') {
       const rig = msg.data.rig || {};
+      const wasPtt = rigPtt;
       rigPtt = !!rig.ptt;
+      // Falling edge: the held processed frame gets a fresh second, so the display
+      // stays on it until the first post-TX processed frame arrives.
+      if (wasPtt && !rigPtt && latestProcFrame) latestProcAt = performance.now();
       if (rigPtt) txSilenceStart(); else txSilenceEnd();
       rigFreqHz = rig.freq_hz ?? rigFreqHz;
+      if (msg.data.cancel) CancelUI.onState(msg.data.cancel);
       const prevRigBand = rigBand;
       rigBand = rig.band ?? rigBand;
       // A real band change (not just a repeated state broadcast) invalidates
@@ -4350,6 +4469,101 @@ function clearStalePendingRetune() {
   }
 }
 
+// RX1 ghost trace (raw RX1 while CANCEL is on). Same frame protocol as
+// /ws/spectrum: a JSON header then a Float32 payload. Open only while the
+// ghost is wanted, so the socket costs nothing otherwise.
+let latestGhostFrame = null;
+let ghostWanted = false;
+let ghostWs = null;
+// NOISE SUB processed RX1 trace (/ws/spectrum_proc). Used only while it is
+// fresh; older than 1 s, the raw trace shows and the block says why.
+let latestProcFrame = null;
+let latestProcAt = -Infinity;
+let procWanted = false;
+let procWs = null;
+// True while processed frames are arriving: then they own the RX1 waterfall
+// and the raw path must not add rows. Stale for over a second, raw resumes.
+function procOwnsWaterfall() {
+  return v2ProcFresh({ wanted: procWanted, have: latestProcFrame !== null,
+                       ageMs: performance.now() - latestProcAt, ptt: rigPtt });
+}
+// NOISE SUB: contiguous detected runs that fall inside the displayed span,
+// from the latest processed frame. Null when there is no fresh processed frame.
+function linesInView() {
+  if (!procOwnsWaterfall()) return null;
+  const f = latestProcFrame, n = f.data.length;
+  const binHz = f.spanHz / n, fullLo = f.centerFreqHz - f.spanHz / 2;
+  const lo = (viewCenterHz - viewSpanHz / 2 - fullLo) / binHz;
+  const hi = (viewCenterHz + viewSpanHz / 2 - fullLo) / binHz;
+  let count = 0;
+  for (let i = 0; i + 1 < f.groups.length; i += 2) {
+    if (f.groups[i + 1] > lo && f.groups[i] < hi) count++;
+  }
+  return count;
+}
+function setProcVisible(on) {
+  procWanted = !!on;
+  if (!procWanted) {
+    if (procWs) { const w = procWs; procWs = null; w.close(); }
+    latestProcFrame = null;
+    return;
+  }
+  if (procWs && procWs.readyState <= WebSocket.OPEN) return;
+  const w = new WebSocket(`ws://${location.host}/ws/spectrum_proc`);
+  w.binaryType = 'arraybuffer';
+  let pendingProcHeader = null;
+  w.onmessage = evt => {
+    if (typeof evt.data === 'string') { pendingProcHeader = JSON.parse(evt.data); return; }
+    if (!pendingProcHeader) return;
+    // TX freeze, as on the raw path: a frame that arrives while PTT is down is dropped
+    // before it is stored, so the trace, the markers and the waterfall hold the last
+    // pre-TX frame.
+    if (rigPtt) { pendingProcHeader = null; return; }
+    latestProcFrame = {
+      centerFreqHz: pendingProcHeader.center_freq_hz,
+      spanHz: pendingProcHeader.span_hz,
+      data: new Float32Array(evt.data),
+      markers: pendingProcHeader.markers || [],
+      groups: pendingProcHeader.groups || [],
+    };
+    latestProcAt = performance.now();
+    // The waterfall follows the trace: processed rows in NOISE SUB.
+    pushWaterfallRow(latestProcFrame);
+  };
+  w.onclose = () => {
+    if (procWs === w) procWs = null;
+    if (procWanted) setTimeout(() => setProcVisible(true), 1000);
+  };
+  procWs = w;
+}
+function setGhostVisible(on) {
+  ghostWanted = !!on;
+  if (!ghostWanted) {
+    if (ghostWs) { const w = ghostWs; ghostWs = null; w.close(); }
+    latestGhostFrame = null;
+    return;
+  }
+  if (ghostWs && ghostWs.readyState <= WebSocket.OPEN) return;
+  const w = new WebSocket(`ws://${location.host}/ws/spectrum_ghost`);
+  w.binaryType = 'arraybuffer';
+  let pendingGhostHeader = null;
+  w.onmessage = evt => {
+    if (typeof evt.data === 'string') { pendingGhostHeader = JSON.parse(evt.data); return; }
+    if (!pendingGhostHeader) return;
+    if (rigPtt) { pendingGhostHeader = null; return; }      // TX freeze: keep the pre-TX ghost
+    latestGhostFrame = {
+      centerFreqHz: pendingGhostHeader.center_freq_hz,
+      spanHz: pendingGhostHeader.span_hz,
+      data: new Float32Array(evt.data),
+    };
+  };
+  w.onclose = () => {
+    if (ghostWs === w) ghostWs = null;
+    if (ghostWanted) setTimeout(() => setGhostVisible(true), 1000);
+  };
+  ghostWs = w;
+}
+
 function connectSpectrumWs() {
   specWs = new WebSocket(`ws://${location.host}/ws/spectrum`);
   specWs.binaryType = 'arraybuffer';
@@ -4371,8 +4585,12 @@ function connectSpectrumWs() {
     };
 
     if (pendingHeader.kind === 'fine') {
-      latestFineFrame = frame;
-      if (rigIsDigital && !rigPtt) pushWaterfallRow(frame);
+      // Frozen during TX like the wideband branch below. The server sends no fine
+      // frames in TX, but the freeze must not depend on that.
+      if (!rigPtt) {
+        latestFineFrame = frame;
+        if (rigIsDigital && !procOwnsWaterfall()) pushWaterfallRow(frame);
+      }
     } else if (rigPtt) {
       // SDR Switch disconnects the antenna from the SDR during TX — freeze.
     } else if (pendingRetuneHz !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz) > 1000) {
@@ -4383,7 +4601,7 @@ function connectSpectrumWs() {
         viewCenterHz = frame.centerFreqHz;
       }
       latestFrame = frame;
-      if (!rigIsDigital) pushWaterfallRow(frame);
+      if (!rigIsDigital && !procOwnsWaterfall()) pushWaterfallRow(frame);
     }
     pendingHeader = null;
   };
@@ -4675,6 +4893,31 @@ function onFloorSlider(v) {
   document.getElementById('floor-val').textContent = manualFloorDb + 'dB';
 }
 
+// Scale state for CANCEL's fixed-scale handoff (CancelUI). setScale with
+// auto off writes the floor and range the same way the sliders do, so the
+// display and its readouts agree.
+function getScaleState() {
+  const [f, c] = effectiveFloorCeil();
+  return { auto: autoScale, floor: f, range: c - f, manualFloor: manualFloorDb, manualRange: manualRangeDb };
+}
+function setScale(s) {
+  if (s.manualFloor !== undefined) {
+    manualFloorDb = s.manualFloor;
+    manualRangeDb = s.manualRange;
+  } else if (!s.auto) {
+    const g = Math.round(Math.max(0, Math.min(100, (150 - s.range) / 140 * 100)));
+    manualFloorDb = Math.round(s.floor);
+    manualRangeDb = 150 - (g / 100) * 140;
+  }
+  const g = Math.round((150 - manualRangeDb) / 140 * 100);
+  document.getElementById('floor-slider').value = Math.round(manualFloorDb);
+  document.getElementById('floor-val').textContent = Math.round(manualFloorDb) + 'dB';
+  document.getElementById('gain-slider').value = g;
+  document.getElementById('gain-val').textContent = g + '%';
+  document.getElementById('auto-scale-cb').checked = !!s.auto;
+  onAutoScaleToggle(!!s.auto);
+}
+
 function drawRigMarker(c, w, h, dpr) {
   dpr = dpr || 1;
   if (rigFreqHz === null || viewCenterHz === null) return;
@@ -4716,7 +4959,9 @@ function drawSpectrum() {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
 
-  const frame = (rigIsDigital && latestFineFrame) ? latestFineFrame : latestFrame;
+  const procFresh = procOwnsWaterfall();
+  const pick = v2PickFrame({ procActive: !!procFresh, digital: rigIsDigital, fineAvail: !!latestFineFrame });
+  const frame = pick === 'proc' ? latestProcFrame : pick === 'fine' ? latestFineFrame : latestFrame;
 
   if (frame && viewCenterHz !== null) {
     document.getElementById('axis-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);
@@ -4752,6 +4997,33 @@ function drawSpectrum() {
     ctx.lineWidth = 1.5 * dpr;
     ctx.stroke();
 
+    if (procFresh && frame === latestProcFrame && frame.markers.length) {
+      // Lines still above the threshold after subtraction: small ticks on the trace.
+      const n = frame.data.length, binHz = frame.spanHz / n, fullLo = frame.centerFreqHz - frame.spanHz / 2;
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      for (const m of frame.markers) {
+        const x = (((fullLo + m * binHz) - (viewCenterHz - viewSpanHz / 2)) / viewSpanHz) * w;
+        if (x < 0 || x > w) continue;
+        const pct = Math.max(0, Math.min(1, (frame.data[m] - floor) / (ceil - floor)));
+        ctx.fillRect(x - dpr, h - pct * h - 6 * dpr, 2 * dpr, 4 * dpr);
+      }
+    }
+    if (ghostWanted && latestGhostFrame) {
+      // Ghost = raw RX1, same view and dB scale as the trace above it.
+      const gp = applyGhostSmoothing(cropToView(latestGhostFrame, Math.round(w)));
+      ctx.beginPath();
+      for (let i = 0; i < gp.length; i++) {
+        const x = (i / (gp.length - 1)) * w;
+        const pct = Math.max(0, Math.min(1, (gp[i] - floor) / (ceil - floor)));
+        const y = h - pct * h;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.setLineDash([4 * dpr, 3 * dpr]);
+      ctx.strokeStyle = 'rgba(230,230,230,0.6)';
+      ctx.lineWidth = 1 * dpr;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     drawRigMarker(ctx, w, h, dpr);
     drawCursorCrosshair(ctx, w, h, dpr);
   }
@@ -4871,16 +5143,16 @@ function onAvgSlider(v) {
   document.getElementById('avg-val').textContent = v + '%';
 }
 function applySpectrumSmoothing(points) {
-  if (specAvgAlpha < 0.01) return points;
-  if (!smoothedSpectrum || smoothedSpectrum.length !== points.length) {
-    smoothedSpectrum = new Float32Array(points);
-    return smoothedSpectrum;
-  }
-  const fresh = 1 - specAvgAlpha;
-  for (let i = 0; i < points.length; i++) {
-    smoothedSpectrum[i] = fresh * points[i] + specAvgAlpha * smoothedSpectrum[i];
-  }
-  return smoothedSpectrum;
+  const out = v2SmoothInto(smoothedSpectrum, points, specAvgAlpha);
+  if (out !== points) smoothedSpectrum = out;
+  return out;
+}
+// The ghost's own buffer: same AVG setting, never the main trace's history.
+let smoothedGhost = null;
+function applyGhostSmoothing(points) {
+  const out = v2SmoothInto(smoothedGhost, points, specAvgAlpha);
+  if (out !== points) smoothedGhost = out;
+  return out;
 }
 
 function dbToColor(db, floor, ceil) {
@@ -5153,6 +5425,13 @@ return {
   // from the dial frequency reproduced the wrong window (Terry
   // 2026-09-11: got 13.9947-14.3487 instead of RX1's clean
   // 14.000-14.350).
+  cancelSend: obj => send(obj),
+  setGhostVisible,
+  setProcVisible,
+  procActive: procOwnsWaterfall,
+  linesInView,
+  getScaleState,
+  setScale,
   getViewSpanHz: () => viewSpanHz,
   getViewCenterHz: () => viewCenterHz,
 };
@@ -5180,6 +5459,453 @@ Panadapter.init();
      playing through speakers during TX is the same mic-feedback risk as
      RX1's. See project memory on the RSPduo migration.
      ══════════════════════════════════════════════════════════════════════ -->
+<script>
+/* CANCELWHEEL:BEGIN — pure wheel and step logic for CANCEL's gain and phase
+   controls. No DOM here: node test ui-redesign/test_cancel_wheel.js extracts
+   this block.
+
+   A mouse notch is one step, whatever its deltaY. Trackpad deltas accumulate
+   to a pixel threshold, with at most one step per event, and the carry is
+   capped at one threshold so a long swipe cannot bank steps. The step grid
+   is the selected step (FINE 0.1, MED 0.5, COARSE 2.0), Shift multiplies it
+   by 5, and every value is rounded to the grid, so nothing drifts. */
+const CANCEL_STEP_CHOICES = { fine: 0.1, med: 0.5, coarse: 2.0 };
+const CANCEL_STEP_DEFAULT = 'med';
+const CANCEL_SHIFT_MULT = 5;
+const CANCEL_WHEEL_TRIGGER_PX = 12;     // trackpad: accumulated pixels per step
+const CANCEL_WHEEL_MOUSE_GAP_MS = 25;   // a wheel event this long after the last one is a discrete notch
+const CANCEL_WHEEL_SCROLL_MS = 250;     // the page scrolled this recently: leave the wheel to the page
+
+// True for a mouse notch. Lines or pages are never pixels, a legacy wheelDelta
+// that is a multiple of 120 is the mouse signature, and an isolated event after
+// a quiet gap is a discrete notch. A trackpad sends a continuous stream of
+// small deltas instead.
+function cancelWheelIsMouse(ev) {
+  if (ev.deltaMode !== 0) return true;
+  if (Number.isFinite(ev.wheelDeltaY) && ev.wheelDeltaY !== 0 && ev.wheelDeltaY % 120 === 0) return true;
+  if (ev.gapMs >= CANCEL_WHEEL_MOUSE_GAP_MS) return true;   // Infinity: the first event of a session
+  return false;
+}
+
+// Trackpad path: accumulate pixels, one step per event at most, carry capped.
+function cancelWheelAccumulate(acc, deltaY, deltaMode, threshold) {
+  // deltaMode 0 = pixels, 1 = lines (~16 px), 2 = pages (~800 px).
+  const px = deltaMode === 1 ? deltaY * 16 : (deltaMode === 2 ? deltaY * 800 : deltaY);
+  let a = acc - px;                    // wheel up (deltaY < 0) counts as positive
+  let steps = 0;
+  if (a >= threshold) { steps = 1; a -= threshold; }
+  else if (a <= -threshold) { steps = -1; a += threshold; }
+  a = Math.max(-threshold, Math.min(threshold, a));
+  return { steps, acc: a };
+}
+
+// Round to the grid of `step`, then to one decimal to remove float drift.
+function cancelGridRound(v, step) {
+  const onGrid = Math.round(v / step) * step;
+  return Math.round(onGrid * 10) / 10;
+}
+
+// ev: { deltaY, deltaMode, wheelDeltaY, gapMs }. opts: { kind, min, max, step, shift }.
+function cancelWheelNext(value, ev, acc, opts) {
+  const mult = opts.shift ? CANCEL_SHIFT_MULT : 1;
+  const size = opts.step * mult;
+  let steps, nextAcc = acc;
+  if (cancelWheelIsMouse(ev)) {
+    steps = ev.deltaY < 0 ? 1 : (ev.deltaY > 0 ? -1 : 0);
+  } else {
+    const r = cancelWheelAccumulate(acc, ev.deltaY, ev.deltaMode, CANCEL_WHEEL_TRIGGER_PX);
+    steps = r.steps;
+    nextAcc = r.acc;
+  }
+  if (steps === 0) return { value, acc: nextAcc, changed: false };
+  // On the grid, a step moves by `size`. Off the grid, the first step lands on
+  // the grid point in its direction (up: ceiling, down: floor), so 10.3 up is
+  // 10.5 and 10.3 down is 10.0.
+  const g = value / opts.step;
+  let v;
+  if (Math.abs(g - Math.round(g)) < 1e-9) {
+    v = cancelGridRound(value, opts.step) + steps * size;
+  } else {
+    const base = (steps > 0 ? Math.ceil(g) : Math.floor(g)) * opts.step;
+    v = Math.round(base * 10) / 10 + (steps > 0 ? steps - 1 : steps + 1) * size;
+  }
+  if (opts.kind === 'phase') {
+    v = Math.round((((v % 360) + 360) % 360) * 10) / 10;
+    if (v >= 360) v = 0;
+  } else {
+    v = Math.round(Math.min(opts.max, Math.max(opts.min, v)) * 10) / 10;
+  }
+  return { value: v, acc: nextAcc, changed: v !== value };
+}
+
+// The wheel gate: only a real page scroll may pass the wheel to the page. A
+// pointer over a CANCEL control while the page is still never drops input.
+function cancelWheelAllowed(nowMs, lastPageScrollMs) {
+  return !(Number.isFinite(lastPageScrollMs) && nowMs - lastPageScrollMs < CANCEL_WHEEL_SCROLL_MS);
+}
+// Max attenuation (beta) for the audio stage, in dB: -40 (deepest) to -6.
+const CANCEL_BETA_MIN = -40, CANCEL_BETA_MAX = -6;
+function cancelBetaKey(value, key, step, shift) {
+  if (key !== 'ArrowUp' && key !== 'ArrowDown') return null;
+  const size = step * (shift ? CANCEL_SHIFT_MULT : 1);
+  const v = cancelGridRound(value, step) + (key === 'ArrowUp' ? size : -size);
+  return Math.round(Math.min(CANCEL_BETA_MAX, Math.max(CANCEL_BETA_MIN, v)) * 10) / 10;
+}
+function cancelBetaWheel(value, ev, acc, step, shift) {
+  return cancelWheelNext(value, ev, acc,
+    { kind: 'other', min: CANCEL_BETA_MIN, max: CANCEL_BETA_MAX, step, shift });
+}
+// The one AUDIO switch: off = raw, on = processed. It only exists in NOISE mode.
+function cancelAudioToggle(st) {
+  if (st.mode !== 'noise') return null;
+  return { cmd: 'set_noise_audio', on: !st.noise_audio_on };
+}
+function cancelModeLabel(lastMode) { return lastMode === 'noise' ? 'NOISE' : 'COH'; }
+// NOISE SUB status for the readout. null while processing is active (the lines count
+// shows). Otherwise two short lines: the display is on the raw trace, and why.
+function cancelNoiseStatusText(status) {
+  if (!status || status === 'active') return null;
+  const why = { grid: 'grid mismatch', stale: 'RX2 stale', no_rx2: 'no RX2', error: 'error' }[status] || String(status);
+  return 'BYPASS:\n' + why;
+}
+// "~5.1% false": one decimal from 1% up, two below. Empty when there is no estimate.
+function cancelFalseText(pct) {
+  if (pct === null || pct === undefined || !isFinite(pct)) return '';
+  return '~' + (pct < 1 ? pct.toFixed(2) : pct.toFixed(1)) + '% false';
+}
+// +180 belongs to COHERENT phase. No command from any other mode.
+function cancelInvertCommand(st) {
+  if (st.mode !== 'coherent') return null;
+  const deg = ((((st.phase_deg || 0) + 180) % 360) + 360) % 360;
+  return { cmd: 'set_cancel_phase_deg', phase_deg: cancelGridRound(deg, 0.1) };
+}
+/* CANCELWHEEL:END */
+
+// RX1 CANCEL controls, COHERENT and NOISE SUB. Reads state.cancel from RX1's
+// /ws state push (the Panadapter handler calls onState) and sends commands
+// through Panadapter.cancelSend. Also owns the RX2 lock styling, and the
+// fixed-scale handoff: while either mode is on, both receivers use a fixed
+// scale (RX2 copies RX1's); off restores the AUTO states from before.
+// In NOISE SUB the GAIN row is SCALE dB (k) and the PHASE row is THRESH sigma
+// (n), with the same wheel, STEP selector and arrow keys.
+const CancelUI = (function () {
+  const $ = id => document.getElementById(id);
+  const send = obj => Panadapter.cancelSend(obj);
+  const editing = new Set();
+  let st = { mode: 'off', last_mode: 'coherent', gain_db: 0, phase_deg: 0,
+             noise_scale_db: -10, noise_n: 2, noise_clamp: false, noise_beta_db: -20,
+             noise_audio_on: false, ghost: false, follow_gain: true };
+  let prevOn = false;
+  let savedScale = null;
+  let stepKey = CANCEL_STEP_DEFAULT;
+  try {
+    const saved = localStorage.getItem('cancelStep');
+    if (saved && CANCEL_STEP_CHOICES[saved] !== undefined) stepKey = saved;
+  } catch (e) { /* private window or blocked storage: keep the default */ }
+
+  const isNoise = () => st.mode === 'noise';
+  const isOn = () => st.mode !== 'off';
+  function stepSize() { return CANCEL_STEP_CHOICES[stepKey]; }
+  function fmtDb(v) { return (v === null || v === undefined) ? '—' : `${v.toFixed(1)} dB`; }
+
+  function setField(id, value) {
+    const el = $(id);
+    if (el && !editing.has(id)) el.value = value;
+  }
+
+  function enterFixedScale() {
+    savedScale = { rx1: Panadapter.getScaleState(), rx2: Panadapter2.getScaleState() };
+    const floor = savedScale.rx1.floor, range = savedScale.rx1.range;
+    Panadapter.setScale({ auto: false, floor, range });
+    Panadapter2.setScale({ auto: false, floor, range });
+  }
+
+  function exitFixedScale() {
+    if (!savedScale) return;
+    Panadapter.setScale(savedScale.rx1);
+    Panadapter2.setScale(savedScale.rx2);
+    savedScale = null;
+  }
+
+  function updateAutoNote() {
+    const autoOn = $('auto-scale-cb').checked || $('auto-scale2-cb').checked;
+    $('cancel-auto-note').style.display = (isOn() && autoOn) ? '' : 'none';
+  }
+
+  // Which quantity a control edits. The rows follow the mode.
+  function kindFor(which) {
+    if (which === 'gain') return isNoise() ? 'scale' : 'gain';
+    return isNoise() ? 'thresh' : 'phase';
+  }
+  function displayValue(kind) {
+    if (kind === 'scale') return st.noise_scale_db;
+    if (kind === 'thresh') return st.noise_n;
+    return kind === 'gain' ? st.gain_db : st.phase_deg;
+  }
+  // Range, the clamp and the wrap of each quantity. The slider works in tenths.
+  function limitsFor(kind) {
+    if (kind === 'scale') return { min: -40, max: 40, wrap: false };
+    if (kind === 'thresh') return { min: 1, max: 6, wrap: false };
+    if (kind === 'gain') return { min: -40, max: 80, wrap: false };
+    return { min: 0, max: 360, wrap: true };
+  }
+
+  function layoutRows() {
+    const noise = isNoise();
+    $('cancel-gain-label').textContent = noise ? 'Scale' : 'Gain';
+    $('cancel-gain-unit').textContent = 'dB';
+    $('cancel-phase-label').textContent = noise ? 'Thresh' : 'Phase';
+    $('cancel-phase-unit').textContent = noise ? 'σ' : '°';
+    const g = $('cancel-gain-slider'), p = $('cancel-phase-slider');
+    g.min = -400; g.max = noise ? 400 : 800;
+    p.min = noise ? 10 : 0; p.max = noise ? 60 : 3599;
+    $('cancel-invert').disabled = noise;
+    $('cancel-invert').style.display = noise ? 'none' : '';
+    $('cancel-false').style.display = noise ? '' : 'none';
+    $('cancel-res-cell1').parentElement.classList.toggle('cancel-noise', noise);
+    if (!noise) $('cancel-res-cell1').classList.remove('cancel-bypass');
+    $('cancel-clamp').disabled = !noise;
+    $('cancel-res-label1').textContent = noise ? 'lines' : 'span';
+    $('cancel-res-label2').textContent = noise ? 'dB max atten' : 'audio';
+    $('cancel-res-cell2').classList.toggle('cancel-beta', noise);
+    if (noise) $('cancel-resid-pb').tabIndex = 0; else $('cancel-resid-pb').removeAttribute('tabindex');
+    $('cancel-audio').disabled = !noise;
+    $('cancel-res-label1').parentElement.title = noise
+      ? 'Contiguous groups of detected bins inside the displayed span' : '';
+  }
+
+  function render(c) {
+    st = c;
+    const on = isOn();
+    if (on !== prevOn) {
+      prevOn = on;
+      if (on) enterFixedScale(); else exitFixedScale();
+    }
+    $('cancel-on').classList.toggle('active', on);
+    $('cancel-off').classList.toggle('active', !on);
+    $('cancel-mode').textContent = cancelModeLabel(c.last_mode);
+    $('cancel-audio').classList.toggle('active', isNoise() && !!c.noise_audio_on);
+    $('cancel-mode').classList.toggle('active', on);
+    $('cancel-ghost').classList.toggle('active', !!c.ghost);
+    $('cancel-follow').classList.toggle('active', !!c.follow_gain);
+    $('cancel-clamp').classList.toggle('active', isNoise() && !!c.noise_clamp);
+    $('cancel-chip').textContent = isNoise() ? 'NOISE SUB' : 'CANCEL';
+    $('cancel-chip').style.display = on ? '' : 'none';
+    layoutRows();
+    if (isNoise()) {
+      setField('cancel-gain-slider', Math.round(c.noise_scale_db * 10));
+      setField('cancel-gain-num', c.noise_scale_db.toFixed(1));
+      setField('cancel-phase-slider', Math.round(c.noise_n * 10));
+      setField('cancel-phase-num', c.noise_n.toFixed(1));
+      // The live expected false share at this THRESH, in the unit slot (no new row).
+      const fp = c.noise_false_pct;
+      $('cancel-phase-unit').textContent = 'σ';
+      $('cancel-false').textContent = cancelFalseText(fp);
+      const bypass = cancelNoiseStatusText(c.noise_status);
+      const inView = Panadapter.linesInView();
+      $('cancel-res-cell1').classList.toggle('cancel-bypass', bypass !== null);
+      $('cancel-res-cell1').title = bypass !== null
+        ? 'NOISE SUB is not processing: the trace and the audio are raw RX1. ' + bypass.replace('\n', ' ')
+        : 'Contiguous groups of detected bins inside the displayed span';
+      $('cancel-resid-span').textContent = bypass !== null ? bypass
+        : (inView === null ? '—' : String(inView));
+      if (performance.now() >= betaLocalUntil) $('cancel-resid-pb').textContent = c.noise_beta_db.toFixed(1);
+      const fl = c.noise_floor1_db;
+      $('cancel-res-cell2').title = 'Maximum attenuation of a flagged line in RX1 audio (-6 to -40 dB). '
+        + 'Wheel or arrow keys; step from STEP, Shift x5. RX1 noise floor: '
+        + ((fl === null || fl === undefined) ? '—' : fl.toFixed(1) + ' dB');
+    } else {
+      setField('cancel-gain-slider', Math.round(c.gain_db * 10));
+      setField('cancel-gain-num', c.gain_db.toFixed(1));
+      setField('cancel-phase-slider', Math.round(c.phase_deg * 10));
+      setField('cancel-phase-num', c.phase_deg.toFixed(1));
+      $('cancel-resid-span').textContent = fmtDb(c.residual_span_db);
+      $('cancel-resid-pb').textContent = fmtDb(c.residual_passband_db);
+      $('cancel-res-cell2').title = '';
+    }
+    document.body.classList.toggle('rx2-cancel-locked', !!c.rx2_locked);
+    document.body.classList.toggle('rx2-cancel-gain', !!c.rx2_locked && !!c.follow_gain);
+    Panadapter.setGhostVisible(!!(on && c.ghost));
+    Panadapter.setProcVisible(isNoise());
+    updateAutoNote();
+  }
+
+  // Commits. Every value is rounded to its grid before it is sent.
+  function commitFor(kind) {
+    if (kind === 'scale') return v => {
+      if (isFinite(v)) send({ cmd: 'set_noise_scale_db', scale_db: cancelGridRound(Math.min(40, Math.max(-40, v)), 0.1) });
+    };
+    if (kind === 'thresh') return v => {
+      if (isFinite(v)) send({ cmd: 'set_noise_n', n: cancelGridRound(Math.min(6, Math.max(1, v)), 0.1) });
+    };
+    if (kind === 'gain') return v => {
+      if (isFinite(v)) send({ cmd: 'set_cancel_gain_db', gain_db: cancelGridRound(v, 0.1) });
+    };
+    return v => {
+      if (isFinite(v)) send({ cmd: 'set_cancel_phase_deg', phase_deg: cancelGridRound(((v % 360) + 360) % 360, 0.1) });
+    };
+  }
+
+  function bindSlider(id, which) {
+    const el = $(id);
+    el.addEventListener('pointerdown', () => editing.add(id));
+    el.addEventListener('pointerup', () => editing.delete(id));
+    el.addEventListener('pointercancel', () => editing.delete(id));
+    el.addEventListener('blur', () => editing.delete(id));
+    el.addEventListener('input', () => {
+      const v = parseFloat(el.value) / 10;
+      const kind = kindFor(which);
+      $(which === 'gain' ? 'cancel-gain-num' : 'cancel-phase-num').value = v.toFixed(1);
+      commitFor(kind)(v);
+    });
+  }
+
+  // Arrow keys use the selected step; Shift multiplies it by 5.
+  function bindNumeric(id, which) {
+    const el = $(id);
+    el.addEventListener('focus', () => editing.add(id));
+    el.addEventListener('blur', () => {
+      editing.delete(id);
+      const kind = kindFor(which);
+      const v = parseFloat(el.value);
+      if (isFinite(v)) commitFor(kind)(v);
+      else el.value = Number(displayValue(kind)).toFixed(1);
+    });
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { el.blur(); return; }
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const kind = kindFor(which);
+      const lim = limitsFor(kind);
+      const cur = parseFloat(el.value);
+      const base = cancelGridRound(isFinite(cur) ? cur : 0, stepSize());
+      const size = stepSize() * (e.shiftKey ? CANCEL_SHIFT_MULT : 1);
+      let next = Math.round((base + (e.key === 'ArrowUp' ? 1 : -1) * size) * 10) / 10;
+      next = lim.wrap ? ((next % 360) + 360) % 360 : Math.min(lim.max, Math.max(lim.min, next));
+      el.value = next.toFixed(1);
+      commitFor(kind)(next);
+    });
+  }
+
+  // Wheel: the gate only lets a real page scroll pass the wheel. The listener
+  // sits on the control, so preventDefault runs only over it. Non-passive.
+  function bindWheel(el, which) {
+    let acc = 0;
+    let lastEventAt = -Infinity;
+    el.addEventListener('wheel', e => {
+      const now = performance.now();
+      const gapMs = now - lastEventAt;
+      lastEventAt = now;
+      if (!cancelWheelAllowed(now, _v2LastPageScroll)) { acc = 0; return; }
+      e.preventDefault();
+      const kind = kindFor(which);
+      const lim = limitsFor(kind);
+      const cur = el.type === 'range' ? parseFloat(el.value) / 10
+                : (isFinite(parseFloat(el.value)) ? parseFloat(el.value) : displayValue(kind));
+      const ev = { deltaY: e.deltaY, deltaMode: e.deltaMode, wheelDeltaY: e.wheelDeltaY, gapMs };
+      const r = cancelWheelNext(cur, ev, acc,
+        { kind: lim.wrap ? 'phase' : 'other', min: lim.min, max: lim.max, step: stepSize(), shift: e.shiftKey });
+      acc = r.acc;
+      if (!r.changed) return;
+      $(which === 'gain' ? 'cancel-gain-slider' : 'cancel-phase-slider').value = Math.round(r.value * 10);
+      $(which === 'gain' ? 'cancel-gain-num' : 'cancel-phase-num').value = r.value.toFixed(1);
+      commitFor(kind)(r.value);
+    }, { passive: false });
+  }
+
+  // Beta lives in the second readout cell in NOISE mode. A local change shows at once;
+  // state pushes leave it alone for a moment so they do not fight the wheel.
+  let betaLocalUntil = 0;
+  function commitBeta(v) {
+    $('cancel-resid-pb').textContent = v.toFixed(1);
+    betaLocalUntil = performance.now() + 500;
+    send({ cmd: 'set_noise_beta', beta_db: v });
+  }
+  function bindBeta() {
+    const el = $('cancel-resid-pb');
+    let acc = 0, lastEventAt = -Infinity;
+    const current = () => {
+      const v = parseFloat(el.textContent);
+      return isFinite(v) ? v : st.noise_beta_db;
+    };
+    el.addEventListener('keydown', e => {
+      if (!isNoise()) return;
+      const next = cancelBetaKey(current(), e.key, stepSize(), e.shiftKey);
+      if (next === null) return;
+      e.preventDefault();
+      if (next !== current()) commitBeta(next);
+    });
+    el.addEventListener('wheel', e => {
+      if (!isNoise()) return;
+      const now = performance.now();
+      const gapMs = now - lastEventAt;
+      lastEventAt = now;
+      if (!cancelWheelAllowed(now, _v2LastPageScroll)) { acc = 0; return; }
+      e.preventDefault();
+      const ev = { deltaY: e.deltaY, deltaMode: e.deltaMode, wheelDeltaY: e.wheelDeltaY, gapMs };
+      const r = cancelBetaWheel(current(), ev, acc, stepSize(), e.shiftKey);
+      acc = r.acc;
+      if (r.changed) commitBeta(r.value);
+    }, { passive: false });
+  }
+
+  function markStepButtons() {
+    for (const k of Object.keys(CANCEL_STEP_CHOICES)) {
+      $('cancel-step-' + k).classList.toggle('active', k === stepKey);
+    }
+  }
+  function setStep(k) {
+    if (CANCEL_STEP_CHOICES[k] === undefined) return;
+    stepKey = k;
+    try { localStorage.setItem('cancelStep', k); } catch (e) { /* not persisted: fine */ }
+    markStepButtons();
+  }
+
+  function init() {
+    bindSlider('cancel-gain-slider', 'gain');
+    bindSlider('cancel-phase-slider', 'phase');
+    bindNumeric('cancel-gain-num', 'gain');
+    bindNumeric('cancel-phase-num', 'phase');
+    bindWheel($('cancel-gain-slider'), 'gain');
+    bindWheel($('cancel-gain-num'), 'gain');
+    bindWheel($('cancel-phase-slider'), 'phase');
+    bindWheel($('cancel-phase-num'), 'phase');
+    bindBeta();
+    for (const k of Object.keys(CANCEL_STEP_CHOICES)) {
+      $('cancel-step-' + k).addEventListener('click', () => setStep(k));
+    }
+    markStepButtons();
+    $('auto-scale-cb').addEventListener('change', updateAutoNote);
+    $('auto-scale2-cb').addEventListener('change', updateAutoNote);
+  }
+
+  function setMode(mode) { send({ cmd: 'set_cancel_mode', mode }); }
+  function setEnabled(on) { setMode(on ? (st.last_mode || 'coherent') : 'off'); }
+  function cycleMode() {
+    const next = st.last_mode === 'noise' ? 'coherent' : 'noise';
+    if (isOn()) setMode(next);
+    else send({ cmd: 'set_cancel_last_mode', mode: next });
+  }
+  function reset() {
+    if (isNoise()) {
+      send({ cmd: 'set_noise_scale_db', scale_db: -10 });
+      send({ cmd: 'set_noise_n', n: 2 });
+    } else {
+      send({ cmd: 'cancel_reset' });
+    }
+  }
+  function toggleGhost() { send({ cmd: 'set_cancel_ghost', ghost: !st.ghost }); }
+  function toggleFollow() { send({ cmd: 'set_cancel_follow_gain', follow_gain: !st.follow_gain }); }
+  function toggleClamp() { send({ cmd: 'set_noise_clamp', clamp: !st.noise_clamp }); }
+  function toggleAudio() { const m = cancelAudioToggle(st); if (m) send(m); }
+  function invert() { const m = cancelInvertCommand(st); if (m) send(m); }
+
+  init();
+  return { onState: render, setEnabled, setMode, cycleMode, reset, toggleGhost, toggleFollow,
+           toggleClamp, toggleAudio, invert, setStep };
+})();
+</script>
+
 <script>
 const Panadapter2 = (function () {
 
@@ -5246,6 +5972,7 @@ function connectWs2() {
   ws2.onmessage = evt => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'tx_mute') { txSilenceStart(); return; }
+    if (msg.type === 'cmd_response' && !msg.ok && msg.error) showToast(msg.error, 'error');
     if (msg.type === 'state') {
       const rig = msg.data.rig || {};
       rigPtt = !!rig.ptt;
@@ -5475,8 +6202,10 @@ function connectSpectrumWs2() {
       // Mirrors channel A's own latestFineFrame/rigIsDigital handling
       // (Panadapter's connectSpectrumWs) — used when RX2 is selected as
       // the digital-audio source, same as RX1's DATA-U zoom.
-      latestFineFrame2 = frame;
-      if (rigIsDigital && !rigPtt) pushWaterfallRow2(frame);
+      if (!rigPtt) {      // frozen during TX, like the wideband branch below
+        latestFineFrame2 = frame;
+        if (rigIsDigital && !Panadapter.procActive()) pushWaterfallRow2(frame);
+      }
     } else if (rigPtt) {
       // SDR Switch disconnects the antenna from the SDR during TX — freeze.
     } else if (pendingRetuneHz2 !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz2) > 1000) {
@@ -5485,7 +6214,7 @@ function connectSpectrumWs2() {
       pendingRetuneHz2 = null;
       if (viewCenterHz === null || !isViewWithinCapture2(frame)) viewCenterHz = frame.centerFreqHz;
       latestFrame2 = frame;
-      if (!rigIsDigital) pushWaterfallRow2(frame);
+      if (!rigIsDigital || Panadapter.procActive()) pushWaterfallRow2(frame);
     }
     pendingHeader2 = null;
   };
@@ -5883,6 +6612,28 @@ function onAutoScaleToggle(checked) {
 }
 function onFloorSlider(v) { manualFloorDb2 = parseFloat(v); document.getElementById('floor2-val').textContent = manualFloorDb2 + 'dB'; }
 function onGainSlider(v) { const g = parseFloat(v); manualRangeDb2 = 150 - (g / 100) * 140; document.getElementById('gain2-val').textContent = g + '%'; }
+// Scale state for CANCEL's fixed-scale handoff — see Panadapter.setScale.
+function getScaleState() {
+  const [f, c] = effectiveFloorCeil2();
+  return { auto: autoScale2, floor: f, range: c - f, manualFloor: manualFloorDb2, manualRange: manualRangeDb2 };
+}
+function setScale(s) {
+  if (s.manualFloor !== undefined) {
+    manualFloorDb2 = s.manualFloor;
+    manualRangeDb2 = s.manualRange;
+  } else if (!s.auto) {
+    const g = Math.round(Math.max(0, Math.min(100, (150 - s.range) / 140 * 100)));
+    manualFloorDb2 = Math.round(s.floor);
+    manualRangeDb2 = 150 - (g / 100) * 140;
+  }
+  const g = Math.round((150 - manualRangeDb2) / 140 * 100);
+  document.getElementById('floor2-slider').value = Math.round(manualFloorDb2);
+  document.getElementById('floor2-val').textContent = Math.round(manualFloorDb2) + 'dB';
+  document.getElementById('gain2-slider').value = g;
+  document.getElementById('gain2-val').textContent = g + '%';
+  document.getElementById('auto-scale2-cb').checked = !!s.auto;
+  onAutoScaleToggle(!!s.auto);
+}
 
 function drawTargetMarker2(c, w, h, dpr) {
   if (audioTargetFreqHz === null || viewCenterHz === null) return;
@@ -5956,7 +6707,10 @@ function drawSpectrum2() {
   // frames while RX2 is the digital-audio source, same as RX1's own
   // DATA-U zoom (Terry 2026-09-12: "RX2 window doesn't use the fine
   // resolution on the 3k spectrum").
-  const frame2 = (rigIsDigital && latestFineFrame2) ? latestFineFrame2 : latestFrame2;
+  // While RX1 shows processed wideband data (NOISE SUB active), RX2 shows its raw
+  // wideband frame too, so the two panels are the same kind of spectrum.
+  const pick2 = v2PickFrame({ procActive: Panadapter.procActive(), digital: rigIsDigital, fineAvail: !!latestFineFrame2 });
+  const frame2 = pick2 === 'fine' ? latestFineFrame2 : latestFrame2;
 
   if (frame2 && viewCenterHz !== null) {
     document.getElementById('axis2-lo').textContent = ((viewCenterHz - viewSpanHz / 2) / 1e6).toFixed(4);
@@ -6535,6 +7289,8 @@ function init() {
 }
 
 return {
+  getScaleState,
+  setScale,
   init, tuneToInput, recenterView, snapToWholeBand, toggleMute, toggleLink, copyFromRx1, onRx1ViewChange,
   onS9CalInput,
   onSpanSlider, onAutoScaleToggle, onFloorSlider, onGainSlider, onAvgSlider, onPaletteSelect, onTraceSelect,

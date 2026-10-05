@@ -22,6 +22,7 @@ import time
 from typing import Optional
 
 from sdr.audio_demod import AudioDemodulator
+from sdr.canceller import Canceller
 from sdr.combiner import Combiner
 from sdr.virtual_audio_output import DigitalAudioOutput
 
@@ -68,7 +69,26 @@ class FakeSdrClient:
         self.audio_b = AudioDemodulator(input_rate_hz=sample_rate_hz)
         self.combiner = Combiner(input_rate_hz=sample_rate_hz)
         self.digital_audio = DigitalAudioOutput()
-        self.audio.on_audio(self.digital_audio.on_audio_frame)
+        self.audio.on_digital(self.digital_audio.on_audio_frame)
+        from sdr.audio_stft import MaskProvider, PcmDelay, StftGainStage
+        self.noise_mask = MaskProvider()
+        self.audio_b.pcm_delay = PcmDelay()
+        self.audio.stft = StftGainStage(provider=self.noise_mask,
+                                        target_hz=lambda: self.audio.target.freq_hz or self.rf_freq_hz)
+        # RX1 CANCEL: the real Canceller, with its RX1-downstream output
+        # captured in cancelled_out instead of a live spectrum queue.
+        self.cancelled_out: list = []
+        self._avg_power = None
+        self._spectrum_callbacks_ghost = []
+        self.ghost_frames: list = []
+        self._blk_a: list = []
+        self._blk_b: list = []
+        self.canceller = Canceller(
+            sample_rate_hz=sample_rate_hz, fft_size=fft_size, display_fps=display_fps,
+            deliver=lambda i, q: self.cancelled_out.append((i, q)),
+            publish_ghost=self.ghost_frames.append,
+            cancelled_power=lambda: self._avg_power,
+            context=self._cancel_context)
 
         self.started = False
         self.stopped = False
@@ -101,7 +121,40 @@ class FakeSdrClient:
         self.audio.gate_tx()
         self.audio_b.gate_tx()
         self.combiner.gate_tx()
+        self.canceller.gate_tx()
         self.digital_audio.flush()
+
+    # NOISE SUB block averages: same surface as SdrClient (no threads here).
+    block_avg_enabled = False
+
+    def on_block(self, cb, is_b: bool = False):
+        (self._blk_b if is_b else self._blk_a).append(cb)
+
+    def clear_block_averages(self):
+        pass
+
+    def on_spectrum_ghost(self, cb):
+        self._spectrum_callbacks_ghost.append(cb)
+
+    def _cancel_context(self) -> dict:
+        t = self.audio.target
+        return {"center_hz": self.rf_freq_hz, "freq_hz": t.freq_hz, "mode": t.mode,
+                "bandwidth_hz": t.bandwidth_hz, "low_cut_hz": self.audio.low_cut_hz}
+
+    def feed_stream_a(self, i, q, first: int):
+        """What _on_stream_data does with a block when CANCEL is on: the raw
+        RX1 path is replaced by the canceller, RX2 stays raw."""
+        if self.canceller.enabled:
+            self.canceller.feed_a(i, q, first)
+        else:
+            self.audio.feed(i, q)
+
+    def feed_stream_b(self, i, q, first: int):
+        """What _on_stream_data_b does: RX2 always feeds its own demod; the
+        canceller gets a copy when CANCEL is on."""
+        self.audio_b.feed(i, q)
+        if self.canceller.enabled:
+            self.canceller.feed_b(i, q, first)
 
     async def start(self):
         """Fake device bring-up: always succeeds, no hardware, no threads."""
@@ -160,6 +213,11 @@ class FakeSdrClient:
 
     def passband_strength_db(self, center_hz: float, bandwidth_hz: float) -> Optional[float]:
         return None
+
+    def set_cancel_on(self, on: bool):
+        """Test helper for the worker-less path: flips the flag without
+        starting the thread, so tests drive pump() deterministically."""
+        self.canceller.enabled = bool(on)
 
     def passband_strength_db_b(self, center_hz: float, bandwidth_hz: float) -> Optional[float]:
         return None

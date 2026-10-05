@@ -637,7 +637,7 @@ overrode the original spec in `ui-redesign/SPEC_AMENDMENTS.md`.
 
 | Column | Contents, top to bottom |
 |---|---|
-| **Left** (`modedsp`, 288px) | SESSION · BAND · DIGITAL AUDIO · SSB AUDIO · ANTENNA |
+| **Left** (`modedsp`, 288px) | SESSION · BAND · DIGITAL AUDIO · SSB AUDIO · CANCEL · ANTENNA |
 | **Centre** (`center`, `center2`) | RX1 and RX2, each self-contained (§10) |
 | **Right** (`bandamp`, 274px) | AMP · TX METERS · EXCITER DRIVE · OPERATING MODE · FAULT STATUS |
 | **Tray** (full width) | ANTENNA A/B TEST · MEASURE NOISE |
@@ -811,3 +811,53 @@ slider during a page scroll.
 
 `v2WheelShouldAdjust` is pure and unit-tested at both window boundaries.
 The spectrum's own wheel-zoom is a separate handler and is not gated.
+
+The CANCEL block's GAIN, PHASE and max-attenuation controls use a different
+wheel rule (§12.10): the operator turns them continuously while watching the
+trace, so the 120 ms pointer-arrival gate is dropped there and only the
+page-scroll gate remains.
+
+### 12.10 The CANCEL block (2026-10-04, branch `rx2-cancel`)
+
+Left column, between SSB AUDIO and ANTENNA. It is in the left column, not in
+the RX1 panel, for one reason: **RX1's and RX2's panels must be row-for-row
+identical in structure and height**, so the two spectra, waterfalls and
+their controls line up. A block inside RX1 pushed its spectrum 176px below
+RX2's.
+
+**The block is 342px tall in every mode, and nothing in it may change that.**
+A new control reuses an existing row or it does not go in. The checks that
+hold this are measurements of the real page in headless Chrome, in CANCEL
+off, COHERENT, NOISE, and NOISE bypassed: block 342; RX1 and RX2 spectrum
+canvas tops equal, waterfall tops equal, section tops equal.
+
+| Row | COHERENT | NOISE |
+|---|---|---|
+| 1 | ON · OFF · mode button (`COH`) · AUDIO (disabled) | ON · OFF · mode button (`NOISE`) · AUDIO |
+| 2 | RX2 GAIN FOLLOWS RX1 | same |
+| 3 | RESET · GHOST · CLAMP (disabled) | RESET · GHOST · CLAMP |
+| 4 | STEP: FINE 0.1 · MED 0.5 · COARSE 2.0 | same |
+| 5 | GAIN dB — slider, typed value | SCALE dB (k) |
+| 6 | PHASE ° — slider, typed value, +180° | THRESH σ (n), and "~x% false" where +180° was |
+| 7 | residual: span · audio | lines in view (or `BYPASS: …`) · max attenuation, "dB max atten" |
+
+- Row 1 fits 190px only with 4px between buttons and 4px side padding. The
+  mode labels are `COH` and `NOISE` for that reason.
+- The state-selected colour marks what is on, as everywhere else (§2.2). The
+  `BYPASS: …` status is the fault colour: it means the display and audio are
+  raw, which the operator must not mistake for a processed view.
+- A **CANCEL** / **NOISE SUB** chip sits beside the RX1 label while a mode is
+  on. RX2's locked controls are dimmed to 0.4, not hidden.
+- While a mode is on, both receivers use a fixed display scale (RX2 copies
+  RX1's), because AUTO would rescale away the effect being judged. The prior
+  AUTO states come back when the mode goes off.
+- The smallest text in the block is 0.6rem (the max-attenuation unit and the
+  BYPASS status, each on two lines). That is below §3's normal floor and is
+  a known compromise of the 190px row.
+
+**Wheel and keys.** One mouse notch is one step of the selected STEP size,
+whatever `deltaY` the mouse reports (a 12px threshold gave 0.025 per notch on
+a 3px mouse). Trackpad deltas accumulate, one step per event at most. Shift
+is ×5. Arrow keys use the same step. Phase wraps; the rest clamp. Every value
+is rounded to its grid before it is sent. The pure logic is the `CANCELWHEEL`
+block, tested by `ui-redesign/test_cancel_wheel.js`.

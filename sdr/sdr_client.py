@@ -35,6 +35,7 @@ on this hardware.
 import asyncio
 import ctypes as C
 import logging
+import os
 import queue
 import threading
 import time
@@ -45,12 +46,21 @@ import numpy as np
 
 from . import sdrplay_capi as capi
 from .audio_demod import AudioDemodulator
+from .canceller import Canceller
 from .combiner import Combiner
+from .audio_stft import MaskProvider, PcmDelay, StftGainStage
+from .noise_sub import BLOCK_FRAMES
+from .pairing_debug import PairingDebug
 from .virtual_audio_output import DigitalAudioOutput
 
 logger = logging.getLogger(__name__)
 
 SpectrumCallback = Callable[[dict], Coroutine]
+
+
+def _first_sample(params) -> int:
+    """firstSampleNum of a native stream callback (-1 if the pointer is NULL)."""
+    return int(params.contents.firstSampleNum) if params else -1
 
 # Manual RF gain: one 0-100% knob drives both of SDRplay's underlying front-
 # end gain parameters together (same combined-knob convention SDRuno uses),
@@ -187,6 +197,16 @@ class SdrClient:
         self._avg_decay = max(0.0, (spectrum_avg_frames - 1.0) / (spectrum_avg_frames + 1.0))
         self._avg_power: Optional[np.ndarray] = None
         self._reset_avg_event = threading.Event()
+        # NOISE SUB block averages (display only, sdr/noise_sub.py): non-overlapping
+        # sums of BLOCK_FRAMES raw FFT frames, published as 'block' frames. Off
+        # unless NOISE SUB is on; reset on retune, TX and mode change.
+        self.block_avg_enabled = False
+        self._blk_acc = None
+        self._blk_n = 0
+        self._blk_acc_b = None
+        self._blk_n_b = 0
+        self._blk_callbacks: list = []
+        self._blk_callbacks_b: list = []
         # Channel B's own averaged-spectrum state — separate from Channel
         # A's above, same reasoning throughout.
         self._avg_power_b: Optional[np.ndarray] = None
@@ -269,8 +289,18 @@ class SdrClient:
         # reading comes out as an unfamiliar large positive number instead
         # of the conventional dBFS sign (real signals negative, 0 = full scale).
         self._fullscale_ref = 32767.0 * float(np.sum(self._window))
-        self._cb_stream = capi.StreamCallback_t(self._on_stream_data)
-        self._cb_stream_b = capi.StreamCallback_t(self._on_stream_data_b)
+        # DEBUG_SAMPLE_PAIRING=1 wraps both stream callbacks with timing and
+        # pairing capture (sdr/pairing_debug.py). Unset, the plain callbacks
+        # are registered and nothing else changes.
+        self._pairing_dbg: Optional[PairingDebug] = None
+        stream_cb = self._on_stream_data
+        stream_cb_b = self._on_stream_data_b
+        if os.environ.get("DEBUG_SAMPLE_PAIRING") == "1":
+            self._pairing_dbg = PairingDebug(self)
+            stream_cb = self._pairing_dbg.wrap(self._on_stream_data, 0)
+            stream_cb_b = self._pairing_dbg.wrap(self._on_stream_data_b, 1)
+        self._cb_stream = capi.StreamCallback_t(stream_cb)
+        self._cb_stream_b = capi.StreamCallback_t(stream_cb_b)
         self._cb_event = capi.EventCallback_t(self._on_event)
         # Playback now runs through an AudioWorklet ring buffer (panadapter.html),
         # which is immune to per-message scheduling jitter — so batch size is
@@ -285,16 +315,31 @@ class SdrClient:
         # still frontend/server.py work, not built this pass — defaults to
         # Channel A, matching today's behavior exactly until it exists.
         self.audio_b = AudioDemodulator(input_rate_hz=sample_rate_hz)
+        # NOISE SUB audio stage on RX1 (sdr/audio_stft.py). The mask comes from the
+        # processor through noise_mask; with no mask published the gains are 1.
+        self.noise_mask = MaskProvider()
+        self.audio_b.pcm_delay = PcmDelay()      # matches the stage's latency, in the mode only
+        self.audio.stft = StftGainStage(provider=self.noise_mask,
+                                        target_hz=lambda: self.audio.target.freq_hz or self.rf_freq_hz)
         # RX0 — manual tunable RX1/RX2 combine (diversity experiment,
         # 2026-09-12). Off until the Diversity page actually enables it
         # (Combiner.enabled), so it costs nothing when nobody's looking at
         # it. See sdr/combiner.py for the full design.
         self.combiner = Combiner(input_rate_hz=sample_rate_hz)
+        # RX1 CANCEL (sdr/canceller.py). Off by default; settings persistence
+        # is attached by the server, so tests never touch data/.
+        self.canceller = Canceller(
+            sample_rate_hz=sample_rate_hz, fft_size=fft_size, display_fps=display_fps,
+            deliver=self._deliver_cancelled,
+            publish_ghost=self._publish_ghost_threadsafe,
+            cancelled_power=lambda: self._avg_power,
+            context=self._cancel_context)
+        self._spectrum_callbacks_ghost: list[SpectrumCallback] = []
         # Second subscriber on the same demodulated audio — feeds digital-mode
         # software (WSJT-X etc.) via a virtual audio cable instead of needing
         # the antenna switched back to the radio's own receiver.
         self.digital_audio = DigitalAudioOutput()
-        self.audio.on_audio(self.digital_audio.on_audio_frame)
+        self.audio.on_digital(self.digital_audio.on_audio_frame)
         # Digital-mode fine spectrum rides the same broadcast path as the
         # wideband one (_publish already just fans out to whatever's
         # subscribed via on_spectrum) — the "kind": "fine" tag on the frame
@@ -336,6 +381,51 @@ class SdrClient:
     def on_spectrum(self, cb: SpectrumCallback):
         self._spectrum_callbacks.append(cb)
 
+    def on_block(self, cb: SpectrumCallback, is_b: bool = False):
+        """Block-average frames (NOISE SUB). is_b selects RX2."""
+        (self._blk_callbacks_b if is_b else self._blk_callbacks).append(cb)
+
+    def clear_block_averages(self):
+        self._blk_acc = None
+        self._blk_n = 0
+        self._blk_acc_b = None
+        self._blk_n_b = 0
+
+    def _block_step(self, power, is_b: bool):
+        acc = self._blk_acc_b if is_b else self._blk_acc
+        n = self._blk_n_b if is_b else self._blk_n
+        acc = power.astype(np.float64) if acc is None else acc + power
+        n += 1
+        if n < BLOCK_FRAMES:
+            if is_b:
+                self._blk_acc_b, self._blk_n_b = acc, n
+            else:
+                self._blk_acc, self._blk_n = acc, n
+            return
+        if is_b:
+            self._blk_acc_b, self._blk_n_b = None, 0
+        else:
+            self._blk_acc, self._blk_n = None, 0
+        frame = {
+            "ts": time.time(),
+            "channel": "B" if is_b else "A",
+            "kind": "block",
+            "n": n,
+            "center_freq_hz": self.rf_freq_hz_b if is_b else self.rf_freq_hz,
+            "span_hz": self.sample_rate_hz,
+            "sample_rate_hz": self.sample_rate_hz,
+            "data": (10.0 * np.log10(acc / n / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32),
+        }
+        if self._loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(self._publish_block(frame, is_b), self._loop)
+            except RuntimeError:
+                pass
+
+    async def _publish_block(self, frame: dict, is_b: bool):
+        for cb in (self._blk_callbacks_b if is_b else self._blk_callbacks):
+            await cb(frame)
+
     def on_spectrum_b(self, cb: SpectrumCallback):
         """Channel B's spectrum feed — separate from on_spectrum, see
         _spectrum_callbacks_b. Nothing subscribes to this yet."""
@@ -355,6 +445,8 @@ class SdrClient:
         self.audio.gate_tx()
         self.audio_b.gate_tx()
         self.combiner.gate_tx()
+        self.canceller.gate_tx()
+        self.clear_block_averages()
         self.digital_audio.flush()
 
     async def start(self):
@@ -414,7 +506,11 @@ class SdrClient:
         self.audio_b.rf_center_hz = self.rf_freq_hz_b
         self.audio_b.start(self._loop)
         self.combiner.start(self._loop)
+        if self.canceller.enabled:
+            self.canceller.start_worker()
         self.digital_audio.start()
+        if self._pairing_dbg is not None:
+            self._pairing_dbg.start()
         # Fresh baseline so the watchdog doesn't trip on the gap before the
         # first callback arrives.
         self._last_sample_at = time.monotonic()
@@ -437,9 +533,12 @@ class SdrClient:
         self._consumer_thread_b = None
 
         def _blocking_teardown():
+            if self._pairing_dbg is not None:
+                self._pairing_dbg.stop()
             self.audio.stop()
             self.audio_b.stop()
             self.combiner.stop()
+            self.canceller.stop_worker()
             self.digital_audio.stop()
             if consumer:
                 consumer.join(3.0)
@@ -470,6 +569,7 @@ class SdrClient:
         # A retune is a discontinuity, not noise — don't let the average blend
         # the old frequency's content into the new view's first few frames.
         self._reset_avg_event.set()
+        self.clear_block_averages()
         if self._loop:
             self._loop.run_in_executor(None, self._apply_center_freq, freq_hz)
 
@@ -771,19 +871,24 @@ class SdrClient:
         self._last_sample_at = time.monotonic()
         i = np.ctypeslib.as_array(xi, shape=(num_samples,)).astype(np.int16, copy=True)
         q_arr = np.ctypeslib.as_array(xq, shape=(num_samples,)).astype(np.int16, copy=True)
-        try:
-            self._q.put_nowait((i, q_arr))
-        except queue.Full:
-            try:
-                self._q.get_nowait()
-                self.dropped_count += 1
-            except queue.Empty:
-                pass
+        if self.canceller.enabled:
+            # CANCEL on: RX1's downstream (spectrum queue, FFT, demod) gets
+            # y = x1 - w*x2 from the canceller's worker, not this raw block.
+            self.canceller.feed_a(i, q_arr, _first_sample(params))
+        else:
             try:
                 self._q.put_nowait((i, q_arr))
             except queue.Full:
-                pass
-        self.audio.feed(i, q_arr)
+                try:
+                    self._q.get_nowait()
+                    self.dropped_count += 1
+                except queue.Empty:
+                    pass
+                try:
+                    self._q.put_nowait((i, q_arr))
+                except queue.Full:
+                    pass
+            self.audio.feed(i, q_arr)
         if self.combiner.enabled:
             # RX0's target/filter tracks RX1's own live settings each
             # callback — cheap attribute reads/copies, no separate sync
@@ -831,6 +936,10 @@ class SdrClient:
             except queue.Full:
                 pass
         self.audio_b.feed(i, q_arr)
+        if self.canceller.enabled:
+            # RX2 stays raw for its own pipeline; the canceller also needs
+            # its block, paired by firstSampleNum with RX1's.
+            self.canceller.feed_b(i, q_arr, _first_sample(params))
         if self.combiner.enabled:
             try:
                 self.combiner.rf_center_hz_b = self.audio_b.rf_center_hz
@@ -1036,6 +1145,8 @@ class SdrClient:
                 # done in real spectrum analyzers.
                 self._avg_power = self._avg_power * self._avg_decay + power * (1.0 - self._avg_decay)
             mag_db = (10.0 * np.log10(self._avg_power / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
+        if self.block_avg_enabled and not self.audio.tx_active:
+            self._block_step(power, False)
         return {
             "ts": time.time(),
             "channel": "A",
@@ -1126,6 +1237,8 @@ class SdrClient:
             else:
                 self._avg_power_b = self._avg_power_b * self._avg_decay + power * (1.0 - self._avg_decay)
             mag_db = (10.0 * np.log10(self._avg_power_b / (self._fullscale_ref ** 2) + 1e-12)).astype(np.float32)
+        if self.block_avg_enabled and not self.audio_b.tx_active:
+            self._block_step(power, True)
         return {
             "ts": time.time(),
             "channel": "B",
@@ -1196,6 +1309,46 @@ class SdrClient:
     async def _publish_b(self, frame: dict):
         for cb in self._spectrum_callbacks_b:
             await cb(frame)
+
+    def on_spectrum_ghost(self, cb: SpectrumCallback):
+        """Raw RX1 ghost trace while CANCEL is on — see sdr/canceller.py."""
+        self._spectrum_callbacks_ghost.append(cb)
+
+    def _publish_ghost_threadsafe(self, frame: dict):
+        """Called from the canceller's worker thread."""
+        if self._loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._publish_ghost(frame), self._loop)
+        except RuntimeError:
+            pass   # loop closing/closed during shutdown
+
+    async def _publish_ghost(self, frame: dict):
+        for cb in self._spectrum_callbacks_ghost:
+            await cb(frame)
+
+    def _deliver_cancelled(self, i: np.ndarray, q_arr: np.ndarray):
+        """RX1's raw-path entry points, fed with y instead of x1. Called from
+        the canceller's worker thread. Same queue and audio.feed as the raw
+        callback — keep the two in step."""
+        try:
+            self._q.put_nowait((i, q_arr))
+        except queue.Full:
+            try:
+                self._q.get_nowait()
+                self.dropped_count += 1
+            except queue.Empty:
+                pass
+            try:
+                self._q.put_nowait((i, q_arr))
+            except queue.Full:
+                pass
+        self.audio.feed(i, q_arr)
+
+    def _cancel_context(self) -> dict:
+        t = self.audio.target
+        return {"center_hz": self.rf_freq_hz, "freq_hz": t.freq_hz, "mode": t.mode,
+                "bandwidth_hz": t.bandwidth_hz, "low_cut_hz": self.audio.low_cut_hz}
 
     async def _publish_fine_a(self, frame: dict):
         frame["channel"] = "A"

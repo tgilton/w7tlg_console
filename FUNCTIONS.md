@@ -204,6 +204,44 @@ analysis). Fully reverted, end to end. Do not re-attempt this the same way
 — needs isolated testing / a different approach before ever touching a
 live session again.
 
+### Cancel — RX2 used against RX1
+
+Added 2026-10-04 (branch `rx2-cancel`). The block sits between SSB Audio and
+Antenna. Two modes, one at a time. While either is on, RX2 is not an
+independent receiver (§8): it follows RX1's frequency, mode, width, notches
+and (by default) RF gain, and its own controls for those are locked.
+
+**The Frequency column is not filled in.** HOT / SESSION / RARE is operator
+knowledge and this feature has not been used on the air enough to rate. The
+"Does what" and "Path" columns are from the source.
+
+| Control | Does what | Frequency | Path |
+|---|---|---|---|
+| ON / OFF | Turns the selected mode on or off. Off restores RX2's previous settings. Always off at startup | — | server, `set_cancel_mode` |
+| Mode button (`COH` / `NOISE`) | COHERENT: subtracts RX2 from RX1 in the IQ (`y = RX1 − w·RX2`), so RX1's spectrum, S-meter and audio all change. NOISE: subtracts RX2's detected lines from RX1's *displayed* spectrum only | — | server |
+| AUDIO (NOISE only) | Off: RX1 audio is raw. On: lines flagged by NOISE are attenuated in RX1's speaker audio. The WSJT-X feed is never processed. Always off at startup | — | SDR-side, RX1 audio chain |
+| RX2 GAIN FOLLOWS RX1 | RX2's RF gain is set to RX1's while a mode is on | — | SDR-side, tuner B |
+| RESET | COHERENT: gain 0 dB, phase 0°. NOISE: scale −10 dB, threshold 2.0 | — | server |
+| GHOST | Draws raw RX1 as a dashed trace over the processed one | — | display only |
+| CLAMP (NOISE only) | Bins below the threshold are drawn at the floor, so only lines show | — | display only |
+| STEP — FINE / MED / COARSE | Step for the wheel and arrow keys: 0.1 / 0.5 / 2.0. Shift ×5. Remembered in the browser | — | client-side |
+| GAIN dB / PHASE ° / +180° (COHERENT) | The complex weight `w`. −40…+80 dB, 0…360°, 0.1 resolution | — | SDR-side, IQ |
+| SCALE dB / THRESH σ (NOISE) | How much of RX2's line power is subtracted (−40…+40 dB), and how far above the floor a bin must be to count as a line (1.0…6.0 σ). "~x% false" beside THRESH is the live expected share of false detections | — | display processing |
+| Max attenuation (NOISE) | Deepest cut the AUDIO stage makes on a flagged line, −6…−40 dB | — | SDR-side, RX1 audio chain |
+| Residual span / audio (COHERENT) | READ. Cancelled power over raw RX1 power, across the span and across the audio passband | READ | — |
+| Lines / `BYPASS: …` (NOISE) | READ. Detected line groups inside the displayed span, or why processing is not running (grid mismatch, RX2 stale, no RX2, error). While bypassed, the display and audio are raw | READ | — |
+
+Things an operator should know that the labels do not say:
+
+- In NOISE mode RX1's speaker audio is 64 ms later than with the mode off
+  (RX2's is delayed to match). The WSJT-X feed is not delayed.
+- In an SSB session with RX1 as the Digital Audio source, the WSJT-X feed
+  has no EQ and no DNR while NOISE mode is on.
+- In a digital session with NOISE active, both panels show the wideband
+  spectrum (30.5 Hz per bin), not the fine one, so individual FT8 signals
+  are not resolved until the mode is off.
+- AUTO display scaling is switched off for both receivers while a mode is on.
+
 ---
 
 ## 5. Center — spectrum and tuning
@@ -369,6 +407,12 @@ anywhere on its own antenna while RX1 stays where it is, or transmits.
 | RX2 Filter (NARROW/WIDE + width) | Same UI as RX1's, own per-mode defaults — RX2's filter is SDR-side and continuous, not snapped to the FT-991A's own hardware CAT steps the way RX1's is | SESSION | SDR-side |
 | RX2 AGC/NR, RX2 Audio EQ | Fully independent of RX1's — RX2's column can be hidden entirely and RX1 stays completely operable | SESSION/RARE | SDR-side |
 | Digital Audio source (left column) | Picks which receiver's demodulated audio feeds the single BlackHole cable to WSJT-X/JS8Call — RX1 or RX2 | SESSION | client-side swap |
+
+**While CANCEL is on (either mode, §4 "Cancel") RX2 is locked to RX1** by the
+server, whatever Link says: frequency, mode, width and notches, and RF gain
+unless "RX2 gain follows RX1" is off. The locked controls are dimmed and a
+direct change is refused with a message. RX2's own settings come back when
+CANCEL goes off.
 
 **Startup default is Link on**, RX2 inheriting RX1's frequency, mode,
 filter width and view the moment the page connects — not RX2's own bare
