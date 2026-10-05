@@ -398,6 +398,23 @@ def build_state_payload(state: StationState) -> dict:
     return data
 
 
+def _noise_reset_after_tx(was_tx: bool):
+    """Falling edge of TX, called at both falling-edge sites with the flag as it was
+    before the clear. Edge-triggered on purpose: the slow path runs on every poll while
+    not transmitting, and a reset on each one would wipe the detector ten times a second.
+    Nothing gathered around a transmission is carried into RX: the processor's histories,
+    the block detector and its held mask, the stored RX2 frame, the partial block sums,
+    and the audio stage's mask all start clean."""
+    global _latest_b_frame
+    if not was_tx or sdr is None:
+        return
+    noise_proc.core.reset_history()
+    noise_proc.tracker.reset()
+    _latest_b_frame = None
+    sdr.noise_mask.clear()
+    sdr.clear_block_averages()
+
+
 async def on_station_state(state: StationState):
     if sdr is not None and sdr.available:
         ptt = bool(state.rig.get("ptt", False))
@@ -406,6 +423,7 @@ async def on_station_state(state: StationState):
             # in case the fast PTT monitor missed it or hasn't connected yet.
             sdr.gate_tx()
         elif not ptt:
+            _noise_reset_after_tx(sdr.audio.tx_active)     # before the flag is cleared
             sdr.audio.tx_active = False
             # gate_tx() sets both audio.tx_active and audio_b.tx_active as a
             # side effect on the rising edge (AudioDemodulator.gate_tx), but
@@ -508,6 +526,8 @@ async def on_spectrum_frame_b_store(frame: dict):
     global _latest_b_frame
     if not _is_wideband(frame):
         return
+    if sdr is not None and sdr.audio.tx_active:
+        return                      # TX: the antenna is switched away; store nothing
     _latest_b_frame = frame
 
 
@@ -515,6 +535,8 @@ async def on_block_frame_b(frame: dict):
     """RX2 block average (11 raw frames) -> the NOISE SUB line mask. Off the loop."""
     if sdr is None or not sdr.canceller.noise_enabled:
         return
+    if sdr.audio.tx_active:
+        return                      # TX: no block reaches the detector
     noise_proc.set_thresh(sdr.canceller.noise_n)
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, noise_proc.process_block, frame)
@@ -527,6 +549,11 @@ async def on_spectrum_frame_noise(frame: dict):
     if sdr is None or not sdr.canceller.noise_enabled:
         return
     if not _is_wideband(frame):
+        return
+    if sdr.audio.tx_active:
+        # TX gate. The SDR keeps publishing wideband frames through a transmission (the
+        # raw display is frozen in the browser), but they are disconnected-input noise:
+        # no processed frame, no ghost frame, no mask update, no state advance.
         return
     c = sdr.canceller
     if c.ghost:
@@ -725,6 +752,7 @@ async def _fast_ptt_monitor():
                     ptt = new_ptt
                 if not ptt:
                     if sdr is not None and sdr.available:
+                        _noise_reset_after_tx(sdr.audio.tx_active)     # before the flag is cleared
                         sdr.audio.tx_active = False
                         sdr.audio_b.tx_active = False   # see on_station_state's matching fix
                         sdr.combiner.tx_active = False

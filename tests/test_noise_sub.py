@@ -412,3 +412,131 @@ def test_false_share_in_a_digital_session_comes_from_wideband_blocks_only(fake_s
     assert server.noise_proc.tracker.blocks == 30          # no resets from fine frames
     assert fp is not None and fp < 0.5
     _mode(server, "off")
+
+
+# ----------------------------------------------------------------------
+# TX gate: nothing is published or advanced during TX, and RX starts clean
+# ----------------------------------------------------------------------
+from amplifier.acom_bridge import StationState  # noqa: E402
+import inspect  # noqa: E402
+
+
+def _block(rng):
+    return {"data": (10 * np.log10(rng.gamma(11, 1 / 11, 65536)) - 100.0).astype(np.float32),
+            "center_freq_hz": 14.074e6, "span_hz": 2e6, "kind": "block", "n": 11,
+            "ts": server.time.time()}
+
+
+def _rx_cycle(rng, n=3):
+    for _ in range(n):
+        asyncio.run(server.on_block_frame_b(_block(rng)))
+        asyncio.run(server.on_spectrum_frame_b_store(_wide(rng)))
+        asyncio.run(server.on_spectrum_frame_noise(_wide(rng)))
+
+
+def test_noise_mode_publishes_nothing_and_advances_nothing_during_tx(fake_sdr, monkeypatch):
+    ghost, proc = _noise_setup(fake_sdr, monkeypatch)
+    raw = _Spy()
+    monkeypatch.setattr(server, "spectrum_manager", raw)
+    rng = np.random.default_rng(61)
+    _rx_cycle(rng)
+    assert len(proc.frames) == 3 and len(ghost.frames) == 3
+    tr = server.noise_proc.tracker
+    before = (len(proc.frames), len(ghost.frames), tr.blocks, fake_sdr.noise_mask.version,
+              len(server.noise_proc.core._marker_hist), id(server._latest_b_frame))
+
+    asyncio.run(server.on_station_state(StationState(rig={"ptt": True})))     # rising edge
+    assert fake_sdr.audio.tx_active
+    for _ in range(10):
+        asyncio.run(server.on_block_frame_b(_block(rng)))
+        asyncio.run(server.on_spectrum_frame_b_store(_wide(rng)))
+        f = _wide(rng)
+        asyncio.run(server.on_spectrum_frame(f))          # the raw socket is not gated on the server
+        asyncio.run(server.on_spectrum_frame_noise(f))
+    after = (len(proc.frames), len(ghost.frames), tr.blocks, fake_sdr.noise_mask.version,
+             len(server.noise_proc.core._marker_hist), id(server._latest_b_frame))
+    print(f"\n    NOISE, tx_active raised, 10 wideband frames: /ws/spectrum {len(raw.frames)}, "
+          f"/ws/spectrum_proc +{after[0] - before[0]}, /ws/spectrum_ghost +{after[1] - before[1]}, "
+          f"blocks +{after[2] - before[2]}, mask publishes +{after[3] - before[3]}")
+    assert after == before
+    assert len(raw.frames) == 10
+    _mode(server, "off")
+
+
+def test_falling_edge_resets_the_processor_once_and_processing_resumes(fake_sdr, monkeypatch):
+    ghost, proc = _noise_setup(fake_sdr, monkeypatch)
+    rng = np.random.default_rng(62)
+    _rx_cycle(rng, 4)
+    tr = server.noise_proc.tracker
+    tr.mask[1000:1010] = True                               # a held line from before TX
+    assert tr.blocks == 4 and fake_sdr.noise_mask.get() is not None
+    asyncio.run(server.on_station_state(StationState(rig={"ptt": True})))
+    asyncio.run(server.on_station_state(StationState(rig={"ptt": False})))    # falling edge
+    assert not fake_sdr.audio.tx_active
+    assert tr.blocks == 0 and tr.mask is None               # block detector and held mask
+    assert len(server.noise_proc.core._marker_hist) == 0 and len(server.noise_proc.core._line_hist) == 0
+    assert fake_sdr.noise_mask.get() is None                # the audio stage's mask
+    assert server._latest_b_frame is None
+
+    _rx_cycle(rng, 2)                                       # RX again
+    n_proc = len(proc.frames)
+    assert fake_sdr.canceller.noise_status == "active" and n_proc == 6 and tr.blocks == 2
+    # Not transmitting: further polls must not reset anything (the reset is edge-triggered).
+    for _ in range(5):
+        asyncio.run(server.on_station_state(StationState(rig={"ptt": False})))
+    assert tr.blocks == 2 and fake_sdr.noise_mask.get() is not None
+    print(f"\n    after the falling edge: detector reset, then {n_proc - 4} processed frames from 2 RX frames; "
+          f"5 idle polls left the detector at {tr.blocks} blocks")
+    _mode(server, "off")
+
+
+def test_both_falling_edge_sites_reset_noise_sub():
+    for fn in (server.on_station_state, server._fast_ptt_monitor):
+        src = inspect.getsource(fn)
+        i = src.index("_noise_reset_after_tx(sdr.audio.tx_active)")
+        j = src.index("sdr.audio.tx_active = False", i)
+        assert i < j, f"{fn.__name__}: the reset must read the flag before it is cleared"
+    server_src = inspect.getsource(server)
+    assert server_src.count("_noise_reset_after_tx(sdr.audio.tx_active)") == 2
+
+
+def test_coherent_mode_publishes_nothing_on_any_rx1_path_during_tx(fake_sdr, monkeypatch):
+    """In COHERENT the RX1 queue is fed only by the canceller's worker, and the ghost comes
+    from that worker's FFT. Gated, it delivers no blocks and no ghost frames."""
+    _rx2_fake(fake_sdr)
+    monkeypatch.setattr(server, "sdr", fake_sdr)
+    monkeypatch.setattr(server, "_cancel_snapshot", None)
+    ghost, proc = _Spy(), _Spy()
+    monkeypatch.setattr(server, "spectrum_manager_ghost", ghost)
+    monkeypatch.setattr(server, "spectrum_manager_proc", proc)
+    c = fake_sdr.canceller
+    c.enabled = True
+    c.ghost = True
+    rng = np.random.default_rng(63)
+
+    def feed(k0, n):
+        for k in range(k0, k0 + n):
+            i = rng.integers(-2000, 2000, 252).astype(np.int16)
+            q = rng.integers(-2000, 2000, 252).astype(np.int16)
+            fake_sdr.feed_stream_a(i, q, k * 252)
+            fake_sdr.feed_stream_b(i, q, k * 252)
+        c.pump()
+        c.pump()
+
+    feed(0, 320)                                   # more than one 65536-sample ghost FFT
+    delivered_rx = len(fake_sdr.cancelled_out)
+    ghost_rx = len(fake_sdr.ghost_frames)
+    assert delivered_rx > 0 and ghost_rx >= 1
+    fake_sdr.gate_tx()
+    feed(320, 200)
+    in_tx = len(fake_sdr.cancelled_out) - delivered_rx
+    asyncio.run(server.on_spectrum_frame_noise(_wide(rng)))        # COH: the NOISE handler is not in use
+    print(f"\n    COH, tx_active raised, 200 block pairs: delivered to RX1 {in_tx}, "
+          f"/ws/spectrum_proc {len(proc.frames)}, /ws/spectrum_ghost {len(ghost.frames)}, "
+          f"worker ghost frames +{len(fake_sdr.ghost_frames) - ghost_rx}")
+    assert in_tx == 0 and len(proc.frames) == 0 and len(ghost.frames) == 0
+    assert len(fake_sdr.ghost_frames) == ghost_rx
+    asyncio.run(server.on_station_state(StationState(rig={"ptt": False})))
+    feed(520, 64)
+    assert len(fake_sdr.cancelled_out) > delivered_rx              # resumes after the clear
+    c.enabled = False
