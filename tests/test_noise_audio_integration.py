@@ -2,12 +2,19 @@
 IQ through _process, so every chain is the production code.
 
 The stage is in RX1's path only while NOISE SUB mode is on (stage_request). Outside the
-mode the output must be bit-identical to main: the tests load main's audio_demod.py from
-git and compare bytes. The test vector is synthetic and deterministic (FT8-like tones
-plus noise); no recorded baseband exists in the repo. Each test prints its numbers."""
+mode the output must be bit-identical to the demodulator from before this feature. The
+tests extract the whole sdr package from git at a PINNED COMMIT (BASELINE, main as it was
+before rx2-cancel), import it as its own package, and compare bytes. It is pinned, not read from the branch name "main": once
+this work is merged, "main" is the new code, and the comparison would be the new code
+against itself. "main" in the test names and printed lines means that baseline. The test
+vector is synthetic and deterministic (FT8-like tones plus noise); no recorded baseband
+exists in the repo. Each test prints its numbers."""
 import asyncio
-import importlib.util
+import importlib
+import io
 import subprocess
+import sys
+import tarfile
 from pathlib import Path
 
 import numpy as np
@@ -28,20 +35,39 @@ FS = 2e6
 N = 1024                         # stage latency, samples at 16 kHz
 
 
+# main before rx2-cancel was merged: the last commit whose audio_demod.py has no stage.
+BASELINE = "dbb9c0bd5c728db8ad0267e65a4b2b9cc28a6470"
+
+
 @pytest.fixture(scope="module")
 def main_mod(tmp_path_factory):
-    """main's sdr/audio_demod.py, loaded from git as its own module."""
+    """The baseline sdr/audio_demod.py, imported from a copy of the WHOLE sdr package as
+    it was at commit BASELINE. The package is extracted with `git archive` into a
+    temporary directory and imported under its own name (sdr_baseline), so any relative
+    import inside it resolves against the baseline's own files, never the working tree."""
+    root = tmp_path_factory.mktemp("baseline")
     try:
-        src = subprocess.run(["git", "show", "main:sdr/audio_demod.py"], cwd=REPO,
-                             capture_output=True, text=True, check=True).stdout
+        tar = subprocess.run(["git", "archive", "--format=tar", BASELINE, "sdr"], cwd=REPO,
+                             capture_output=True, check=True).stdout
     except Exception:
-        pytest.skip("main:sdr/audio_demod.py is not available from git")
-    path = tmp_path_factory.mktemp("main_demod") / "audio_demod_main.py"
-    path.write_text(src)
-    spec = importlib.util.spec_from_file_location("audio_demod_main", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+        pytest.skip(f"commit {BASELINE[:7]} is not available from git (shallow clone?)")
+    with tarfile.open(fileobj=io.BytesIO(tar)) as tf:
+        tf.extractall(root, filter="data")
+    (root / "sdr").rename(root / "sdr_baseline")
+    (root / "data").mkdir()               # the baseline writes a latency log beside its package
+    src = (root / "sdr_baseline" / "audio_demod.py").read_text()
+    # The baseline must really be the pre-feature file, or the comparison means nothing.
+    assert "audio_stft" not in src and "_stage_path" not in src
+    sys.path.insert(0, str(root))
+    try:
+        mod = importlib.import_module("sdr_baseline.audio_demod")
+    finally:
+        sys.path.remove(str(root))
+    assert Path(mod.__file__).resolve().is_relative_to(root.resolve())
+    assert mod is not branch_mod and mod.AudioDemodulator is not AudioDemodulator
+    yield mod
+    for name in [n for n in sys.modules if n == "sdr_baseline" or n.startswith("sdr_baseline.")]:
+        del sys.modules[name]
 
 
 def configure(d, session="voice", agc=None, eq_db=0.0):
