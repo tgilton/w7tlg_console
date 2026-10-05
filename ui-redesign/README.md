@@ -46,10 +46,10 @@ Amendment A rejected their fixed pixel widths outright.
 ./ui-redesign/run_checks.sh --quick    # skip the two browser checks (~5 s)
 ```
 
-Seven checks, each printing PASS or FAIL, non-zero exit if any fails:
+Eight checks, each printing PASS or FAIL, non-zero exit if any fails:
 pytest, the six node unit tests, `node --check` on each `<script>` block,
 the five protected literal lines, CSS brace balance, `smoke_console.js`,
-and `test_wheel_real.js`. The header comment in the script says why each
+`test_wheel_real.js` and `test_tx_freeze.js`. The header comment in the script says why each
 one exists.
 
 It starts nothing and stops nothing. The browser checks load
@@ -88,7 +88,8 @@ them, so the test cannot drift from the source.
 | `test_af_paths.js` | 22 — the AF send and state-sync paths on **both** receivers, against a fake `send()` and DOM |
 | `test_palettes.js` | 101 — all twelve waterfall palettes, the six trace colours, the wheel gate |
 | `test_cancel_wheel.js` | 80 — the CANCEL block's pure logic (`CANCELWHEEL` block): one mouse notch is one step whatever its `deltaY`, trackpad accumulation, the page-scroll gate, wrap and clamp, the step grid, the max-attenuation keys and wheel, the AUDIO toggle, mode labels, BYPASS status text, the +180° guard |
-| `test_spec_pick.js` | 18 — the `V2SPEC` block: which frame each panel draws (processed over fine in NOISE mode), the AVG step, and that the ghost and the main trace use separate buffers, checked against the page source too |
+| `test_spec_pick.js` | 31 — the `V2SPEC` block: which frame each panel draws (processed over fine in NOISE mode), the AVG step, and that the ghost and the main trace use separate buffers, checked against the page source too |
+| `test_tx_freeze.js` | 56 — the real page with a fake socket: frames keep arriving on every socket (raw, fine, processed, ghost) during a transmission, and the RX1 trace, ghost and waterfall and the RX2 trace and waterfall must hold the pre-TX frame, then resume. COHERENT and NOISE, SSB and digital |
 | `test_wheel_real.js` | real `WheelEvent`s at all 26 sliders in a real page: adjust when rested, blocked when not |
 
 ### Inventory scripts — what `node --check` cannot see

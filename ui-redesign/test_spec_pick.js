@@ -12,8 +12,8 @@ const b = html.indexOf('/* V2SPEC:END */');
 if (a < 0 || b < 0) { console.error('V2SPEC block not found'); process.exit(1); }
 const sandbox = {};
 new Function('exports', html.slice(a, b)
-  + '\nexports.v2PickFrame = v2PickFrame;\nexports.v2SmoothInto = v2SmoothInto;')(sandbox);
-const { v2PickFrame, v2SmoothInto } = sandbox;
+  + '\nexports.v2PickFrame = v2PickFrame;\nexports.v2SmoothInto = v2SmoothInto;\nexports.v2ProcFresh = v2ProcFresh;')(sandbox);
+const { v2PickFrame, v2SmoothInto, v2ProcFresh } = sandbox;
 
 let pass = 0, fail = 0;
 function check(name, ok, detail) {
@@ -30,6 +30,19 @@ check('NOISE off, digital, no fine frame yet -> wide', pick(false, true, false) 
 check('NOISE off, SSB session -> wide (unchanged)', pick(false, false, true) === 'wide', '');
 check('bypassed in a digital session -> fine (what the session shows)', pick(false, true, true) === 'fine', '');
 check('bypassed in an SSB session -> wide', pick(false, false, false) === 'wide', '');
+
+console.log('TX: the processed frame is held, not aged');
+const fresh = (ageMs, ptt, wanted = true, have = true) => v2ProcFresh({ wanted, have, ageMs, ptt });
+check('RX, 200 ms old -> fresh', fresh(200, false) === true, '');
+check('RX, 1.2 s old -> stale (fall back to the session display)', fresh(1200, false) === false, '');
+check('TX, 1.2 s old -> still held', fresh(1200, true) === true, '');
+check('TX, 60 s old -> still held', fresh(60000, true) === true, '');
+check('TX but NOISE mode off -> not used', fresh(100, true, false) === false, '');
+check('TX but no processed frame yet -> not used', fresh(100, true, true, false) === false, '');
+check('held frame in a digital session during TX -> processed is drawn, not fine',
+  v2PickFrame({ procActive: fresh(30000, true), digital: true, fineAvail: true }) === 'proc', '');
+check('long RX gap in a digital session -> fine again',
+  v2PickFrame({ procActive: fresh(30000, false), digital: true, fineAvail: true }) === 'fine', '');
 
 console.log('ghost and trace under AVG > 0');
 // Trace at -100 dB, ghost at -60 dB, alternating calls as the draw loop makes them.
@@ -65,6 +78,15 @@ check('the ghost buffer is its own variable', /let smoothedGhost = null;/.test(h
   && /v2SmoothInto\(smoothedGhost, points, specAvgAlpha\)/.test(html), '');
 check('RX1 draws through v2PickFrame', /const pick = v2PickFrame\(\{ procActive: !!procFresh/.test(html), '');
 check('RX2 draws through v2PickFrame', /const pick2 = v2PickFrame\(\{ procActive: Panadapter\.procActive\(\)/.test(html), '');
+
+console.log('TX freeze wiring');
+check('processed handler drops frames while rigPtt, before storing',
+  /if \(rigPtt\) \{ pendingProcHeader = null; return; \}\s*latestProcFrame = \{/.test(html), '');
+check('ghost handler drops frames while rigPtt, before storing',
+  /if \(rigPtt\) \{ pendingGhostHeader = null; return; \}[^\n]*\n\s*latestGhostFrame = \{/.test(html), '');
+check('RX1 fine frame is stored only when not in TX', /if \(!rigPtt\) \{\s*latestFineFrame = frame;/.test(html), '');
+check('RX2 fine frame is stored only when not in TX', /if \(!rigPtt\) \{[^\n]*\n\s*latestFineFrame2 = frame;/.test(html), '');
+check('no unguarded fine-frame store is left', (html.match(/latestFineFrame2? = frame;/g) || []).length === 2, '');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

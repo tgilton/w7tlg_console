@@ -4119,6 +4119,14 @@ function v2PickFrame(o) {
   if (o.digital && o.fineAvail) return 'fine';
   return 'wide';
 }
+// Is the processed frame usable? Fresh means under a second old. During TX no new
+// frame is stored (the handlers drop them), so the last one is HELD: it does not age
+// while PTT is down, and the trace does not fall back to a raw or fine frame.
+const V2_PROC_FRESH_MS = 1000;
+function v2ProcFresh(o) {
+  if (!o.wanted || !o.have) return false;
+  return !!o.ptt || o.ageMs < V2_PROC_FRESH_MS;
+}
 function v2SmoothInto(buf, points, alpha) {
   if (alpha < 0.01) return points;
   if (!buf || buf.length !== points.length) return new Float32Array(points);
@@ -4345,7 +4353,11 @@ function connectWs() {
     }
     if (msg.type === 'state') {
       const rig = msg.data.rig || {};
+      const wasPtt = rigPtt;
       rigPtt = !!rig.ptt;
+      // Falling edge: the held processed frame gets a fresh second, so the display
+      // stays on it until the first post-TX processed frame arrives.
+      if (wasPtt && !rigPtt && latestProcFrame) latestProcAt = performance.now();
       if (rigPtt) txSilenceStart(); else txSilenceEnd();
       rigFreqHz = rig.freq_hz ?? rigFreqHz;
       if (msg.data.cancel) CancelUI.onState(msg.data.cancel);
@@ -4472,12 +4484,13 @@ let procWs = null;
 // True while processed frames are arriving: then they own the RX1 waterfall
 // and the raw path must not add rows. Stale for over a second, raw resumes.
 function procOwnsWaterfall() {
-  return procWanted && latestProcFrame !== null && (performance.now() - latestProcAt) < 1000;
+  return v2ProcFresh({ wanted: procWanted, have: latestProcFrame !== null,
+                       ageMs: performance.now() - latestProcAt, ptt: rigPtt });
 }
 // NOISE SUB: contiguous detected runs that fall inside the displayed span,
 // from the latest processed frame. Null when there is no fresh processed frame.
 function linesInView() {
-  if (!procWanted || !latestProcFrame || (performance.now() - latestProcAt) >= 1000) return null;
+  if (!procOwnsWaterfall()) return null;
   const f = latestProcFrame, n = f.data.length;
   const binHz = f.spanHz / n, fullLo = f.centerFreqHz - f.spanHz / 2;
   const lo = (viewCenterHz - viewSpanHz / 2 - fullLo) / binHz;
@@ -4502,6 +4515,10 @@ function setProcVisible(on) {
   w.onmessage = evt => {
     if (typeof evt.data === 'string') { pendingProcHeader = JSON.parse(evt.data); return; }
     if (!pendingProcHeader) return;
+    // TX freeze, as on the raw path: a frame that arrives while PTT is down is dropped
+    // before it is stored, so the trace, the markers and the waterfall hold the last
+    // pre-TX frame.
+    if (rigPtt) { pendingProcHeader = null; return; }
     latestProcFrame = {
       centerFreqHz: pendingProcHeader.center_freq_hz,
       spanHz: pendingProcHeader.span_hz,
@@ -4510,8 +4527,8 @@ function setProcVisible(on) {
       groups: pendingProcHeader.groups || [],
     };
     latestProcAt = performance.now();
-    // The waterfall follows the trace: processed rows in NOISE SUB, same freeze as raw during TX.
-    if (!rigPtt) pushWaterfallRow(latestProcFrame);
+    // The waterfall follows the trace: processed rows in NOISE SUB.
+    pushWaterfallRow(latestProcFrame);
   };
   w.onclose = () => {
     if (procWs === w) procWs = null;
@@ -4533,6 +4550,7 @@ function setGhostVisible(on) {
   w.onmessage = evt => {
     if (typeof evt.data === 'string') { pendingGhostHeader = JSON.parse(evt.data); return; }
     if (!pendingGhostHeader) return;
+    if (rigPtt) { pendingGhostHeader = null; return; }      // TX freeze: keep the pre-TX ghost
     latestGhostFrame = {
       centerFreqHz: pendingGhostHeader.center_freq_hz,
       spanHz: pendingGhostHeader.span_hz,
@@ -4567,8 +4585,12 @@ function connectSpectrumWs() {
     };
 
     if (pendingHeader.kind === 'fine') {
-      latestFineFrame = frame;
-      if (rigIsDigital && !rigPtt && !procOwnsWaterfall()) pushWaterfallRow(frame);
+      // Frozen during TX like the wideband branch below. The server sends no fine
+      // frames in TX, but the freeze must not depend on that.
+      if (!rigPtt) {
+        latestFineFrame = frame;
+        if (rigIsDigital && !procOwnsWaterfall()) pushWaterfallRow(frame);
+      }
     } else if (rigPtt) {
       // SDR Switch disconnects the antenna from the SDR during TX — freeze.
     } else if (pendingRetuneHz !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz) > 1000) {
@@ -4937,7 +4959,7 @@ function drawSpectrum() {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
 
-  const procFresh = procWanted && latestProcFrame && (performance.now() - latestProcAt) < 1000;
+  const procFresh = procOwnsWaterfall();
   const pick = v2PickFrame({ procActive: !!procFresh, digital: rigIsDigital, fineAvail: !!latestFineFrame });
   const frame = pick === 'proc' ? latestProcFrame : pick === 'fine' ? latestFineFrame : latestFrame;
 
@@ -6180,8 +6202,10 @@ function connectSpectrumWs2() {
       // Mirrors channel A's own latestFineFrame/rigIsDigital handling
       // (Panadapter's connectSpectrumWs) — used when RX2 is selected as
       // the digital-audio source, same as RX1's DATA-U zoom.
-      latestFineFrame2 = frame;
-      if (rigIsDigital && !rigPtt && !Panadapter.procActive()) pushWaterfallRow2(frame);
+      if (!rigPtt) {      // frozen during TX, like the wideband branch below
+        latestFineFrame2 = frame;
+        if (rigIsDigital && !Panadapter.procActive()) pushWaterfallRow2(frame);
+      }
     } else if (rigPtt) {
       // SDR Switch disconnects the antenna from the SDR during TX — freeze.
     } else if (pendingRetuneHz2 !== null && Math.abs(frame.centerFreqHz - pendingRetuneHz2) > 1000) {
