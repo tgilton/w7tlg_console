@@ -32,7 +32,9 @@ state machine and stays fully out of scope here.
 
 import asyncio
 import logging
+import plistlib
 import time
+from pathlib import Path
 from typing import Callable, Coroutine, Optional
 
 from rig.rigctld_client import is_valid_hw_mode
@@ -198,7 +200,7 @@ class SessionManager:
         try:
             # Step 1: quit the outgoing app, if this switch changes which
             # app owns the audio devices/rigctld client slot.
-            if outgoing and outgoing.app_bundle_id and outgoing.app_bundle_id != target.app_bundle_id:
+            if outgoing and outgoing.app_path and outgoing.app_path != target.app_path:
                 ok, reason = self._ptt_ok()
                 if not ok:
                     return await self._fail(reason)
@@ -212,7 +214,7 @@ class SessionManager:
 
                 self.step = f"Quitting {outgoing.app_display_name}…"
                 await self._publish()
-                ok, reason = await self._quit_app(outgoing.app_bundle_id)
+                ok, reason = await self._quit_app(outgoing.app_path)
                 if not ok:
                     return await self._fail(f"Failed to quit {outgoing.app_display_name}: {reason}")
 
@@ -251,13 +253,13 @@ class SessionManager:
             # fires on its own once the rig reports the new mode.
 
             # Step 3: launch the target app, if any.
-            if target.app_bundle_id:
+            if target.app_path:
                 ok, reason = self._ptt_ok()
                 if not ok:
                     return await self._fail(reason)
                 self.step = f"Launching {target.app_display_name}…"
                 await self._publish()
-                ok, reason = await self._launch_app(target.app_bundle_id)
+                ok, reason = await self._launch_app(target.app_path)
                 if not ok:
                     return await self._fail(f"Failed to launch {target.app_display_name}: {reason}")
 
@@ -369,10 +371,15 @@ class SessionManager:
     # lesson for why this matters).
     # ------------------------------------------------------------------
 
-    async def _launch_app(self, bundle_id: str) -> tuple[bool, str]:
+    async def _launch_app(self, app_path: str) -> tuple[bool, str]:
+        # By path, not `open -b <bundle id>` — see session_profiles.py.
+        # Checked here first because `open`'s own complaint about a
+        # missing bundle doesn't say what to go and fix.
+        if not Path(app_path).is_dir():
+            return False, f"{app_path} not found — check the app path in session/session_profiles.py"
         try:
             proc = await asyncio.create_subprocess_exec(
-                "open", "-b", bundle_id,
+                "open", app_path,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SUBPROCESS_TIMEOUT_S)
             if proc.returncode != 0:
@@ -381,11 +388,27 @@ class SessionManager:
         except asyncio.TimeoutError:
             return False, f"timed out after {_SUBPROCESS_TIMEOUT_S:.0f}s"
 
-    async def _quit_app(self, bundle_id: str) -> tuple[bool, str]:
+    @staticmethod
+    def _bundle_id(app_path: str) -> Optional[str]:
+        """The app's own CFBundleIdentifier, read fresh from its Info.plist
+        so it can never go stale against whatever build is installed."""
+        try:
+            with open(Path(app_path) / "Contents" / "Info.plist", "rb") as f:
+                return plistlib.load(f).get("CFBundleIdentifier")
+        except (OSError, plistlib.InvalidFileException):
+            return None
+
+    async def _quit_app(self, app_path: str) -> tuple[bool, str]:
         # AppleScript "quit" (not pkill) gives the app its normal shutdown
         # path — matters if a future profile's app has real unsaved state.
         # A non-zero return here commonly just means "wasn't running",
         # which isn't a failure worth blocking the switch over.
+        # Addressed by id so the running instance is quit wherever it was
+        # launched from; with no readable Info.plist there's no installed
+        # app to be running, which is the same "wasn't running" case.
+        bundle_id = self._bundle_id(app_path)
+        if bundle_id is None:
+            return True, "ok"
         script = f'tell application id "{bundle_id}" to quit'
         try:
             proc = await asyncio.create_subprocess_exec(

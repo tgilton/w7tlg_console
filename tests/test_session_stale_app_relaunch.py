@@ -12,7 +12,7 @@ stored id, so "already in this session" now means "and its app is still
 running". These tests drive the guard directly: _run is stubbed out
 throughout, because what's under test is the decision switch() makes
 before the choreography starts, not the choreography itself (which shells
-out to `open -b` and lsof and has no business running in a test).
+out to `open` and lsof and has no business running in a test).
 """
 from types import SimpleNamespace
 
@@ -104,7 +104,7 @@ async def test_ssb_keeps_todays_already_in_session_behavior(manager):
     back and there is nothing to re-probe. Its guard must behave exactly as
     it did before the fix."""
     assert PROFILES["ssb"].liveness == "none"
-    assert PROFILES["ssb"].app_bundle_id is None
+    assert PROFILES["ssb"].app_path is None
     _mark_current(manager, "ssb")
 
     ok, reply = await manager.switch("ssb")

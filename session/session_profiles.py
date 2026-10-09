@@ -29,29 +29,34 @@ class SessionProfile:
     name: str                          # button label — never rewritten to show state (DESIGN.md §1)
     rig_mode: str                      # hamlib mode string, e.g. "USB", "PKTUSB"
     passband_hz: int                   # 0 = rig default
-    app_bundle_id: Optional[str]       # macOS bundle id for `open -b`; None = no external app (SSB)
+    app_path: Optional[str]            # .app bundle launched with `open`; None = no external app (SSB)
     app_display_name: str = ""         # for progress messages, e.g. "Launching WSJT-X…"
     liveness: str = "none"             # "none" | "wsjtx_udp" | "js8call_tcp" — how to confirm the app actually came up
     quit_needs_confirm: bool = False   # real gate (see SessionManager) — unused by any profile yet
     extra_rig_settings: bool = False   # apply the DATA-U known-good baseline (AGC/NB/DNF/preamp/NR/EQ)
 
 
-# WSJT-X bundle id confirmed live on this station via
-# `mdls -name kMDItemCFBundleIdentifier /Applications/wsjtx.app` — this
-# build is from the gm5dna/homebrew-amateur-radio tap, not a generic id.
+# Where each session's app is installed on this station — the one thing to
+# edit if an app moves. Apps are launched by path, not bundle id, because
+# the id belongs to whoever built the app: the gm5dna/homebrew-amateur-radio
+# tap build of WSJT-X was "F6VY59P28F.org.ko3f.wsjtx", the official
+# v3.3.0-beta1 that replaced it 2026-10-08 is "org.k1jt.wsjtx", and the
+# hardcoded old id left the FT8 button unable to launch anything. The path
+# survived that upgrade unchanged. Where an id is still needed (quit), it
+# is read from the bundle's own Info.plist — see SessionManager._quit_app.
+WSJTX_APP_PATH = "/Applications/wsjtx.app"
+JS8CALL_APP_PATH = "/Applications/JS8Call.app"
+
 PROFILES: dict[str, SessionProfile] = {
     "ssb": SessionProfile(
         id="ssb", name="SSB", rig_mode="USB", passband_hz=0,
-        app_bundle_id=None,
+        app_path=None,
     ),
     "ft8": SessionProfile(
         id="ft8", name="FT8 (WSJT-X)", rig_mode="PKTUSB", passband_hz=3000,
-        app_bundle_id="F6VY59P28F.org.ko3f.wsjtx", app_display_name="WSJT-X",
+        app_path=WSJTX_APP_PATH, app_display_name="WSJT-X",
         liveness="wsjtx_udp", extra_rig_settings=True,
     ),
-    # Bundle id confirmed live on this station via
-    # `mdls -name kMDItemCFBundleIdentifier /Applications/JS8Call.app` —
-    # the JS8Call-improved fork kept the original KN4CRD bundle id.
     # liveness="js8call_tcp" probes JS8Call's own JSON API TCP port
     # (2442, NOT WSJT-X's UDP protocol — JS8Call also has a separate
     # "WSJTXProtocolEnabled" broadcast setting that mimics WSJT-X's wire
@@ -64,7 +69,7 @@ PROFILES: dict[str, SessionProfile] = {
     # default port shown there even while disabled).
     "js8": SessionProfile(
         id="js8", name="JS8Call", rig_mode="PKTUSB", passband_hz=3000,
-        app_bundle_id="org.kn4crd.js8call", app_display_name="JS8Call",
+        app_path=JS8CALL_APP_PATH, app_display_name="JS8Call",
         liveness="js8call_tcp", extra_rig_settings=True,
     ),
 }

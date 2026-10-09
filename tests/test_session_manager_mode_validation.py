@@ -15,7 +15,7 @@ from session.session_profiles import PROFILES as REAL_PROFILES, SessionProfile
 def _bad_profile() -> SessionProfile:
     return SessionProfile(
         id="badmode", name="Bad Mode Test", rig_mode="GARBAGE",
-        passband_hz=0, app_bundle_id=None,
+        passband_hz=0, app_path=None,
     )
 
 
