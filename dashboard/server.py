@@ -1826,6 +1826,13 @@ async def handle_ws_command(text: str, ws: WebSocket):
                 await ws.send_text(json.dumps({
                     "type": "session_status", "data": session_manager.get_status()}))
 
+        elif cmd == "audio_diag":
+            # Browser audio worklet diagnostics (console.html's makeAudioDiag): one log
+            # line, nothing else. The page rate-limits to a line a second per receiver.
+            rx = msg.get("rx") if msg.get("rx") in ("RX1", "RX2") else "RX?"
+            text = "".join(c for c in str(msg.get("text", ""))[:400] if c.isprintable())
+            logger.info(f"Audio worklet {rx}: {text}")
+
         else:
             await ws.send_text(json.dumps({
                 "type": "error", "message": f"Unknown command: {cmd}"}))

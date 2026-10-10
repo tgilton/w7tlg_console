@@ -4285,6 +4285,30 @@ function v2FreqMarkup(str) {
      ══════════════════════════════════════════════════════════════════════ -->
 <script>
 'use strict';
+// Worklet diagnostics to the server log, over /ws: the worklet's { diag } events
+// (catch-up, underruns, flush, 5 s latency stats) and AudioContext state changes.
+// At most one line a second per receiver; events inside the same second share it.
+function makeAudioDiag(rx, sendFn) {
+  let pending = [];
+  setInterval(() => {
+    if (!pending.length) return;
+    sendFn({ cmd: 'audio_diag', rx, text: pending.join(' | ').slice(0, 400) });
+    pending = [];
+  }, 1000);
+  function push(text) { if (pending.length < 20) pending.push(text); }
+  return {
+    push,
+    fromWorklet(d) {
+      if (d.diag === 'stats') {
+        push(`stats 5s lat min/mean/max=${d.minMs}/${d.meanMs}/${d.maxMs} ms frames=${d.frames} samples=${d.samples}`);
+      } else if (d.diag === 'underrun') {
+        push(`underrun count=${d.count} starved=${d.starvedSamples} samples (${d.starvedMs} ms)`);
+      } else {
+        push(`${d.diag} lat=${d.latencyMs} ms`);
+      }
+    },
+  };
+}
 const Panadapter = (function () {
 
 // ── Band edges (US Amateur Radio Bands, ARRL chart) ──────────
@@ -5249,6 +5273,8 @@ function sidebandForRigMode(mode) {
   return (mode && mode.includes('L')) ? 'LSB' : 'USB';
 }
 
+const audioDiag = makeAudioDiag('RX1', send);
+
 function showAudioLatency(ms) {
   document.getElementById('lat-readout').textContent =
     'LAT ' + (ms === null ? '--' : ms) + ' ms';
@@ -5261,6 +5287,7 @@ function ensureAudioWorklet() {
     // and the ring is flushed the moment it starts, so playback begins with
     // an empty buffer instead of a backlog that then plays late.
     audioCtx.addEventListener('statechange', () => {
+      audioDiag.push('context ' + audioCtx.state);
       if (audioCtx.state === 'running') {
         if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
       } else {
@@ -5272,7 +5299,9 @@ function ensureAudioWorklet() {
     audioWorkletReady = audioCtx.audioWorklet.addModule('/audio-worklet.js').then(() => {
       audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
       audioWorkletNode.port.onmessage = evt => {
-        if (evt.data && typeof evt.data.latencyMs === 'number') showAudioLatency(evt.data.latencyMs);
+        if (!evt.data) return;
+        if (evt.data.diag) audioDiag.fromWorklet(evt.data);
+        else if (typeof evt.data.latencyMs === 'number') showAudioLatency(evt.data.latencyMs);
       };
       muteGain = audioCtx.createGain();
       muteGain.gain.value = 1;
@@ -6922,6 +6951,8 @@ function pushWaterfallRow2(frame) {
 let audioCtx2 = null, audioWs2 = null, audioWorkletNode2 = null, muteGain2 = null;
 let audioWorkletReady2 = null, audioMuted2 = true, _txSilenced2 = false, _txUnmuteTimer2 = null;
 
+const audioDiag2 = makeAudioDiag('RX2', send2);
+
 function showAudioLatency2(ms) {
   document.getElementById('lat2-readout').textContent =
     'LAT ' + (ms === null ? '--' : ms) + ' ms';
@@ -6933,6 +6964,7 @@ function ensureAudioWorklet2() {
     // Same as RX1's ensureAudioWorklet: no PCM is queued while the context is
     // not running, and the ring is flushed when it starts.
     audioCtx2.addEventListener('statechange', () => {
+      audioDiag2.push('context ' + audioCtx2.state);
       if (audioCtx2.state === 'running') {
         if (audioWorkletNode2) audioWorkletNode2.port.postMessage({ cmd: 'flush' });
       } else {
@@ -6944,7 +6976,9 @@ function ensureAudioWorklet2() {
     audioWorkletReady2 = audioCtx2.audioWorklet.addModule('/audio-worklet.js').then(() => {
       audioWorkletNode2 = new AudioWorkletNode(audioCtx2, 'pcm-stream-processor');
       audioWorkletNode2.port.onmessage = evt => {
-        if (evt.data && typeof evt.data.latencyMs === 'number') showAudioLatency2(evt.data.latencyMs);
+        if (!evt.data) return;
+        if (evt.data.diag) audioDiag2.fromWorklet(evt.data);
+        else if (typeof evt.data.latencyMs === 'number') showAudioLatency2(evt.data.latencyMs);
       };
       muteGain2 = audioCtx2.createGain();
       muteGain2.gain.value = 1;
