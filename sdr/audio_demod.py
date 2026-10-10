@@ -31,6 +31,7 @@ from typing import Optional
 import numpy as np
 from scipy.signal import resample_poly, sosfilt
 
+from . import audio_profile
 from .audio_stft import fade_weights
 
 
@@ -85,6 +86,11 @@ if not _nr_latency_logger.handlers:
     _nr_latency_handler = logging.FileHandler(_nr_latency_log_path)
     _nr_latency_handler.setFormatter(logging.Formatter("%(asctime)s,%(message)s"))
     _nr_latency_logger.addHandler(_nr_latency_handler)
+
+# Both receivers lazy-load DeepFilterNet from their own audio thread, so two
+# init_df() calls can overlap when NR is switched on for RX1 and RX2 together.
+# One load at a time.
+_nr_load_lock = threading.Lock()
 
 AudioCallback = Callable[[bytes], Coroutine]
 
@@ -282,6 +288,9 @@ class AudioDemodulator:
         # Same reasoning as SdrClient's spectrum queue: a small queue gives
         # almost no headroom against ordinary thread-scheduling/GIL jitter.
         self._q: "queue.Queue" = queue.Queue(maxsize=512)
+        # Queue-drop investigation, W7TLG_AUDIO_PROFILE=1 only (sdr/audio_profile.py).
+        # None otherwise, and then every `prof is not None` hook below is skipped.
+        self._prof = audio_profile.AudioProfiler(self) if audio_profile.ENABLED else None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -409,12 +418,19 @@ class AudioDemodulator:
 
     def feed(self, xi: np.ndarray, xq: np.ndarray):
         """Called from SdrClient's native callback thread — must be fast."""
+        prof = self._prof
+        if prof is not None:
+            feed_gap = prof.on_feed()
         if not self.enabled:
             return
         try:
             self._q.put_nowait((xi, xq))
+            if prof is not None:
+                prof.on_depth(self._q.qsize())
         except queue.Full:
             self.dropped_count += 1
+            if prof is not None:
+                prof.on_drop(self._q.qsize(), feed_gap, len(xi))
             try:
                 self._q.get_nowait()
             except queue.Empty:
@@ -619,7 +635,8 @@ class AudioDemodulator:
         the audio thread."""
         try:
             logger.info("Loading DeepFilterNet3 model for noise reduction...")
-            self._nr_model, self._nr_df_state, _ = _df_init()
+            with _nr_load_lock:
+                self._nr_model, self._nr_df_state, _ = _df_init()
             logger.info("DeepFilterNet3 loaded")
         except Exception:
             logger.exception("Failed to load DeepFilterNet3 — noise reduction disabled")
@@ -675,7 +692,10 @@ class AudioDemodulator:
     def _run(self):
         next_drop_log = time.monotonic() + 5.0
         last_logged_drops = 0
+        prof = self._prof
         while not self._stop_event.is_set():
+            if prof is not None:
+                t_wait = prof.end_iter()
             now_check = time.monotonic()
             if now_check >= next_drop_log:
                 if self.dropped_count != last_logged_drops:
@@ -688,6 +708,8 @@ class AudioDemodulator:
                 xi, xq = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
+            if prof is not None:
+                prof.begin_iter(t_wait, len(xi))
 
             if self.tx_active:
                 # SDR Switch disconnects the antenna during TX — this IQ is
@@ -738,11 +760,15 @@ class AudioDemodulator:
                     self._sample_counter += self.batch_samples
                     continue
 
+                if prof is not None:
+                    prof.batches += 1
                 try:
                     browser_bytes, digital_bytes = self._process(self._acc_i, self._acc_q)
                 except Exception:
                     logger.exception("Audio demod error")
                     continue
+                if prof is not None:
+                    t_pub = time.perf_counter()
                 if self._loop is not None:
                     try:
                         if browser_bytes is not None:
@@ -751,6 +777,10 @@ class AudioDemodulator:
                             asyncio.run_coroutine_threadsafe(self._publish_digital(digital_bytes), self._loop)
                     except RuntimeError:
                         pass   # loop closing/closed during shutdown
+                if prof is not None:
+                    prof.lap(audio_profile.PUBLISH, t_pub)
+        if prof is not None:
+            prof.end_iter()
 
     def _process(self, block_i: np.ndarray, block_q: np.ndarray):
         """Returns (browser_bytes, digital_bytes); either may be None. Without a stage the
@@ -759,6 +789,9 @@ class AudioDemodulator:
         # set_target(), so one read here guarantees freq/mode/bandwidth
         # stay a matched combination for this whole call, even if
         # set_target() runs concurrently on the WS/asyncio thread mid-call.
+        prof = self._prof
+        if prof is not None:
+            t_prof = time.perf_counter()
         target = self.target
         n = len(block_i)
         offset_hz = target.freq_hz - self.rf_center_hz
@@ -792,12 +825,16 @@ class AudioDemodulator:
         fine_filtered = np.convolve(fine_extended, self._decim_filter_fine, mode="valid")
         self._decim_overlap_fine = fine_extended[-(len(self._decim_filter_fine) - 1):]
         intermediate = fine_filtered[::self._fine_decim_factor]
+        if prof is not None:
+            t_prof = prof.lap(audio_profile.DEMOD, t_prof)
 
         # in_digital_mode also toggles AGC/NR/EQ/passband for FT8-style
         # operation and is independent of this — fine_spectrum_enabled is
         # the diversity page's explicit subscription (see server.py).
         if self.in_digital_mode or self.fine_spectrum_enabled:
             self._update_fine_spectrum(intermediate)
+        if prof is not None:
+            t_prof = prof.lap(audio_profile.FINE, t_prof)
 
         filter_key = (target.bandwidth_hz, target.mode, self.low_cut_hz)
         if self._ssb_filter is None or self._ssb_filter_key != filter_key:
@@ -805,6 +842,8 @@ class AudioDemodulator:
                 target.bandwidth_hz, target.mode, self.low_cut_hz)
             self._ssb_filter_key = filter_key
             self._ssb_overlap = np.zeros(len(self._ssb_filter) - 1, dtype=np.complex64)
+        if prof is not None:
+            prof.lap(audio_profile.DEMOD, t_prof)
 
         if self.stft is not None:
             return self._stage_path(intermediate)
@@ -856,8 +895,15 @@ class AudioDemodulator:
         elif self._stage_state == "in" and not self.stage_request:
             self._stage_state, self._stage_fade_pos = "exiting", 0
 
+        prof = self._prof
+        if prof is not None:
+            t_prof = time.perf_counter()
         digital = self._digital_chain(x)
+        if prof is not None:
+            t_prof = prof.lap(audio_profile.DIGITAL, t_prof)
         y = self.stft.process(x)
+        if prof is not None:
+            prof.lap(audio_profile.NOISE_SUB, t_prof)
         if self._stage_state == "in":
             return self._browser_chain(y), digital
 
@@ -909,6 +955,9 @@ class AudioDemodulator:
         """The browser (speaker) path: SSB filter, EQ, NR, AGC. Same code as before; its
         input is the stage's output when the stage is attached."""
         target = self.target
+        prof = self._prof
+        if prof is not None:
+            t_prof = time.perf_counter()
 
         # Stateful SSB channel filter (overlap-save) — each batch (~131
         # samples at 16kHz) is shorter than the 161-tap filter, so a plain
@@ -923,6 +972,8 @@ class AudioDemodulator:
         # still in raw int16-derived units (peaks in the thousands), not
         # the normalized scale EQ/NR/AGC all assume.
         audio = np.real(filtered).astype(np.float32) / 32768.0
+        if prof is not None:
+            t_prof = prof.lap(audio_profile.DEMOD, t_prof)
 
         # EQ — stateful biquad chain (overlap-save's IIR equivalent: sosfilt's
         # zi carries filter history across calls the same way the FIR filters'
@@ -936,6 +987,8 @@ class AudioDemodulator:
                 self._eq_zi = np.zeros((self._eq_sos.shape[0], 2))
             audio64, self._eq_zi = sosfilt(self._eq_sos, audio.astype(np.float64), zi=self._eq_zi)
             audio = audio64.astype(np.float32)
+        if prof is not None:
+            t_prof = prof.lap(audio_profile.AGC_EQ, t_prof)
 
         # Noise reduction — buffered, see _apply_nr. Lazy-loaded here (not
         # once at thread start) since nr_enabled defaults off and only flips
@@ -946,8 +999,12 @@ class AudioDemodulator:
         # "nothing to publish this cycle".
         if self.nr_enabled and self._nr_model is None and not self._nr_load_failed:
             self._load_nr_model()
+            if prof is not None:
+                t_prof = prof.lap(audio_profile.NR_LOAD, t_prof)
         if self.nr_enabled and self._nr_model is not None:
             audio = self._apply_nr(audio)
+            if prof is not None:
+                t_prof = prof.lap(audio_profile.NR, t_prof)
             if audio is None:
                 return None
 
@@ -983,7 +1040,10 @@ class AudioDemodulator:
         audio = np.clip(audio * gain * self.manual_gain, -0.95, 0.95)   # hard safety backstop, not the primary leveler
 
         pcm16 = (audio * 32767).astype(np.int16)
-        return pcm16.tobytes()
+        out = pcm16.tobytes()
+        if prof is not None:
+            prof.lap(audio_profile.AGC_EQ, t_prof)
+        return out
 
     async def _publish_digital(self, audio_bytes: bytes):
         """Digital-mode output (WSJT-X). Gated on TX exactly like the browser path."""
