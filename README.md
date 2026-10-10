@@ -137,6 +137,8 @@ The ACOM serial port is hardcoded in dashboard/server.py. Update ACOM_PORT to ma
     QRZ_USERNAME=            # optional — supplements HamQTH; needs a paid Logbook Data
     QRZ_PASSWORD=            # subscription for full field coverage, otherwise login fails
 
+**Audio settings (optional):** `W7TLG_AUDIO_QUEUE` (default 2048), `W7TLG_NR_HOP_CHUNKS` (default 4, a 33 ms noise-reduction hop), `W7TLG_TORCH_THREADS` (default 2) and `W7TLG_AUDIO_PROFILE` (off) can be set in the environment or in `.env`. See "Console audio settings" in `STARTUP.md` for what each does and how to restore the pre-2026-10-10 defaults (512 and 13).
+
 The Spot/Seek and Propagation tabs still work without any of these except the manual lookup (needs at least one of HamQTH/QRZ) and the AI Advisor (needs the Anthropic key).
 
 **Fast PTT monitor (`.env`, optional):** the console runs a small watchdog that

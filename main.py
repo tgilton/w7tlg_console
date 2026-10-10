@@ -28,7 +28,7 @@ load_dotenv()
 # two independent AudioDemodulator instances (one per receiver) each running
 # enhance() 10x/sec, both try to claim all cores simultaneously, causing
 # thread-pool oversubscription and audio dropouts under dual-RX + DNR load.
-# W7TLG_TORCH_THREADS overrides the intra-op count (default 2) for testing.
+# W7TLG_TORCH_THREADS overrides the intra-op count (default 2). See STARTUP.md.
 try:
     _torch_threads = int(os.environ.get("W7TLG_TORCH_THREADS", "2"))
     if _torch_threads < 1:

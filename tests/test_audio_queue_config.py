@@ -10,19 +10,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sdr.audio_demod import AUDIO_QUEUE_DEFAULT, AudioDemodulator
+from sdr.audio_demod import AUDIO_QUEUE_DEFAULT, NR_HOP_CHUNKS_DEFAULT, AudioDemodulator
 from tests.fakes.sdr import FakeSdrClient
 
 
-def test_queue_default_is_512(monkeypatch):
+def test_queue_default_is_2048(monkeypatch):
     monkeypatch.delenv("W7TLG_AUDIO_QUEUE", raising=False)
-    assert AUDIO_QUEUE_DEFAULT == 512
-    assert AudioDemodulator()._q.maxsize == 512
+    assert AUDIO_QUEUE_DEFAULT == 2048
+    assert AudioDemodulator()._q.maxsize == 2048
 
 
 @pytest.mark.parametrize("value,expected", [
-    ("1024", 1024), ("1", 1), ("2048", 2048),
-    ("0", 512), ("-5", 512), ("abc", 512), ("", 512), ("12.5", 512),
+    ("1024", 1024), ("1", 1), ("4096", 4096),
+    ("512", 512),                                          # the depth before 2026-10-10
+    ("0", 2048), ("-5", 2048), ("abc", 2048), ("", 2048), ("12.5", 2048),
 ])
 def test_queue_size_from_env(monkeypatch, value, expected):
     monkeypatch.setenv("W7TLG_AUDIO_QUEUE", value)
@@ -58,15 +59,17 @@ def test_drop_warning_names_the_receiver_and_counts_per_receiver(monkeypatch, ca
 
 # ── W7TLG_NR_HOP_CHUNKS ─────────────────────────────────────────────────
 
-def test_nr_hop_default_is_unchanged(monkeypatch):
+def test_nr_hop_default_is_4_chunks(monkeypatch):
     monkeypatch.delenv("W7TLG_NR_HOP_CHUNKS", raising=False)
-    assert AudioDemodulator()._nr_hop_samples == 1600      # reached on the 13th 131-sample batch
+    assert NR_HOP_CHUNKS_DEFAULT == 4
+    assert AudioDemodulator()._nr_hop_samples == 4 * 131   # 33 ms
 
 
 @pytest.mark.parametrize("value,expected", [
     ("13", 13 * 131), ("7", 7 * 131), ("4", 4 * 131), ("2", 2 * 131), ("1", 131),
-    ("0", 1600), ("-3", 1600), ("x", 1600), ("", 1600), ("2.5", 1600),
-    ("49", 1600),                                          # longer than the 0.4 s NR window
+    ("48", 48 * 131),                                      # the longest that fits the window
+    ("0", 524), ("-3", 524), ("x", 524), ("", 524), ("2.5", 524),
+    ("49", 524),                                           # longer than the 0.4 s NR window
 ])
 def test_nr_hop_from_env(monkeypatch, value, expected):
     monkeypatch.setenv("W7TLG_NR_HOP_CHUNKS", value)
@@ -94,6 +97,15 @@ def test_nr_releases_audio_once_per_hop(monkeypatch, chunks):
         if y is not None:
             sizes.append(len(y))
             calls.append(i + 1)
-    n = chunks or 13
+    n = chunks or 4
     assert calls == list(range(n, 53, n))
     assert set(sizes) == {n * 131}
+
+
+def test_profiling_is_off_unless_asked_for(monkeypatch):
+    from sdr import audio_profile
+    assert audio_profile.parse_mode(None) == (False, False)
+    assert audio_profile.parse_mode("") == (False, False)
+    assert audio_profile.parse_mode("0") == (False, False)
+    assert audio_profile.parse_mode("1") == (True, False)
+    assert audio_profile.parse_mode("verbose") == (True, True)

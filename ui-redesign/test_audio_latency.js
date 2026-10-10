@@ -288,6 +288,42 @@ for (const rate of [48000, 44100]) {
   h.flush();
   ok('a flush stops a trim and forgets the history', !h.p.trimming && h.p.bucketMins.length === 0);
 
+  // The server sends one frame per NR hop: 4 demod batches (524 samples, 32.75 ms)
+  // by default with NR on, 13 batches (1703 samples, 106.4 ms) with the old hop,
+  // one batch (131 samples, 8.2 ms) with NR off.
+  for (const [name, frameMs] of [['NR on, 33 ms frames (default hop)', 32.75],
+                                 ['NR on, 106 ms frames (old hop)', 106.4375],
+                                 ['NR off, 8 ms frames', 8.1875]]) {
+    console.log(' frames: ' + name);
+    h = make(rate);
+    r = h.run(0.6, frameMs);
+    ok('primes within one frame of the 120 ms target', !h.p.priming
+      && h.latencyMs() <= C.TARGET_LATENCY_MS + frameMs + 3, h.latencyMs().toFixed(1) + ' ms after 0.6 s');
+    r = h.run(40, frameMs);
+    const settled = h.run(20, frameMs);
+    ok('trimmed once, then left alone', h.diag('trim_enter').length === 1
+      && h.diag('trim_exit').length === 1 && settled.maxRate === 0);
+    ok('dips rest at headroom + 5', Math.abs(settled.minLat - level) < 5,
+      `dips to ${settled.minLat.toFixed(1)} ms, peaks near ${(settled.minLat + frameMs).toFixed(0)} ms`);
+    ok('never ran dry', h.diag('underrun').length === 0 && Math.min(r.minLat, settled.minLat) > 30
+      && h.p.headroomMs === C.MIN_HEADROOM_MS);
+    ok('no fast catch-up', h.diag('catchup_enter').length === 0);
+    // Delivery stalls, with the missed audio arriving in one piece afterwards. What
+    // the buffer rides out is set by the headroom, not by the frame size.
+    h.run(0.03, false);
+    h.send(16 * 30);
+    h.run(3, frameMs);
+    ok('a 30 ms stall is absorbed', h.diag('underrun').length === 0 && !h.p.priming
+      && h.p.headroomMs === C.MIN_HEADROOM_MS);
+    const stallMs = Math.round(frameMs) + 60;   // longer than the fullest the buffer gets
+    h.run(stallMs / 1000, false);
+    h.send(16 * stallMs);
+    h.run(3, frameMs);
+    ok(`a ${stallMs} ms stall underruns once, re-primes and raises the headroom`,
+      h.diag('underrun').reduce((a, m) => a + m.count, 0) === 1 && !h.p.priming
+      && h.p.headroomMs === C.MIN_HEADROOM_MS + 20, `headroom ${h.p.headroomMs} ms`);
+  }
+
   console.log(' latency reports');
   h = make(rate);
   h.send(16 * C.TARGET_LATENCY_MS);

@@ -128,6 +128,34 @@ this is normal and clears on its own once the amp settles.
 
 ---
 
+## Console audio settings (environment variables)
+
+All optional. Set them on the command line for one run, or put them in `.env`
+for every run (a value on the command line wins over `.env`):
+
+    W7TLG_NR_HOP_CHUNKS=13 ~/start_w7tlg.sh
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `W7TLG_AUDIO_QUEUE` | `2048` | Depth of each receiver's audio input queue, in SDR callback chunks. When it overflows, audio is dropped and the log says `Audio queue drops RX1: ...`. |
+| `W7TLG_NR_HOP_CHUNKS` | `4` | How often noise reduction runs and releases audio, in 8.2 ms demod batches: 4 is every 33 ms. Smaller means less delay with NR on and more CPU (the cost per run is fixed, so CPU goes as 1 / chunks). Allowed range 1-48. |
+| `W7TLG_TORCH_THREADS` | `2` | CPU threads the NR model may use. |
+| `W7TLG_AUDIO_PROFILE` | off | `1` writes one timing line per second per receiver to `data/audio_profile.log`; `verbose` adds a line for every slow audio-thread iteration and every dropped chunk. Leave it off unless chasing an audio problem. |
+
+An invalid value is ignored and the default is used.
+
+**Defaults changed on 2026-10-10.** Before that the queue was 512 chunks and
+the NR hop was 13 batches (106 ms). To get the old behaviour back:
+
+    W7TLG_AUDIO_QUEUE=512 W7TLG_NR_HOP_CHUNKS=13 ~/start_w7tlg.sh
+
+- `W7TLG_NR_HOP_CHUNKS=13` alone restores the old NR timing exactly: about
+  70 ms more delay with NR on, and roughly a third of the NR CPU.
+- `W7TLG_AUDIO_QUEUE=512` alone restores the old queue depth. With NR on, that
+  depth overflowed during the audio thread's occasional stalls and dropped audio.
+
+---
+
 ## Future automation (pending)
 
 The console captures the SETTINGS message (0x12) bytes at startup and after
