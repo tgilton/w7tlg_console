@@ -58,6 +58,30 @@ mkdir -p "$CONSOLE_DIR/logs"
 LOG_FILE="$CONSOLE_DIR/logs/console-$(date +%Y%m%d-%H%M%S).log"
 echo "Logging to $LOG_FILE"
 
+# Closes every Chrome tab whose URL starts with this console's /console address
+# (either spelling of the host) and prints how many it closed. Does nothing if
+# Chrome is not running. Non-zero exit if the AppleScript could not run.
+close_console_tabs() {
+    osascript <<'APPLESCRIPT'
+if application "Google Chrome" is not running then return 0
+set closedCount to 0
+with timeout of 10 seconds
+    tell application "Google Chrome"
+        repeat with wi from (count of windows) to 1 by -1
+            repeat with ti from (count of tabs of window wi) to 1 by -1
+                set u to URL of tab ti of window wi
+                if u starts with "http://127.0.0.1:8000/console" or u starts with "http://localhost:8000/console" then
+                    close tab ti of window wi
+                    set closedCount to closedCount + 1
+                end if
+            end repeat
+        end repeat
+    end tell
+end timeout
+return closedCount
+APPLESCRIPT
+}
+
 python main.py 2>&1 | tee "$LOG_FILE" &
 CONSOLE_PID=$!
 
@@ -71,6 +95,16 @@ done
 
 if lsof -i :8000 > /dev/null 2>&1; then
     echo "Console started. Opening console..."
+    # Console tabs left over from earlier launches reconnect to the new server
+    # and each plays the same audio (heard as flanging, 2026-10-10). Close
+    # them first, so exactly one is open. Only tabs on this console's own URL
+    # are touched. If the AppleScript fails (Chrome automation not permitted,
+    # say), carry on and just open the tab, as this script always did.
+    if CLOSED_TABS=$(close_console_tabs 2>/dev/null); then
+        [ "${CLOSED_TABS:-0}" -gt 0 ] 2>/dev/null && echo "Closed $CLOSED_TABS old console tab(s)."
+    else
+        echo "Could not close old console tabs (AppleScript failed) - check for duplicates."
+    fi
     open -a "Google Chrome" http://localhost:8000/console
 else
     echo "Console failed to start within 15s."
