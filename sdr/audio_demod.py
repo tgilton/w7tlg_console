@@ -95,8 +95,10 @@ _nr_load_lock = threading.Lock()
 AudioCallback = Callable[[bytes], Coroutine]
 
 # Input queue depth in native-callback chunks. W7TLG_AUDIO_QUEUE overrides it
-# for testing (same pattern as W7TLG_TORCH_THREADS in main.py).
-AUDIO_QUEUE_DEFAULT = 512
+# (same pattern as W7TLG_TORCH_THREADS in main.py). 512 until 2026-10-10: with
+# NR on, the audio thread's occasional 50-70 ms stalls overflowed it and dropped
+# audio; 2048 rode them out. W7TLG_AUDIO_QUEUE=512 restores the old depth.
+AUDIO_QUEUE_DEFAULT = 2048
 
 
 def _audio_queue_maxsize() -> int:
@@ -149,27 +151,25 @@ def _choose_decim_stages(total_factor: int) -> tuple:
 NR_SAMPLE_RATE_HZ = 48_000
 NR_RESAMPLE_RATIO = NR_SAMPLE_RATE_HZ // INTERMEDIATE_RATE_HZ   # exact: 3
 NR_WINDOW_S = 0.4
-NR_HOP_S = 0.1
-# W7TLG_NR_HOP_CHUNKS sets the hop in demod batches instead (one batch is ~8.2 ms,
-# 131 samples), for A/B listening: NR runs, and audio is released to the browser,
-# once per that many batches. Unset, the hop is NR_HOP_S as before, which works out
-# to 13 batches (106 ms). enhance() costs the same per call whatever the hop (it
-# always processes the whole NR_WINDOW_S window), so CPU scales with 13 / chunks:
-# measured on the M5 Max, 2 torch threads, about 10-23% of real time at 13, 19-30%
-# at 7, 32-44% at 4 and 65-76% at 2. Invalid, below 1 or longer than the window
-# falls back to the default.
+# The NR hop, in demod batches (one batch is ~8.2 ms, 131 samples): NR runs, and
+# audio is released to the browser, once per that many batches. 4 batches is a
+# 33 ms hop. Until 2026-10-10 the hop was 0.1 s, which worked out to 13 batches
+# (106 ms) and that much more delay with NR on; W7TLG_NR_HOP_CHUNKS=13 restores
+# exactly that. enhance() costs the same per call whatever the hop (it always
+# processes the whole NR_WINDOW_S window), so CPU scales with 1 / chunks: measured
+# on the M5 Max, 2 torch threads, about 10-23% of real time per receiver at 13,
+# 19-30% at 7, 32-44% at 4 and 65-76% at 2. W7TLG_NR_HOP_CHUNKS overrides it;
+# invalid, below 1 or longer than the window falls back to the default.
+NR_HOP_CHUNKS_DEFAULT = 4
 
 
-def _nr_hop_chunks():
-    """The W7TLG_NR_HOP_CHUNKS override, or None for the default hop."""
-    raw = os.environ.get("W7TLG_NR_HOP_CHUNKS")
-    if raw is None:
-        return None
+def _nr_hop_chunks() -> int:
+    """The NR hop in demod batches: W7TLG_NR_HOP_CHUNKS, or the default."""
     try:
-        chunks = int(raw)
+        chunks = int(os.environ.get("W7TLG_NR_HOP_CHUNKS", NR_HOP_CHUNKS_DEFAULT))
     except ValueError:
-        return None
-    return chunks if chunks >= 1 else None
+        return NR_HOP_CHUNKS_DEFAULT
+    return chunks if chunks >= 1 else NR_HOP_CHUNKS_DEFAULT
 
 # AGC time constants in seconds (not per-call fractions) so behavior stays
 # correct regardless of how large/small a given _process() call's block is —
@@ -327,12 +327,10 @@ class AudioDemodulator:
         self._nr_in_buf = np.zeros(0, dtype=np.float32)
         self._nr_new_samples = 0
         self._nr_window_samples = int(NR_WINDOW_S * INTERMEDIATE_RATE_HZ)
-        self._nr_hop_samples = int(NR_HOP_S * INTERMEDIATE_RATE_HZ)
-        hop_chunks = _nr_hop_chunks()
-        if hop_chunks is not None:
-            hop_samples = hop_chunks * (self.batch_samples // self.decim_factor)
-            if hop_samples <= self._nr_window_samples:
-                self._nr_hop_samples = hop_samples
+        batch_out = self.batch_samples // self.decim_factor
+        self._nr_hop_samples = _nr_hop_chunks() * batch_out
+        if self._nr_hop_samples > self._nr_window_samples:
+            self._nr_hop_samples = NR_HOP_CHUNKS_DEFAULT * batch_out
 
         # Snapshot of voice-mode settings, captured by enter_digital_mode()
         # and restored by exit_digital_mode() — None means "in voice mode".
