@@ -145,6 +145,29 @@ NR_HOP_S = 0.1
 AGC_TAU_SLOW_S = 0.273
 AGC_TAU_FAST_S = 0.068
 
+# AGC hold (browser chain only). With DNR on, the pauses in speech come out
+# near-silent, so the AGC above ran its gain up toward the 6x ceiling during
+# every pause and the next syllable hit the output ceiling. The gain is now
+# not allowed to RISE on a block whose RMS is well below the recent speech
+# level; it may always fall. The speech level is a slow estimate of block
+# RMS: quick to follow a louder block, slow to decay, so it rides the
+# syllables and forgets them over a few seconds (after which a channel that
+# has simply gone quiet gets its gain back).
+#   hold when  rms < AGC_HOLD_RATIO * speech_level + AGC_HOLD_FLOOR_RMS
+AGC_HOLD_RATIO = 0.25            # 12 dB under the speech level
+AGC_HOLD_FLOOR_RMS = 1e-4        # -80 dBFS: below this the gain never rises
+AGC_LEVEL_ATTACK_TAU_S = 0.1
+AGC_LEVEL_DECAY_TAU_S = 2.0
+AGC_HOLD_RETUNE_SETTLE_S = 0.05  # after a retune: no hold until the filters hold the new signal
+
+# Output peak limiter (browser chain only), in place of the hard clip. A
+# block whose peak would pass LIMIT_PEAK is scaled down as a whole, at once
+# (instant attack), and the reduction is then released back to unity. While
+# the limiter is idle the output is exactly what the clip produced.
+LIMIT_PEAK = 0.95
+LIMIT_RELEASE_TAU_S = 0.15
+LIMIT_LOG_INTERVAL_S = 1.0
+
 # Fine spectrum (digital-mode panadapter zoom) — FFT directly on this file's
 # own decimated baseband (16kHz, already centered on target_freq_hz), which
 # is already exactly where the audio demod needs it to be. bin_hz =
@@ -192,6 +215,15 @@ class AudioDemodulator:
         self.target = AudioTarget(freq_hz=None, mode="USB", bandwidth_hz=3000.0)
         self.rf_center_hz: Optional[float] = None
         self.agc_gain = 1.0
+        # AGC hold and output limiter state — see AGC_HOLD_RATIO / LIMIT_PEAK.
+        self._agc_level = 0.0            # slow speech-level estimate (block RMS)
+        self._agc_level_freq = None      # target the estimate was built on
+        self._agc_settle_s = 0.0         # time left before the estimate restarts
+        self._lim_gain = 1.0             # limiter gain at the end of the last block
+        self.limited_count = 0           # samples that needed limiting, total
+        self._lim_window_count = 0
+        self._lim_window_peak = 0.0
+        self._lim_next_log = 0.0
         # Auto-leveling speed, driven by the console's AGC OFF/FAST/SLOW
         # buttons — repurposed to control this instead of the radio's own
         # (now-irrelevant) receiver AGC, since the RSPdx-R2 is the actual
@@ -454,6 +486,8 @@ class AudioDemodulator:
             self._decim_overlap_coarse = np.zeros(len(self._decim_filter_coarse) - 1, dtype=np.complex64)
         self._decim_overlap_fine = np.zeros(len(self._decim_filter_fine) - 1, dtype=np.complex64)
         self.agc_gain = 1.0
+        self._agc_level = 0.0
+        self._lim_gain = 1.0
         self._was_tx_active = False
         self._eq_sos = None
         self._eq_key = None
@@ -734,6 +768,8 @@ class AudioDemodulator:
                     self._eq_zi = np.zeros((self._eq_sos.shape[0], 2))
                 self._nr_in_buf = np.zeros(0, dtype=np.float32)
                 self._nr_new_samples = 0
+                self._agc_level = 0.0   # gate_tx reset agc_gain; let it rise again
+                self._lim_gain = 1.0
                 self._fine_buf_len = 0
                 self._fine_avg_power = None
                 continue
@@ -1034,16 +1070,81 @@ class AudioDemodulator:
             alpha = 1.0 - np.exp(-block_duration_s / tau)
             target_rms = 0.15
             desired_gain = target_rms / rms
-            self.agc_gain += (desired_gain - self.agc_gain) * alpha
+            # In digital mode this output is also WSJT-X's input: no hold there.
+            hold = (not self.in_digital_mode
+                    and self._agc_hold(rms, block_duration_s, target.freq_hz))
+            if not (hold and desired_gain > self.agc_gain):   # a pause: no rise, falls allowed
+                self.agc_gain += (desired_gain - self.agc_gain) * alpha
             self.agc_gain = float(np.clip(self.agc_gain, 0.1, 6.0))
             gain = self.agc_gain
-        audio = np.clip(audio * gain * self.manual_gain, -0.95, 0.95)   # hard safety backstop, not the primary leveler
+        audio = audio * gain * self.manual_gain
+        if self.in_digital_mode:
+            audio = np.clip(audio, -LIMIT_PEAK, LIMIT_PEAK)   # as before: digital feed untouched
+        else:
+            audio = self._limit(audio)
 
         pcm16 = (audio * 32767).astype(np.int16)
         out = pcm16.tobytes()
         if prof is not None:
             prof.lap(audio_profile.AGC_EQ, t_prof)
         return out
+
+    def _agc_hold(self, rms: float, block_duration_s: float, freq_hz) -> bool:
+        """Update the speech-level estimate with this block and say whether the block is
+        a pause (well under that level), on which the AGC gain must not rise."""
+        if freq_hz != self._agc_level_freq:
+            # Retuned: the level belonged to the last signal. Without this, tuning from
+            # a strong station to a weak one would hold the gain down for seconds. The
+            # filters still carry the old signal for a few blocks, so restart after that.
+            self._agc_level_freq = freq_hz
+            self._agc_level = 0.0
+            self._agc_settle_s = AGC_HOLD_RETUNE_SETTLE_S
+        if self._agc_settle_s > 0.0:
+            self._agc_settle_s -= block_duration_s
+            return False
+        tau = AGC_LEVEL_ATTACK_TAU_S if rms > self._agc_level else AGC_LEVEL_DECAY_TAU_S
+        self._agc_level += (rms - self._agc_level) * (1.0 - np.exp(-block_duration_s / tau))
+        return rms < AGC_HOLD_RATIO * self._agc_level + AGC_HOLD_FLOOR_RMS
+
+    def _limit(self, audio: np.ndarray) -> np.ndarray:
+        """Peak limiter: no output sample over LIMIT_PEAK. Returns the input untouched
+        while idle (nothing over the threshold and no release in progress)."""
+        peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+        if peak > LIMIT_PEAK:
+            over = int(np.count_nonzero(np.abs(audio) > LIMIT_PEAK))
+            self.limited_count += over
+            self._lim_window_count += over
+            self._lim_window_peak = max(self._lim_window_peak, peak)
+        now = time.monotonic()
+        if now >= self._lim_next_log:
+            if self._lim_window_count:
+                rx = "RX1" if self.stft is not None else "RX2" if self.pcm_delay is not None else "RX"
+                logger.warning(
+                    f"Audio limiter {rx}: {self._lim_window_count} samples over {LIMIT_PEAK} "
+                    f"in the last {LIMIT_LOG_INTERVAL_S:.0f}s (peak {self._lim_window_peak:.2f}, "
+                    f"AGC gain {self.agc_gain:.2f}, AF gain {self.manual_gain:.2f})")
+                self._lim_window_count = 0
+                self._lim_window_peak = 0.0
+            self._lim_next_log = now + LIMIT_LOG_INTERVAL_S
+        if peak <= LIMIT_PEAK and self._lim_gain >= 1.0:
+            return audio
+
+        # Release: the gain left by the last block glides back toward unity across this
+        # one. Attack: if that still leaves a peak over the threshold, the whole block
+        # comes down by the difference, at once.
+        g_start = self._lim_gain
+        g_end = 1.0 - (1.0 - g_start) * float(np.exp(
+            -len(audio) / INTERMEDIATE_RATE_HZ / LIMIT_RELEASE_TAU_S))
+        if 1.0 - g_end < 1e-4:
+            g_end = 1.0   # release finished: back to the untouched path
+        out = audio * np.linspace(g_start, g_end, len(audio), dtype=np.float32)
+        out_peak = float(np.max(np.abs(out)))
+        if out_peak > LIMIT_PEAK:
+            scale = LIMIT_PEAK / out_peak
+            out = out * np.float32(scale)
+            g_end *= scale
+        self._lim_gain = g_end
+        return np.clip(out, -LIMIT_PEAK, LIMIT_PEAK)   # float rounding only
 
     async def _publish_digital(self, audio_bytes: bytes):
         """Digital-mode output (WSJT-X). Gated on TX exactly like the browser path."""
