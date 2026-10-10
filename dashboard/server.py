@@ -35,6 +35,8 @@ from config.station_profile import station_profile
 from rig.rigctld_client import (
     RigctldClient, is_valid_hw_frequency, is_valid_hw_mode,
     note_ptt_reply_value)
+from sdr import audio_profile
+from sdr.audio_demod import INTERMEDIATE_RATE_HZ
 from sdr.canceller import apply_rx2_follow, restore_rx2, rx2_locked, snapshot_rx2
 from sdr.noise_sub import NoiseSubProcessor
 from sdr.sdr_client import SdrClient
@@ -159,8 +161,19 @@ class SpectrumConnectionManager:
 
 class AudioConnectionManager:
     """Live PCM audio — drop-if-slow like spectrum, never buffer stale audio."""
-    def __init__(self):
+    SEND_TIMEOUT_S = 0.05
+    SKIP_WARN_INTERVAL_S = 5.0
+
+    def __init__(self, label: str = "RX"):
         self.active: list[WebSocket] = []
+        # Frames skipped by the send timeout. Each one is audio the browser never
+        # gets, so its playback buffer shrinks by that much.
+        self.label = label
+        self.skipped_frames = 0
+        self.skipped_ms = 0.0
+        self._skip_warned_frames = 0
+        self._skip_warned_ms = 0.0
+        self._skip_next_warn = 0.0
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
@@ -178,29 +191,50 @@ class AudioConnectionManager:
         dead = []
         for ws in self.active:
             try:
-                await asyncio.wait_for(ws.send_bytes(audio_bytes), timeout=0.05)
+                await asyncio.wait_for(ws.send_bytes(audio_bytes), timeout=self.SEND_TIMEOUT_S)
             except asyncio.TimeoutError:
-                pass   # one slow frame, not a dead connection — just skip it
+                # one slow frame, not a dead connection — just skip it, and count it
+                audio_ms = len(audio_bytes) / 2 / INTERMEDIATE_RATE_HZ * 1000.0
+                self.skipped_frames += 1
+                self.skipped_ms += audio_ms
+                audio_profile.note_ws_skip(self.label, audio_ms)
             except Exception:
                 dead.append(ws)
+        if self.skipped_frames != self._skip_warned_frames:
+            self._warn_skips()
         for ws in dead:
             if ws in self.active:
                 self.active.remove(ws)
 
+    def _warn_skips(self):
+        """At most one warning per SKIP_WARN_INTERVAL_S, covering every skip since the
+        last one."""
+        now = time.monotonic()
+        if now < self._skip_next_warn:
+            return
+        self._skip_next_warn = now + self.SKIP_WARN_INTERVAL_S
+        frames = self.skipped_frames - self._skip_warned_frames
+        audio_ms = self.skipped_ms - self._skip_warned_ms
+        self._skip_warned_frames = self.skipped_frames
+        self._skip_warned_ms = self.skipped_ms
+        logger.warning(
+            f"Audio WS {self.label}: {frames} frame(s) skipped by the "
+            f"{self.SEND_TIMEOUT_S * 1000:.0f} ms send timeout, {audio_ms:.0f} ms of audio "
+            f"({self.skipped_frames} frames, {self.skipped_ms:.0f} ms total)")
 
 
 manager = ConnectionManager()
 spectrum_manager = SpectrumConnectionManager()
-audio_manager = AudioConnectionManager()
+audio_manager = AudioConnectionManager("RX1")
 # Channel B (Tuner 2 / Antenna 2) gets its own connection managers — kept
 # fully separate from Channel A's rather than multiplexed onto the same
 # WS connections, matching how SdrClient itself keeps Channel B's
 # publish path isolated (see project memory on the RSPduo migration).
 spectrum_manager_b = SpectrumConnectionManager()
-audio_manager_b = AudioConnectionManager()
+audio_manager_b = AudioConnectionManager("RX2")
 # RX0 diversity combine (dashboard/diversity.html) — audio only, no
 # spectrum of its own. See sdr/combiner.py.
-audio_manager_0 = AudioConnectionManager()
+audio_manager_0 = AudioConnectionManager("RX0")
 spectrum_manager_0 = SpectrumConnectionManager()
 # RX1 CANCEL ghost trace (raw RX1 FFT) — see sdr/canceller.py.
 spectrum_manager_ghost = SpectrumConnectionManager()
