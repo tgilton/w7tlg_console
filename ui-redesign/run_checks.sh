@@ -15,7 +15,7 @@
 #
 # WHAT IT CHECKS, and why each one exists
 #   1. pytest                 the backend suite (minus the browser marker)
-#   2. node unit tests        S-meter maths, AF taper, AF paths, palettes
+#   2. node unit tests        S-meter maths, AF taper, AF paths, palettes, audio latency
 #   3. node --check           each <script> block parses
 #   4. protected lines        five literals two test files match as text
 #   5. CSS brace balance      a truncated rule silently eats the rest
@@ -70,7 +70,7 @@ fi
 # ------------------------------------------------------------ 2. node tests
 head_ "2. node unit tests"
 if command -v node >/dev/null 2>&1; then
-  for t in test_meter_math test_af_taper test_af_paths test_palettes test_cancel_wheel test_spec_pick; do
+  for t in test_meter_math test_af_taper test_af_paths test_palettes test_cancel_wheel test_spec_pick test_audio_latency; do
     if out=$(node "ui-redesign/$t.js" 2>&1); then
       pass "$t.js — $(printf '%s' "$out" | tail -n 1)"
     else

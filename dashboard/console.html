@@ -2305,6 +2305,24 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
   color: var(--v2-title-fg);
   margin-bottom: var(--v2-title-mb);
 }
+/* Buffered audio latency readout (LAT ms) in the Tuning heading. Absolutely
+   positioned, so it takes no space and cannot move anything in either panel. */
+.panel-center .section-box h2.v2-lat-host, .panel-center2 .section-box h2.v2-lat-host {
+  position: relative;
+}
+.v2-lat {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: var(--v2-font-label);
+  font-weight: 400;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--v2-label);
+  white-space: nowrap;
+  pointer-events: none;
+}
 .panel-center .freq-axis, .panel-center2 .freq-axis {
   font-size: var(--v2-font-label);
   color: var(--v2-label);
@@ -3204,7 +3222,7 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
       </div>
     </div>
     <div class="divider"></div>
-    <h2>RX1 Tuning</h2>
+    <h2 class="v2-lat-host">RX1 Tuning<span class="v2-lat" id="lat-readout" title="Audio buffered in the browser, waiting to play">LAT -- ms</span></h2>
     <div class="center-controls-row row-tuning">
       <input type="text" class="v2-input" id="freq-input" value="14.074000">
       <button class="btn" onmousedown="event.preventDefault()" onclick="Panadapter.tuneToInput()" title="Tune">TUN</button>
@@ -3530,7 +3548,7 @@ body.rx2-cancel-gain #rf-gain2-slider { opacity: 0.4; pointer-events: none; }
       </div>
     </div>
     <div class="divider"></div>
-    <h2>RX2 Tuning</h2>
+    <h2 class="v2-lat-host">RX2 Tuning<span class="v2-lat" id="lat2-readout" title="Audio buffered in the browser, waiting to play">LAT -- ms</span></h2>
     <div class="center-controls-row row-tuning">
       <input type="text" class="v2-input" id="freq2-input" value="14.074000">
       <button class="btn" id="tune2-btn" onmousedown="event.preventDefault()" onclick="Panadapter2.tuneToInput()" title="Tune">TUN</button>
@@ -5231,11 +5249,31 @@ function sidebandForRigMode(mode) {
   return (mode && mode.includes('L')) ? 'LSB' : 'USB';
 }
 
+function showAudioLatency(ms) {
+  document.getElementById('lat-readout').textContent =
+    'LAT ' + (ms === null ? '--' : ms) + ' ms';
+}
+
 function ensureAudioWorklet() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // PCM is discarded while the context is not running (see ensureAudioWs),
+    // and the ring is flushed the moment it starts, so playback begins with
+    // an empty buffer instead of a backlog that then plays late.
+    audioCtx.addEventListener('statechange', () => {
+      if (audioCtx.state === 'running') {
+        if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+      } else {
+        showAudioLatency(null);
+      }
+    });
+  }
   if (!audioWorkletReady) {
     audioWorkletReady = audioCtx.audioWorklet.addModule('/audio-worklet.js').then(() => {
       audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-stream-processor');
+      audioWorkletNode.port.onmessage = evt => {
+        if (evt.data && typeof evt.data.latencyMs === 'number') showAudioLatency(evt.data.latencyMs);
+      };
       muteGain = audioCtx.createGain();
       muteGain.gain.value = 1;
       // Panned hard left — RX2 (Panadapter2's ensureAudioWorklet2) is
@@ -5263,7 +5301,7 @@ function ensureAudioWs() {
   audioWs.binaryType = 'arraybuffer';
   audioWs.onclose = () => { if (!audioMuted && !_txSilenced) setTimeout(ensureAudioWs, 1000); };
   audioWs.onmessage = evt => {
-    if (!audioWorkletNode || _txSilenced) return;
+    if (!audioWorkletNode || _txSilenced || audioCtx.state !== 'running') return;
     const pcm16 = new Int16Array(evt.data);
     const f32 = new Float32Array(pcm16.length);
     for (let i = 0; i < pcm16.length; i++) f32[i] = pcm16[i] / 32768;
@@ -6884,11 +6922,30 @@ function pushWaterfallRow2(frame) {
 let audioCtx2 = null, audioWs2 = null, audioWorkletNode2 = null, muteGain2 = null;
 let audioWorkletReady2 = null, audioMuted2 = true, _txSilenced2 = false, _txUnmuteTimer2 = null;
 
+function showAudioLatency2(ms) {
+  document.getElementById('lat2-readout').textContent =
+    'LAT ' + (ms === null ? '--' : ms) + ' ms';
+}
+
 function ensureAudioWorklet2() {
-  if (!audioCtx2) audioCtx2 = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioCtx2) {
+    audioCtx2 = new (window.AudioContext || window.webkitAudioContext)();
+    // Same as RX1's ensureAudioWorklet: no PCM is queued while the context is
+    // not running, and the ring is flushed when it starts.
+    audioCtx2.addEventListener('statechange', () => {
+      if (audioCtx2.state === 'running') {
+        if (audioWorkletNode2) audioWorkletNode2.port.postMessage({ cmd: 'flush' });
+      } else {
+        showAudioLatency2(null);
+      }
+    });
+  }
   if (!audioWorkletReady2) {
     audioWorkletReady2 = audioCtx2.audioWorklet.addModule('/audio-worklet.js').then(() => {
       audioWorkletNode2 = new AudioWorkletNode(audioCtx2, 'pcm-stream-processor');
+      audioWorkletNode2.port.onmessage = evt => {
+        if (evt.data && typeof evt.data.latencyMs === 'number') showAudioLatency2(evt.data.latencyMs);
+      };
       muteGain2 = audioCtx2.createGain();
       muteGain2.gain.value = 1;
       // Panned hard right so RX1 (left, default center-ish via its own
@@ -6920,7 +6977,7 @@ function ensureAudioWs2() {
   audioWs2.binaryType = 'arraybuffer';
   audioWs2.onclose = () => { if (!audioMuted2 && !_txSilenced2) setTimeout(ensureAudioWs2, 1000); };
   audioWs2.onmessage = evt => {
-    if (!audioWorkletNode2 || _txSilenced2) return;
+    if (!audioWorkletNode2 || _txSilenced2 || audioCtx2.state !== 'running') return;
     const pcm16 = new Int16Array(evt.data);
     const f32 = new Float32Array(pcm16.length);
     for (let i = 0; i < pcm16.length; i++) f32[i] = pcm16[i] / 32768;
