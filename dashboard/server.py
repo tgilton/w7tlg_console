@@ -164,8 +164,16 @@ class AudioConnectionManager:
     SEND_TIMEOUT_S = 0.05
     SKIP_WARN_INTERVAL_S = 5.0
 
-    def __init__(self, label: str = "RX"):
+    # One audio client per receiver, newest wins. Several pages playing the same
+    # receiver (console tabs left open across a restart, 2026-10-10) each run their
+    # own playback buffer a few ms apart, which is heard as flanging. The page that
+    # loses the audio recognises this close code, says so and does not reconnect.
+    TAKEOVER_CODE = 4001
+    TAKEOVER_REASON = "Audio taken over by another console window"
+
+    def __init__(self, label: str = "RX", exclusive: bool = True):
         self.active: list[WebSocket] = []
+        self.exclusive = exclusive
         # Frames skipped by the send timeout. Each one is audio the browser never
         # gets, so its playback buffer shrinks by that much.
         self.label = label
@@ -177,8 +185,27 @@ class AudioConnectionManager:
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self.active.append(ws)
+        replaced = []
+        if self.exclusive:
+            # Swap the list before closing anything, so no frame goes to both.
+            replaced, self.active = self.active, [ws]
+        else:
+            self.active.append(ws)
         logger.info(f"Audio WebSocket connected. Total: {len(self.active)}")
+        for old in replaced:
+            logger.info(
+                f"Audio WS {self.label}: client {self._peer(old)} replaced by "
+                f"{self._peer(ws)} (one audio client per receiver, newest wins)")
+            try:
+                await asyncio.wait_for(
+                    old.close(code=self.TAKEOVER_CODE, reason=self.TAKEOVER_REASON), timeout=1.0)
+            except Exception:
+                pass   # already gone
+
+    @staticmethod
+    def _peer(ws) -> str:
+        client = getattr(ws, "client", None)
+        return f"{client.host}:{client.port}" if client else "unknown"
 
     def disconnect(self, ws: WebSocket):
         if ws in self.active:
@@ -234,7 +261,8 @@ spectrum_manager_b = SpectrumConnectionManager()
 audio_manager_b = AudioConnectionManager("RX2")
 # RX0 diversity combine (dashboard/diversity.html) — audio only, no
 # spectrum of its own. See sdr/combiner.py.
-audio_manager_0 = AudioConnectionManager("RX0")
+# Not exclusive: only diversity.html opens it, and it is left as it was.
+audio_manager_0 = AudioConnectionManager("RX0", exclusive=False)
 spectrum_manager_0 = SpectrumConnectionManager()
 # RX1 CANCEL ghost trace (raw RX1 FFT) — see sdr/canceller.py.
 spectrum_manager_ghost = SpectrumConnectionManager()

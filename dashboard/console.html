@@ -2323,6 +2323,17 @@ input[type=range]:disabled { accent-color: var(--chrome-muted); cursor: not-allo
   white-space: nowrap;
   pointer-events: none;
 }
+/* This window has lost the audio to another one: the message takes the whole
+   heading line, in place of the heading text. Still absolutely positioned, so
+   nothing moves. */
+.panel-center .section-box h2.v2-lat-host.audio-taken-over,
+.panel-center2 .section-box h2.v2-lat-host.audio-taken-over { color: transparent; }
+.v2-lat-host.audio-taken-over .v2-lat {
+  left: 0;
+  text-align: center;
+  color: var(--v2-fg);
+  white-space: normal;   /* two lines in a narrow window rather than running out of the card */
+}
 .panel-center .freq-axis, .panel-center2 .freq-axis {
   font-size: var(--v2-font-label);
   color: var(--v2-label);
@@ -5278,8 +5289,37 @@ function sidebandForRigMode(mode) {
 const audioDiag = makeAudioDiag('RX1', send);
 
 function showAudioLatency(ms) {
+  if (audioTakenOver) return;   // the readout is showing the takeover message
   document.getElementById('lat-readout').textContent =
     'LAT ' + (ms === null ? '--' : ms) + ' ms';
+}
+
+// The server allows one audio client per receiver and closes the older one
+// with this code when another page connects (AudioConnectionManager). This
+// page then goes quiet and stays quiet: no reconnect, and no set_audio_enabled,
+// which would switch the audio off for the window that now has it. The AUD
+// button takes it back.
+const AUDIO_TAKEOVER_CODE = 4001;
+const AUDIO_TAKEOVER_TEXT = 'Audio taken over by another console window';
+let audioTakenOver = false;
+function showAudioTakenOver() {
+  audioTakenOver = true;
+  audioMuted = true;
+  const btn = document.getElementById('mute-btn');
+  btn.classList.remove('active');
+  btn.title = AUDIO_TAKEOVER_TEXT + ' - click to take it back';
+  const lat = document.getElementById('lat-readout');
+  lat.textContent = AUDIO_TAKEOVER_TEXT;
+  lat.parentElement.classList.add('audio-taken-over');
+  if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+  audioDiag.push('taken over by another window');
+}
+function clearAudioTakenOver() {
+  if (!audioTakenOver) return;
+  audioTakenOver = false;
+  document.getElementById('mute-btn').title = 'Audio';
+  document.getElementById('lat-readout').parentElement.classList.remove('audio-taken-over');
+  showAudioLatency(null);
 }
 
 function ensureAudioWorklet() {
@@ -5328,9 +5368,12 @@ function ensureAudioWorklet() {
 
 function ensureAudioWs() {
   if (audioWs && audioWs.readyState <= WebSocket.OPEN) return;
-  audioWs = new WebSocket(`ws://${location.host}/ws/audio`);
+  const sock = audioWs = new WebSocket(`ws://${location.host}/ws/audio`);
   audioWs.binaryType = 'arraybuffer';
-  audioWs.onclose = () => { if (!audioMuted && !_txSilenced) setTimeout(ensureAudioWs, 1000); };
+  audioWs.onclose = evt => {
+    if (evt.code === AUDIO_TAKEOVER_CODE && sock === audioWs) { showAudioTakenOver(); return; }
+    if (!audioMuted && !_txSilenced) setTimeout(ensureAudioWs, 1000);
+  };
   audioWs.onmessage = evt => {
     if (!audioWorkletNode || _txSilenced || audioCtx.state !== 'running') return;
     const pcm16 = new Int16Array(evt.data);
@@ -5353,6 +5396,7 @@ function sendAudioTargetFromRig(force) {
 }
 
 function enableAudio() {
+  clearAudioTakenOver();
   audioMuted = false;
   const btn = document.getElementById('mute-btn');
   btn.classList.add('active');
@@ -6956,8 +7000,33 @@ let audioWorkletReady2 = null, audioMuted2 = true, _txSilenced2 = false, _txUnmu
 const audioDiag2 = makeAudioDiag('RX2', send2);
 
 function showAudioLatency2(ms) {
+  if (audioTakenOver2) return;   // the readout is showing the takeover message
   document.getElementById('lat2-readout').textContent =
     'LAT ' + (ms === null ? '--' : ms) + ' ms';
+}
+
+// Same takeover handling as RX1 (see showAudioTakenOver in Panadapter).
+const AUDIO_TAKEOVER_CODE = 4001;
+const AUDIO_TAKEOVER_TEXT = 'Audio taken over by another console window';
+let audioTakenOver2 = false;
+function showAudioTakenOver2() {
+  audioTakenOver2 = true;
+  audioMuted2 = true;
+  const btn = document.getElementById('mute2-btn');
+  btn.classList.remove('active');
+  btn.title = AUDIO_TAKEOVER_TEXT + ' - click to take it back';
+  const lat = document.getElementById('lat2-readout');
+  lat.textContent = AUDIO_TAKEOVER_TEXT;
+  lat.parentElement.classList.add('audio-taken-over');
+  if (audioWorkletNode2) audioWorkletNode2.port.postMessage({ cmd: 'flush' });
+  audioDiag2.push('taken over by another window');
+}
+function clearAudioTakenOver2() {
+  if (!audioTakenOver2) return;
+  audioTakenOver2 = false;
+  document.getElementById('mute2-btn').title = 'Audio';
+  document.getElementById('lat2-readout').parentElement.classList.remove('audio-taken-over');
+  showAudioLatency2(null);
 }
 
 function ensureAudioWorklet2() {
@@ -7009,9 +7078,12 @@ function ensureAudioWorklet2() {
 
 function ensureAudioWs2() {
   if (audioWs2 && audioWs2.readyState <= WebSocket.OPEN) return;
-  audioWs2 = new WebSocket(`ws://${location.host}/ws/audio_b`);
+  const sock = audioWs2 = new WebSocket(`ws://${location.host}/ws/audio_b`);
   audioWs2.binaryType = 'arraybuffer';
-  audioWs2.onclose = () => { if (!audioMuted2 && !_txSilenced2) setTimeout(ensureAudioWs2, 1000); };
+  audioWs2.onclose = evt => {
+    if (evt.code === AUDIO_TAKEOVER_CODE && sock === audioWs2) { showAudioTakenOver2(); return; }
+    if (!audioMuted2 && !_txSilenced2) setTimeout(ensureAudioWs2, 1000);
+  };
   audioWs2.onmessage = evt => {
     if (!audioWorkletNode2 || _txSilenced2 || audioCtx2.state !== 'running') return;
     const pcm16 = new Int16Array(evt.data);
@@ -7041,6 +7113,7 @@ function txSilenceEnd() {
 }
 
 function enableAudio() {
+  clearAudioTakenOver2();
   audioMuted2 = false;
   document.getElementById('mute2-btn').classList.add('active');
   ensureAudioWorklet2().then(() => {
