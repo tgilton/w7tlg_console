@@ -150,6 +150,26 @@ NR_SAMPLE_RATE_HZ = 48_000
 NR_RESAMPLE_RATIO = NR_SAMPLE_RATE_HZ // INTERMEDIATE_RATE_HZ   # exact: 3
 NR_WINDOW_S = 0.4
 NR_HOP_S = 0.1
+# W7TLG_NR_HOP_CHUNKS sets the hop in demod batches instead (one batch is ~8.2 ms,
+# 131 samples), for A/B listening: NR runs, and audio is released to the browser,
+# once per that many batches. Unset, the hop is NR_HOP_S as before, which works out
+# to 13 batches (106 ms). enhance() costs the same per call whatever the hop (it
+# always processes the whole NR_WINDOW_S window), so CPU scales with 13 / chunks:
+# measured on the M5 Max, 2 torch threads, about 10-23% of real time at 13, 19-30%
+# at 7, 32-44% at 4 and 65-76% at 2. Invalid, below 1 or longer than the window
+# falls back to the default.
+
+
+def _nr_hop_chunks():
+    """The W7TLG_NR_HOP_CHUNKS override, or None for the default hop."""
+    raw = os.environ.get("W7TLG_NR_HOP_CHUNKS")
+    if raw is None:
+        return None
+    try:
+        chunks = int(raw)
+    except ValueError:
+        return None
+    return chunks if chunks >= 1 else None
 
 # AGC time constants in seconds (not per-call fractions) so behavior stays
 # correct regardless of how large/small a given _process() call's block is —
@@ -308,6 +328,11 @@ class AudioDemodulator:
         self._nr_new_samples = 0
         self._nr_window_samples = int(NR_WINDOW_S * INTERMEDIATE_RATE_HZ)
         self._nr_hop_samples = int(NR_HOP_S * INTERMEDIATE_RATE_HZ)
+        hop_chunks = _nr_hop_chunks()
+        if hop_chunks is not None:
+            hop_samples = hop_chunks * (self.batch_samples // self.decim_factor)
+            if hop_samples <= self._nr_window_samples:
+                self._nr_hop_samples = hop_samples
 
         # Snapshot of voice-mode settings, captured by enter_digital_mode()
         # and restored by exit_digital_mode() — None means "in voice mode".
@@ -336,7 +361,7 @@ class AudioDemodulator:
         self._q: "queue.Queue" = queue.Queue(maxsize=_audio_queue_maxsize())
         # Which receiver this is, for log lines ("RX1" / "RX2", set by SdrClient).
         self.rx_label = "RX"
-        # Queue-drop investigation, W7TLG_AUDIO_PROFILE=1 only (sdr/audio_profile.py).
+        # Queue-drop investigation, W7TLG_AUDIO_PROFILE=1|verbose only (sdr/audio_profile.py).
         # None otherwise, and then every `prof is not None` hook below is skipped.
         self._prof = audio_profile.AudioProfiler(self) if audio_profile.ENABLED else None
         self._stop_event = threading.Event()
@@ -468,7 +493,7 @@ class AudioDemodulator:
         """Called from SdrClient's native callback thread — must be fast."""
         prof = self._prof
         if prof is not None:
-            feed_gap = prof.on_feed()
+            feed_gap = prof.on_feed(len(xi))
         if not self.enabled:
             return
         try:
@@ -1046,7 +1071,7 @@ class AudioDemodulator:
             audio64, self._eq_zi = sosfilt(self._eq_sos, audio.astype(np.float64), zi=self._eq_zi)
             audio = audio64.astype(np.float32)
         if prof is not None:
-            t_prof = prof.lap(audio_profile.AGC_EQ, t_prof)
+            t_prof = prof.lap(audio_profile.EQ, t_prof)
 
         # Noise reduction — buffered, see _apply_nr. Lazy-loaded here (not
         # once at thread start) since nr_enabled defaults off and only flips
@@ -1108,7 +1133,7 @@ class AudioDemodulator:
         pcm16 = (audio * 32767).astype(np.int16)
         out = pcm16.tobytes()
         if prof is not None:
-            prof.lap(audio_profile.AGC_EQ, t_prof)
+            prof.lap(audio_profile.AGC, t_prof)
         return out
 
     def _agc_hold(self, rms: float, block_duration_s: float, freq_hz) -> bool:
@@ -1140,9 +1165,8 @@ class AudioDemodulator:
         now = time.monotonic()
         if now >= self._lim_next_log:
             if self._lim_window_count:
-                rx = "RX1" if self.stft is not None else "RX2" if self.pcm_delay is not None else "RX"
                 logger.warning(
-                    f"Audio limiter {rx}: {self._lim_window_count} samples over {LIMIT_PEAK} "
+                    f"Audio limiter {self.rx_label}: {self._lim_window_count} samples over {LIMIT_PEAK} "
                     f"in the last {LIMIT_LOG_INTERVAL_S:.0f}s (peak {self._lim_window_peak:.2f}, "
                     f"AGC gain {self.agc_gain:.2f}, AF gain {self.manual_gain:.2f})")
                 self._lim_window_count = 0

@@ -54,3 +54,46 @@ def test_drop_warning_names_the_receiver_and_counts_per_receiver(monkeypatch, ca
         "Audio queue drops RX1: 3 total (+3 in last 5s)",
         "Audio queue drops RX2: 1 total (+1 in last 5s)",
     ]
+
+
+# ── W7TLG_NR_HOP_CHUNKS ─────────────────────────────────────────────────
+
+def test_nr_hop_default_is_unchanged(monkeypatch):
+    monkeypatch.delenv("W7TLG_NR_HOP_CHUNKS", raising=False)
+    assert AudioDemodulator()._nr_hop_samples == 1600      # reached on the 13th 131-sample batch
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("13", 13 * 131), ("7", 7 * 131), ("4", 4 * 131), ("2", 2 * 131), ("1", 131),
+    ("0", 1600), ("-3", 1600), ("x", 1600), ("", 1600), ("2.5", 1600),
+    ("49", 1600),                                          # longer than the 0.4 s NR window
+])
+def test_nr_hop_from_env(monkeypatch, value, expected):
+    monkeypatch.setenv("W7TLG_NR_HOP_CHUNKS", value)
+    assert AudioDemodulator()._nr_hop_samples == expected
+
+
+@pytest.mark.parametrize("chunks", [None, 13, 7, 4, 2])
+def test_nr_releases_audio_once_per_hop(monkeypatch, chunks):
+    """Through _apply_nr with the model stubbed out: one output per `chunks` batches,
+    carrying exactly the samples that arrived since the last one."""
+    from sdr import audio_demod
+    if chunks is None:
+        monkeypatch.delenv("W7TLG_NR_HOP_CHUNKS", raising=False)
+    else:
+        monkeypatch.setenv("W7TLG_NR_HOP_CHUNKS", str(chunks))
+    torch = pytest.importorskip("torch")
+    monkeypatch.setattr(audio_demod, "torch", torch)
+    monkeypatch.setattr(audio_demod, "_df_enhance", lambda model, state, t, atten_lim_db=None: t)
+    monkeypatch.setattr(audio_demod._nr_latency_logger, "disabled", True)
+    d = AudioDemodulator()
+    d._nr_model = object()
+    sizes, calls = [], []
+    for i in range(52):
+        y = d._apply_nr(np.full(131, 0.01, dtype=np.float32))
+        if y is not None:
+            sizes.append(len(y))
+            calls.append(i + 1)
+    n = chunks or 13
+    assert calls == list(range(n, 53, n))
+    assert set(sizes) == {n * 131}
