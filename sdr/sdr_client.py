@@ -307,6 +307,7 @@ class SdrClient:
         # purely a latency knob now, not a glitch-avoidance one. Smaller is
         # better: it also caps the relative cost of the accumulation buffer.
         self.audio = AudioDemodulator(input_rate_hz=sample_rate_hz)
+        self.audio.rx_label = "RX1"
         # Channel B's own demodulator — independent mode/frequency/gain
         # from Channel A's, per the dual-watch plan. NOT wired to
         # digital_audio below yet: which channel feeds the single BlackHole
@@ -315,6 +316,7 @@ class SdrClient:
         # still frontend/server.py work, not built this pass — defaults to
         # Channel A, matching today's behavior exactly until it exists.
         self.audio_b = AudioDemodulator(input_rate_hz=sample_rate_hz)
+        self.audio_b.rx_label = "RX2"
         # NOISE SUB audio stage on RX1 (sdr/audio_stft.py). The mask comes from the
         # processor through noise_mask; with no mask published the gains are 1.
         self.noise_mask = MaskProvider()

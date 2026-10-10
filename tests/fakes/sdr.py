@@ -67,6 +67,8 @@ class FakeSdrClient:
 
         self.audio = AudioDemodulator(input_rate_hz=sample_rate_hz)
         self.audio_b = AudioDemodulator(input_rate_hz=sample_rate_hz)
+        self.audio.rx_label = "RX1"
+        self.audio_b.rx_label = "RX2"
         self.combiner = Combiner(input_rate_hz=sample_rate_hz)
         self.digital_audio = DigitalAudioOutput()
         self.audio.on_digital(self.digital_audio.on_audio_frame)

@@ -94,6 +94,20 @@ _nr_load_lock = threading.Lock()
 
 AudioCallback = Callable[[bytes], Coroutine]
 
+# Input queue depth in native-callback chunks. W7TLG_AUDIO_QUEUE overrides it
+# for testing (same pattern as W7TLG_TORCH_THREADS in main.py).
+AUDIO_QUEUE_DEFAULT = 512
+
+
+def _audio_queue_maxsize() -> int:
+    try:
+        size = int(os.environ.get("W7TLG_AUDIO_QUEUE", AUDIO_QUEUE_DEFAULT))
+        if size < 1:
+            raise ValueError
+    except ValueError:
+        size = AUDIO_QUEUE_DEFAULT
+    return size
+
 INTERMEDIATE_RATE_HZ = 16_000   # final output audio rate
 
 # Stage-1 (coarse) decimation filter length. A single-stage design's cost
@@ -287,7 +301,9 @@ class AudioDemodulator:
 
         # Same reasoning as SdrClient's spectrum queue: a small queue gives
         # almost no headroom against ordinary thread-scheduling/GIL jitter.
-        self._q: "queue.Queue" = queue.Queue(maxsize=512)
+        self._q: "queue.Queue" = queue.Queue(maxsize=_audio_queue_maxsize())
+        # Which receiver this is, for log lines ("RX1" / "RX2", set by SdrClient).
+        self.rx_label = "RX"
         # Queue-drop investigation, W7TLG_AUDIO_PROFILE=1 only (sdr/audio_profile.py).
         # None otherwise, and then every `prof is not None` hook below is skipped.
         self._prof = audio_profile.AudioProfiler(self) if audio_profile.ENABLED else None
@@ -698,11 +714,7 @@ class AudioDemodulator:
                 t_wait = prof.end_iter()
             now_check = time.monotonic()
             if now_check >= next_drop_log:
-                if self.dropped_count != last_logged_drops:
-                    logger.warning(
-                        f"Audio queue drops: {self.dropped_count} total "
-                        f"(+{self.dropped_count - last_logged_drops} in last 5s)")
-                    last_logged_drops = self.dropped_count
+                last_logged_drops = self._log_queue_drops(last_logged_drops)
                 next_drop_log = now_check + 5.0
             try:
                 xi, xq = self._q.get(timeout=0.5)
@@ -781,6 +793,16 @@ class AudioDemodulator:
                     prof.lap(audio_profile.PUBLISH, t_pub)
         if prof is not None:
             prof.end_iter()
+
+    def _log_queue_drops(self, last_logged: int) -> int:
+        """One warning per 5 s window that had drops, tagged with the receiver. The count
+        is this instance's own (dropped_count). Returns the count now logged."""
+        dropped = self.dropped_count
+        if dropped != last_logged:
+            logger.warning(
+                f"Audio queue drops {self.rx_label}: {dropped} total "
+                f"(+{dropped - last_logged} in last 5s)")
+        return dropped
 
     def _process(self, block_i: np.ndarray, block_q: np.ndarray):
         """Returns (browser_bytes, digital_bytes); either may be None. Without a stage the
