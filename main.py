@@ -10,6 +10,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+import os
 
 import uvicorn
 from dotenv import load_dotenv
@@ -27,9 +28,16 @@ load_dotenv()
 # two independent AudioDemodulator instances (one per receiver) each running
 # enhance() 10x/sec, both try to claim all cores simultaneously, causing
 # thread-pool oversubscription and audio dropouts under dual-RX + DNR load.
+# W7TLG_TORCH_THREADS overrides the intra-op count (default 2) for testing.
+try:
+    _torch_threads = int(os.environ.get("W7TLG_TORCH_THREADS", "2"))
+    if _torch_threads < 1:
+        raise ValueError
+except ValueError:
+    _torch_threads = 2
 try:
     import torch
-    torch.set_num_threads(2)
+    torch.set_num_threads(_torch_threads)
     torch.set_num_interop_threads(1)
 except ImportError:
     pass  # DNR deps not installed — nothing to cap
