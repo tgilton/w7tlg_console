@@ -86,6 +86,11 @@ if not _nr_latency_logger.handlers:
     _nr_latency_handler.setFormatter(logging.Formatter("%(asctime)s,%(message)s"))
     _nr_latency_logger.addHandler(_nr_latency_handler)
 
+# Both receivers lazy-load DeepFilterNet from their own audio thread, so two
+# init_df() calls can overlap when NR is switched on for RX1 and RX2 together.
+# One load at a time.
+_nr_load_lock = threading.Lock()
+
 AudioCallback = Callable[[bytes], Coroutine]
 
 INTERMEDIATE_RATE_HZ = 16_000   # final output audio rate
@@ -619,7 +624,8 @@ class AudioDemodulator:
         the audio thread."""
         try:
             logger.info("Loading DeepFilterNet3 model for noise reduction...")
-            self._nr_model, self._nr_df_state, _ = _df_init()
+            with _nr_load_lock:
+                self._nr_model, self._nr_df_state, _ = _df_init()
             logger.info("DeepFilterNet3 loaded")
         except Exception:
             logger.exception("Failed to load DeepFilterNet3 — noise reduction disabled")
