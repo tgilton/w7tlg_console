@@ -774,6 +774,7 @@ let audioWorkletNode = null;
 let muteGain = null;            // GainNode between worklet and destination
 let audioWorkletReady = null;   // Promise, set once addModule() has been kicked off
 let audioMuted = true;
+const AUDIO_TAKEOVER_CODE = 4001;   // AudioConnectionManager.TAKEOVER_CODE
 let _txSilenced = false;        // true while TX mute is active
 let _txUnmuteTimer = null;
 let lastAudioFreqHz = null;
@@ -814,12 +815,29 @@ function ensureAudioWorklet() {
 
 function ensureAudioWs() {
   if (audioWs && audioWs.readyState <= WebSocket.OPEN) return;
-  audioWs = new WebSocket(`ws://${location.host}/ws/audio`);
+  const sock = audioWs = new WebSocket(`ws://${location.host}/ws/audio`);
   audioWs.binaryType = 'arraybuffer';
   // Unlike /ws and /ws/spectrum, nothing else re-establishes this socket if
   // it drops mid-session — reconnect automatically as long as we're still
   // unmuted, matching the pattern used elsewhere in this file.
-  audioWs.onclose = () => { if (!audioMuted && !_txSilenced) setTimeout(ensureAudioWs, 1000); };
+  //
+  // Except after a takeover: the server allows one audio client per receiver
+  // and closes the older one with code 4001 when another page (the console,
+  // or another panadapter tab) connects. Then this page goes quiet and stays
+  // quiet: no reconnect, and no set_audio_enabled, which would switch the
+  // audio off for the window that now has it. The button takes it back.
+  audioWs.onclose = evt => {
+    if (evt.code === AUDIO_TAKEOVER_CODE && sock === audioWs) {
+      audioMuted = true;
+      const btn = document.getElementById('mute-btn');
+      btn.textContent = 'Audio taken over by another console window';
+      btn.title = 'Click to take the audio back';
+      btn.classList.remove('active');
+      if (audioWorkletNode) audioWorkletNode.port.postMessage({ cmd: 'flush' });
+      return;
+    }
+    if (!audioMuted && !_txSilenced) setTimeout(ensureAudioWs, 1000);
+  };
   audioWs.onmessage = evt => {
     if (!audioWorkletNode || _txSilenced) return;
     const pcm16 = new Int16Array(evt.data);
@@ -852,6 +870,7 @@ function enableAudio() {
   audioMuted = false;
   const btn = document.getElementById('mute-btn');
   btn.textContent = 'Audio: Live';
+  btn.title = '';
   btn.classList.add('active');
   ensureAudioWorklet().then(() => {
     // Chrome starts the AudioContext suspended when it was created without a
