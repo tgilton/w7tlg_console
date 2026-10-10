@@ -4286,7 +4286,7 @@ function v2FreqMarkup(str) {
 <script>
 'use strict';
 // Worklet diagnostics to the server log, over /ws: the worklet's { diag } events
-// (catch-up, underruns, flush, 5 s latency stats) and AudioContext state changes.
+// (catch-up, trim, underruns, flush, 5 s latency stats) and AudioContext state changes.
 // At most one line a second per receiver; events inside the same second share it.
 function makeAudioDiag(rx, sendFn) {
   let pending = [];
@@ -4300,7 +4300,9 @@ function makeAudioDiag(rx, sendFn) {
     push,
     fromWorklet(d) {
       if (d.diag === 'stats') {
-        push(`stats 5s lat min/mean/max=${d.minMs}/${d.meanMs}/${d.maxMs} ms frames=${d.frames} samples=${d.samples}`);
+        push(`stats 5s lat min/mean/max=${d.minMs}/${d.meanMs}/${d.maxMs} ms frames=${d.frames} samples=${d.samples} headroom=${d.headroomMs} ms`);
+      } else if (d.diag === 'trim_enter' || d.diag === 'trim_exit') {
+        push(`${d.diag} m10=${d.m10Ms} ms headroom=${d.headroomMs} ms`);
       } else if (d.diag === 'underrun') {
         push(`underrun count=${d.count} starved=${d.starvedSamples} samples (${d.starvedMs} ms)`);
       } else {
